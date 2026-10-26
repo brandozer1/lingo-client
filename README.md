@@ -19,6 +19,18 @@ It is Apache 2.0 licensed and made to be extended: add lingos, or wrap it in you
 | `lingo-library/` | The standard lingos, written in Lingo, for any computer: `text`, `list`, `math`, `time` and more |
 | `docs/` | `lingo.md`, the language and what a lingo is |
 
+## Download
+
+Every release is on the [releases page](https://github.com/brandozer1/lingo-client/releases): the core and its lingos
+for Windows, the core for Linux servers, and `install.sh`, which puts it on a Linux server and keeps it running:
+
+```
+curl -fsSL https://github.com/brandozer1/lingo-client/releases/latest/download/install.sh | sh
+```
+
+A release is made by [`.github/workflows/release.yml`](.github/workflows/release.yml) when a tag like `v0.3.0` is
+pushed, the version from `CORE_VERSION` in `core/src/core.h`.
+
 ## Build and test
 
 Build the core and its lingos with [`core/build.ps1`](core/build.ps1) (it needs Zig, one download, no installer), then

@@ -1,0 +1,34 @@
+# release.yml - a release of the lingo client, made on GitHub when a tag like v0.3.0 is pushed: core/build.ps1 run,
+# then its files put on the tag's release page, which onsay.dev and core/install.sh download from.
+#   lingo-client-windows-x64.zip   onsay-core.exe and the lingos folder, what the Windows app ships
+#   onsay-core-linux-x64           the core for Linux servers, and onsay-core-linux-arm64
+#   install.sh                     puts the core on a Linux server
+#   lingo.wasm                     the Lingo compiler on its own, for the web
+name: release
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+jobs:
+  release:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v1
+        with:
+          version: 0.13.0
+      - run: .\core\build.ps1
+        shell: pwsh
+      - run: |
+          New-Item -ItemType Directory release | Out-Null
+          Compress-Archive -Path core\bin\onsay-core.exe, core\bin\lingos -DestinationPath release\lingo-client-windows-x64.zip
+          Copy-Item core\bin\linux-x64\onsay-core release\onsay-core-linux-x64
+          Copy-Item core\bin\linux-arm64\onsay-core release\onsay-core-linux-arm64
+          Copy-Item core\install.sh, core\bin\lingo.wasm release\
+        shell: pwsh
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
