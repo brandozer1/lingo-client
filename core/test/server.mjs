@@ -1,4 +1,4 @@
-// server.mjs - a stand-in for Onsay's server that proves the core end to end, pure programs matching run.mjs exactly.
+// server.mjs - a local stand-in for the other end of the core's connection, proving the core end to end, pure programs matching run.mjs exactly.
 //
 //   node test/server.mjs          then, in another terminal:   bin/test/onsay-core.exe test/onsay.json
 // Tests of a lingo the core hasn't got (windows and those written on it, or hosted) are skipped, and its catalog must say why.
@@ -280,8 +280,8 @@ const TESTS = [
     check: (r) => r.ok && same(r.value, [200, true, { tries: 3 }]),
   },
   { name: 'input: a typo is a compile error', raw: { code: 'input.click_txt("File")', names: ['input'] }, check: (r) => !r.ok && r.error.code === 'compile' },
-  // lingo(...): a call of lingo.run as the program reaches it. The core asks Onsay, here the stand-in (LINGO below), waits,
-  // and goes on with the answer. Nothing is found beforehand, and nothing is kept. What was around it goes with it.
+  // lingo(...): a call of lingo.run as the program reaches it. The core asks, here the stand-in (LINGO below), waits,
+  // and goes on with the answer.
   {
     name: 'lingo(...): asked as it runs, and the program goes on with the answer',
     raw: { code: 'x = lingo("the capital of a country", {country: "France"}, "text")\nreturn "it is " + x', names: ['core'] },
@@ -459,10 +459,10 @@ for (const file of readdirSync(new URL('../../lingo-library', import.meta.url)).
   cpSync(new URL(`../../lingo-library/${file}`, import.meta.url), new URL(`./lingos/${file}`, import.meta.url))
 }
 
-/* Onsay's lingo function, standing in for the server's lingo.run and lingo.use, and lingo.setting from SETTINGS: each
-   ask, by its words or its address, answered as the program runs, or failed with why. One uses the device on the way with a call, as Onsay does when what won runs there: memo.recall on the exe, run
-   inside the waiting job, and on the web host, which serves calls itself while the core waits, one of its host phrases.
-   asked is the last request, device the last call's result, for the tests to look at. */
+/* Canned answers to lingo.run and lingo.use, and lingo.setting from SETTINGS: each ask, by its words or its address,
+   answered as the program runs, or failed with why. One uses the device on the way with a call: memo.recall on the exe,
+   run while the program waits, and on the web host, which serves calls itself while the core waits, one of its host
+   phrases. asked is the last request, device the last call's result, for the tests to look at. */
 let asked = {}, device = null, every = []   // every: each ask, in order
 const SETTINGS = { github: { token: 'tok' } }   // the person's settings, by lingo
 const LINGO = [

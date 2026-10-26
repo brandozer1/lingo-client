@@ -1,5 +1,5 @@
 // native.c - the native lingo: call a function in the operating system or any shared library directly, by its name and
-// the shape of what it takes and returns. This is what lets an index entry for an OS function (Windows, Linux) be run
+// the shape of what it takes and returns. This lets any OS function (Windows, Linux) be run
 // without hand written code for each one: given a layout, it makes the call and gives back the answer. Built per
 // platform like windows (core/build.ps1), using a small vendored part of libffi (libffi/, MIT) to arrange the call the
 // way each chip wants. Needs the run permission, since a call can do anything the device can.

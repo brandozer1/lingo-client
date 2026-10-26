@@ -6,8 +6,8 @@ AI models through OpenRouter, a chat agent, and a writer of lingos. Each is one 
 it reads what each one shares from its code, and relays to the computer that has them. One lingo calls another in the
 same folder by its dotted name, like `request.get(...)`, with nothing to list. Each needs nothing but the core, the floor
 every computer has: `std`, `compute`, `store` and `http` (section 15 of `../docs/lingo.md`). The language is only its
-syntax and `lingo(...)`, `use(...)` and `setting(...)`, so what used to be built in, splitting, joining, case, rounding,
-sorting and dates, is written here in Lingo: `text`, `list`, `math` and `time`.
+syntax and `lingo(...)`, `use(...)` and `setting(...)`, so splitting, joining, case, rounding, sorting and dates are
+written here in Lingo: `text`, `list`, `math` and `time`.
 
 ## Putting them on a computer
 
@@ -54,18 +54,15 @@ POST of JSON, `use("https://...", values)` is a line of the language itself.
 
 Times are seconds since 1970 in UTC, as `compute.now()` gives them, and ISO text is taken wherever a time is. `offset` is
 hours from UTC, since a device's own zone isn't known to Lingo. `zone` is the same hours, as a number or text like `-4`,
-`+05:30` or `UTC-4`, or a local time with its offset, like `2026-10-19T16:31:07-04:00`, the way a device gives its time,
-so the decider can fill it from their time around a message.
+`+05:30` or `UTC-4`, or a local time with its offset, like `2026-10-19T16:31:07-04:00`, the way a device gives its time.
 
-## How they are found
+## Comments
 
 The first comment lines of each file say what the lingo is, and the comment lines right above each `fn` say what it
-does: written for the lingo function, what it gives, when to use it, and plainly when not to, in the words a person or
-layer 1's query would use. Short and concrete, since every function is embedded by its listing and the decider reads
-each one with its lingo's about beside it. So `agent.ask` is for anything said to Onsay in a chat, greetings and
-questions about the conversation too, and `openrouter`'s functions say they are for a program wanting one answer, never
-for chatting with the person. Every `fn` is shared, so a helper's comment says so: "For request's own use". A changed
-comment is embedded again once the computer lists it.
+does: what it gives, when to use it, and plainly when not to, in the words a person would ask with, short and concrete.
+So `agent.ask` is for anything said to Onsay in a chat, greetings and questions about the conversation too, and
+`openrouter`'s functions say they are for a program wanting one answer, never for chatting with the person. Every `fn`
+is shared, so a helper's comment says so: "For request's own use".
 
 `encode`, and `text`'s `lower`, `upper`, `trim` and `split`, work on UTF-8 bytes through two small std phrases,
 `std.bytes(text)` and `std.from_bytes(list)`, since Lingo has no other way to reach a character's code.

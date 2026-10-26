@@ -867,7 +867,7 @@ static void base64(buf *out, const unsigned char *p, size_t n) {
   }
 }
 
-// A picture the server shows a vision model with the program's result. at/w/h are in the window's pixels when a window
+// A picture that goes back with the program's result, for the caller to look at. at/w/h are in the window's pixels when a window
 // is given (as input.click_in takes them), screen pixels otherwise.
 static val *screen_see(run *r, val **a) {
   shot s = grab(r, a[0], a[2], a[3]->k == V_NUM ? a[3]->n : 1280, 1, a[4]);

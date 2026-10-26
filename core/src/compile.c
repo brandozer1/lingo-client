@@ -556,8 +556,8 @@ static val *phrase_node(cx *c, const char *id, val *args, int line) {
   return mk(a, "say", 2, T(a, id), named);
 }
 
-/* lingo("what it does", {name: value}, "what it gives") is a call of lingo.run, made as the program reaches it: Onsay finds
-   what does it then, runs it with the values, and gives back only what that gave. Nothing is found or kept beforehand. */
+/* lingo("what it does", {name: value}, "what it gives") is a call of lingo.run, made as the program reaches it: Onsay
+   answers it, and the program gets only the answer back. */
 static val *wanted(cx *c, val *args, int line) {
   arena *a = c->a;
   val *ask = at(args, 0), *with = at(args, 1), *gives = at(args, 2), *named = v_rec(a);
@@ -1460,7 +1460,7 @@ val *lingo_read(arena *a, val *m, const char *folder, const char **why) {
   if (folder && strcmp(name->t.s, folder)) return failed(why, fmt(a, "its name is %s, so its folder must be called %s too", name->t.s, name->t.s));
   if (!version || version->k != V_TEXT || numbers(version->t.s, n) != 3) return failed(why, "its version must be like 1.0.0");
   int host = is_text(runs, "host");
-  if (is_text(name, "lingo") && !host) return failed(why, "lingo is the language's own name, for lingo(...)");   // only the server's host gives lingo.run
+  if (is_text(name, "lingo") && !host) return failed(why, "lingo is the language's own name, for lingo(...)");
   val *out = v_rec(a), *shapes = v_rec(a), *groups = v_list(a), *phrases = v_list(a);
   rec_set(a, out, "name", name);
   rec_set(a, out, "version", version);

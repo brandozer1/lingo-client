@@ -1,18 +1,17 @@
 # Lingo Core
 
-The Lingo runtime, in C: one engine that compiles and runs Lingo, built as a native program for Windows and for Linux.
-It runs on a computer, from that computer's lingos folder: it signs in to Onsay, says what its
-lingos share, and runs a call to one when Onsay relays it, an answer sent to it after an `@` included. It has no screen: a
-product is this core plus its own app around it, like the Windows app, which lives in its own project, onsay-desktop,
-beside this repo, and ships `bin/onsay-core.exe` and `bin/lingos`. On a Linux server it is the product on its own:
-`install.sh` puts it there, signs it in and keeps it running. Onsay's server runs no Lingo: it relays.
+The Lingo runtime, in C: a small program that runs lingos, built for Windows and for Linux. A lingo is an app that lets
+Onsay talk to the device the lingo client is on. The core runs from that computer's lingos folder: it signs in to Onsay,
+says what its lingos share, and runs a call to one when Onsay sends it, an answer sent to it after an `@` included. It
+has no screen: a product is this core plus its own app around it, like the Windows app, which lives in its own project,
+onsay-desktop, beside this repo, and ships `bin/onsay-core.exe` and `bin/lingos`. On a Linux machine it is the product
+on its own: `install.sh` puts it there, signs it in and keeps it running.
 
 The core itself is an engine (`src/core.c`, see `src/core.h`) that never starts a thread or touches the connection, and
 a host drives it: `src/host.c` on a device with threads and a WebSocket in C, like Windows and Linux. A new device is a
 `platform_*.c`, and a host if it holds its connection differently.
 
-The language, and what a lingo is, one file of code, are in `../docs/lingo.md`. Addresses, `use(...)`, the `@` and the
-lingo function are in the onsay repo, `docs/lingo-function.md` (https://github.com/brandozer1/onsay).
+The language, and what a lingo is, one file of code, are in `../docs/lingo.md`.
 
 ## The compiler
 
@@ -56,9 +55,8 @@ Where Onsay is is built in, never a setting. Everything else is in one file, giv
 
 ## Messages
 
-These are what a device's core and Onsay say, over the connection the onsay server holds (`server/lib/live.js` in
-https://github.com/brandozer1/onsay). Every `id` is any JSON
-value the sender chose, sent back as it came.
+These are what a device's core and Onsay say over their connection. Every `id` is any JSON value the sender chose, sent
+back as it came.
 
 | From Onsay | The core answers with a result |
 |------------|--------------------------------|
@@ -75,7 +73,7 @@ value the sender chose, sent back as it came.
 | `{type:"hello", token, client, version, level, links, name, allow, manifests, catalog}` | on connecting. `client` is `onsay-core-c` and `version` this core's, `0.3.0` from when calls name a lingo's file. `manifests` is its native lingos' listings as text, core first, and `catalog` every lingo it has |
 | `{type:"result", id, ok:true, value, log, pictures?}` | a run or call is done. `log` is the notes it made, as text, and `pictures` only there when it made some |
 | `{type:"result", id, ok:false, error:{code, message, at, line}, log, pictures?}` | it failed. `code` is `compile`, `type`, `limit`, `stopped`, `denied`, `unknown`, `phrase` or `fail`, `at` its place in the tree, and `line` its line, or null |
-| `{type:"lingo", id, ask, values, gives, context, asking}` | a program reached `lingo(...)`. `id` is a number the core counts up from 1. The program waits for the answer. `context` is what was around it, from `pl_context` in `src/platform.h`: `os`, `time` (local, with its offset), `zone`, `language`, and the `app` and `window` in front, those the device knows. A Linux server sends no `app` or `window`. Onsay reads it only as background for its search. `asking` is the function the running call is of, like `agent.ask`, so Onsay never picks it for its own `lingo(...)` |
+| `{type:"lingo", id, ask, values, gives, context, asking}` | a program reached `lingo(...)`. `id` is a number the core counts up from 1. The program waits for the answer. `context` is what was around it, from `pl_context` in `src/platform.h`: `os`, `time` (local, with its offset), `zone`, `language`, and the `app` and `window` in front, those the device knows. A Linux server sends no `app` or `window`. `asking` is the function the running call is of, like `agent.ask` |
 | `{type:"lingo", id, address, values}` | a program reached `use(...)`, like `use("laptop.brandon/lingos/text.lingo/slug", {text: "Hello there"})` or `use("https://api.example.com/v1/items")`. `values` is a record, a list or nothing. It waits the same way |
 | `{type:"lingo", id, key, reference}` | a program reached `setting(...)`, `reference` the lingo's name. It waits the same way |
 | `{type:"catalog", manifests, catalog}` | the lingos folder changed |
@@ -87,7 +85,7 @@ the Windows app does under Settings, Privacy.
 **The catalog** is each lingo's listing, made from its code for a Lingo lingo (`listing` in `src/compile.c`): its
 `name`, its `file`, like `memo.lingo`, or for a native one its `version` and `folder`, its `about`, whether it's `ok` or
 `broken` and why, its `settings`, the names its code reads with `setting("...")`, and `phrases`, every function it
-shares as Onsay's search reads them: `id`, `head`, `does` from the comments right above its fn, `gives` for a native
+shares: `id`, `head`, `does` from the comments right above its fn, `gives` for a native
 one, its `inputSchema`, and `lingos`, how many `lingo(...)` calls it makes, counted from its code through every function
 it reaches, none for a native. Never its code.
 
@@ -98,8 +96,8 @@ no listing, and all reach the host's ask with their values by name. When a progr
 the `lingo` messages above, and waits. Onsay answers `{type:"lingo", id, value}`, which the program goes on with, or
 `{type:"lingo", id, error, code}`, which is the phrase's error (`phrase` when no code is given). While it waits, Onsay
 may send `call`s, since what answers may be on this device: the core runs each inside the waiting job and answers it
-as above, then waits on. Anything else waits its turn. A `stop` for the job ends the wait. Nothing is found beforehand
-or kept on the device. `host.c` does this on the job's thread.
+as above, then waits on. Anything else waits its turn. A `stop` for the job ends the wait. Nothing is kept on the device.
+`host.c` does this on the job's thread.
 
 **http.send, the web.** `http.send(method, url, headers=nothing, body=nothing, timeout=30)` is every core's one web
 request, needing `net`: `{status, headers, text}`, headers a record by lower case name, redirects followed, at most 4 MB
@@ -179,16 +177,12 @@ listing from its code; `parse`, `face` and `prepare` compile code, `stacked` the
 ## Lingo settings
 
 Any lingo may ask the person for settings it needs, like an account name or a key for a web service, by reading them
-with `setting("name")`, part of the language. That is all: its listing names each one its code reads, and the
-dashboard shows a field for each in Settings, a name like key, token, secret or password hidden, beside Edit as JSON
-for any name and value. They are attached to the person's handle, kept with their account by the lingo's name, like
-`openrouter`. There is no installing: a lingo the person runs has their settings at once, on any of their computers.
+with `setting("name")`, part of the language. Its listing names each one its code reads, and the person fills them in
+on Onsay, kept by the lingo's name, like `openrouter`.
 
-The core asks Onsay over its connection as the line runs. Onsay answers from the account the run is for, never the
+The core asks Onsay over its connection as the line runs, and gets the setting of the person the run is for, never the
 lingo's maker. `setting("token", "github")` reads another lingo's, so one token serves many lingos, and isn't one of
-this lingo's own. An MCP server reached through a route, like `issues -> https://mcp.example.com/mcp#`, signs in with the
-`token` set for that route, `issues.<handle>`. Nothing is kept until the person sets it, so the lingo applies its own
-default:
+this lingo's own. A setting the person never set is nothing, so the lingo applies its own default:
 
 ```
 fn units() { return setting("units") ?? "metric" }
@@ -213,7 +207,7 @@ fn units() { return setting("units") ?? "metric" }
 | `src/platform_linux.c` | that, for Linux: pthreads, POSIX files, `dlopen` for native lingos, and the web through libcurl, loaded as it starts, so it builds with nothing of Linux's and says to install libcurl when it's missing. Curl only opens the connection, TCP, TLS and any proxy, and the WebSocket on it is written here, since many builds of curl have none |
 | `install.sh` | puts the core on a Linux server: the program for its processor, its folder (`~/.onsay`, or `/var/lib/onsay` as root) with `core.json` in it, `--sign-in`, and a systemd service that keeps it running. Where it downloads the core from is `ONSAY_DOWNLOAD`, at its top |
 | `../lingos/windows/` | the Windows lingo, a native lingo of its own: windows, controls through UI Automation, the screen and OCR, mouse, keyboard, files, clipboard, commands, notifications, `input` (the mouse and keyboard the way a person uses them) and `look` (Onsay's eyes) |
-| `../lingos/native/` | the native lingo: one phrase, `native.call`, that calls a function in the operating system or a shared library by its name and layout, using a small vendored part of libffi (`libffi/`, MIT). This is how an OS function becomes a runnable index entry with no code written for it by hand. Windows for now; Linux needs a little more libffi plumbing |
+| `../lingos/native/` | the native lingo: one phrase, `native.call`, that calls a function in the operating system or a shared library by its name and layout, using a small vendored part of libffi (`libffi/`, MIT). Windows only |
 | `src/wasm.c` | the compiler on its own, built as `bin/lingo.wasm`, for the tests |
 | `test/reference/` | the first Lingo, in JavaScript. The tests hold the C to it, word for word |
 

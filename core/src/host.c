@@ -201,8 +201,8 @@ static val *post(arena *a, const char *path, const char *body, double *status, b
 }
 
 // What the Windows app does in Link.Connect: the person approves this device on onsay.dev from any device, while this
-// asks every two seconds, for as long as the code lasts (10 minutes, see the onsay server's routes/connect.js). install is this
-// device's own id, kept in the settings, so signing in again gets it its own instance back.
+// asks every two seconds, for as long as the code lasts (10 minutes). install is this device's own id, kept in the
+// settings, so signing in again gets it its own instance back.
 static int sign_in(const char *path) {
   arena *a = arena_new();
   buf text = { 0 }, body = { 0 }, error = { 0 };

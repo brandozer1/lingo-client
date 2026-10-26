@@ -56,7 +56,7 @@ void pl_list(const char *folder, void (*each)(const char *name, int folder, doub
 
 ////////// 5. DEVICE //////////
 
-// What was around a lingo(...) asked from here, for Onsay's search, as one JSON record of each it knows: "os", "time" its
+// What was around a lingo(...) asked from here, as one JSON record of each it knows: "os", "time" its
 // local time with its offset, like 2026-10-19T16:31:07-04:00, "zone", "language", and "app" and "window" in front.
 void pl_context(buf *out);
 

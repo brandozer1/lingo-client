@@ -8,16 +8,13 @@ Linux. It ships two sets of lingos: [`lingos/`](lingos/), the device toolsets (`
 to call any OS or library function by its layout), and [`lingo-library/`](lingo-library/), the standard lingos written
 in Lingo (`text`, `list`, `math`, `time` and more). The language itself is in [`docs/lingo.md`](docs/lingo.md).
 
-This is the open base that the Onsay products are built on, and that anyone can build their own product on. It is Apache
-2.0 licensed and made to be extended: add lingos, open routes, wrap it in your own app. Onsay Desktop is one such wrapper
-(an agent), and Onsay IO is another (a face). The lingo function, the INS and the index live in the onsay repo and plug
-in on top; they are not part of the client.
+It is Apache 2.0 licensed and made to be extended: add lingos, or wrap it in your own app.
 
 ## Layout
 
 | Folder | What it is |
 |--------|------------|
-| `core/` | The engine: compiles and runs Lingo, signs in, hosts routes, keeps a catalog. See its README |
+| `core/` | The engine: compiles and runs Lingo, signs in, and tells Onsay which lingos are here. See its README |
 | `lingos/` | The lingos the client ships: `windows` (Windows itself) and `native` (call any OS or library function by layout) |
 | `lingo-library/` | The standard lingos, written in Lingo, for any computer: `text`, `list`, `math`, `time` and more |
 | `docs/` | `lingo.md`, the language and what a lingo is |

@@ -299,8 +299,8 @@ static val *hosted(run *r, val **a) {
   }
   if (!strcmp(id, "lingo.run")) {
     buf_str(&in, asking ? ",\"context\":" : ",");
-    pl_context(&in);   // background for Onsay's search, never a value
-    // The function asking, so Onsay never picks it for its own lingo(...).
+    pl_context(&in);   // what was around it, never a value
+    // The function asking.
     if (*calling || !asking) { buf_str(&in, asking ? ",\"asking\":" : ","); buf_json_str(&in, calling, strlen(calling)); }
   }
   buf_chr(&in, asking ? '}' : ']');
@@ -385,7 +385,7 @@ static void load_natives(arena *a, val *found) {
   }
 }
 
-// The functions a lingo shares, as Onsay's search reads them: each one's id, head, what it gives when it says, what it
+// The functions a lingo shares, as its catalog lists them: each one's id, head, what it gives when it says, what it
 // does, its inputSchema, and lingos, how many lingo(...) calls it makes, none for a native.
 static val *shared(arena *a, val *phrases) {
   val *out = v_list(a);
@@ -446,8 +446,8 @@ static int lingos(void) {
     stacked->l.n--;
   }
 
-  // The table of contents: each lingo, what it is, the settings it reads and every function it shares, for Onsay's search
-  // and the dashboard. A native one has its version and folder, and a Lingo one its file.
+  // The table of contents: each lingo, what it is, the settings it reads and every function it shares, for
+  // Onsay. A native one has its version and folder, and a Lingo one its file.
   catalog = v_list(a);
   val *all = rec_get(device, "lingos");
   for (size_t i = 0; i < all->r.n; i++) {
@@ -643,7 +643,7 @@ static void work(arena *a, val *m, const char *type, const char *id) {
       program = lingo_prepare(a, device, code->t.s, code->t.len, names ? names : names_of(a, m), &line, &why);
       if (!program) { refuse(id, "compile", why, line); memcpy(calling, was, sizeof calling); return; }
     }
-    // The server may ask for less than the settings allow, never more.
+    // Onsay may ask for less than the settings allow, never more.
     val *limits = rec_get(m, "limits");
     long long steps = set.steps;
     double ms = set.ms;

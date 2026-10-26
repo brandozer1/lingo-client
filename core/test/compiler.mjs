@@ -202,7 +202,7 @@ const CHECKS = [
       key?.does === '' && JSON.stringify(l.settings) === '["units","key"]'
     return ok || JSON.stringify(l)
   }],
-  ['the face Onsay is shown: every fn, with what it does', () => {
+  ['the face of a lingo: every fn, with what it does', () => {
     const f = lingo({ op: 'face', natives: CORES, stacked: [NOTES], names: ['notes'] }).face
     return f === 'lingo notes\n// Notes, for the tests: kept and found again. A second line of what it is.\nnotes: none\nadd(text): Keeps a note. Use it to remember something.\nfind(words, most=10, o=nothing, back=-2): Finds notes by their words, the newest first.\nkey(k)' || f
   }],

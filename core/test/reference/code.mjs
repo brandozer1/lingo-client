@@ -371,7 +371,7 @@ class Parser {
   }
 
   /* lingo("what it does", {name: value}, "what it gives") is a call of lingo.run, made as the program reaches it: Onsay
-     finds what does it then, runs it with the values, and gives back only what that gave. */
+     is asked then, with the values, and only the answer comes back. */
   lingo(args, line) {
     const [ask, values = ['map', {}], gives = ''] = args
     if (!args.length) throw new Problem(line, 'lingo(...) says what it needs first, like lingo("the weather in a city", {city: "Paris"})')

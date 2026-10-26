@@ -31,8 +31,7 @@ foreach ($arch in @{ x64 = "x86_64"; arm64 = "aarch64" }.GetEnumerator()) {
 build ($win + "-shared", "-DLINGO_LIBRARY", "-I$here/src", "$windows/windows.c", "$here/bin/onsay-core.lib",
   "-lole32", "-loleaut32", "-lshell32", "-lgdi32", "-luser32", "-o", "$here/bin/lingos/windows/windows.dll")
 # native: calls any OS or library function by its layout, with a small vendored part of libffi (../lingos/native/libffi,
-# MIT). Its chip's assembly compiles on its own with -DLIBFFI_ASM; the rest is plain C. Windows x64 for now; the Linux
-# builds need libffi's closure files and one assembler flag, a follow-up.
+# MIT). Its chip's assembly compiles on its own with -DLIBFFI_ASM; the rest is plain C. Windows x64 only.
 $ffi = "$here/../lingos/native/libffi"
 $ffiinc = "-I$ffi/include", "-I$here/src"
 $fficommon = "$ffi/prep_cif.c", "$ffi/types.c"   # call only, so libffi's closure and trampoline files are left out
@@ -49,8 +48,7 @@ Get-ChildItem "$here/../lingos" -Directory | ForEach-Object {
   Copy-Item "$($_.FullName)/*" "$here/bin/lingos/$($_.Name)/" -Exclude *.c, *.h, libffi
   Copy-Item "$here/bin/lingos/$($_.Name)/*" "$here/test/lingos/$($_.Name)/"
 }
-# The Lingo compiler on its own, as WebAssembly, for the tests and web authoring (web/compiler.js). The core itself is
-# native only now; it runs on Windows, Linux and Mac, never in a browser.
+# The Lingo compiler on its own, as WebAssembly, for the tests and web authoring (web/compiler.js).
 build ("-target", "wasm32-wasi", "-mexec-model=reactor", "-s" + (src "value", "compile", "wasm") + "-o", "$here/bin/lingo.wasm")
 Get-ChildItem "$here/bin" -Recurse -Include *.pdb, *.lib -Exclude onsay-core.lib | Remove-Item
 Get-ChildItem "$here/test/lingos/windows" -Include *.pdb, *.lib -Recurse | Remove-Item

@@ -6,7 +6,7 @@ names, operators and control flow. The three calls are references: `lingo(...)` 
 the language.
 
 Lingo is an orchestration language, made for AI to read and write as easily as possible. On its own it does little but
-run code written in C, and other languages later. It is Turing complete, so any program can be written in it, and lingos
+run code written in C. It is Turing complete, so any program can be written in it, and lingos
 stack on lingos, so any computation, anywhere, is some number of layers of lingos or steps away. Every function a
 program can call is a **phrase**, supplied by a **lingo**: one file of Lingo code, or the set of phrases one platform
 offers, listed in its **manifest**. Even what every computer has is a lingo, the core's own (section 15), never the
@@ -229,17 +229,16 @@ saved = use("https://api.example.com/v1/items", {name: "milk"})
 ```
 
 - **A lingo at an address:** a place, then the lingo and its function: a computer, `laptop.brandon`, its lingos under
-  `/lingos/`, the file and the function, `test.lingo/find`, `main` when none is named, and the query any values. The
-  place's name is found by Onsay's name service, the INS, and a route of a handle may stand for any address. It runs
-  where it lives, and only its answer comes back.
+  `/lingos/`, the file and the function, `test.lingo/find`, `main` when none is named, and the query any values. Onsay
+  finds the place by its name. It runs where it lives, and only its answer comes back.
 - **An MCP tool:** the server's URL and the tool after a `#`.
 - **A plain web address**, any address on the web whose path names no `/lingos/<file>.lingo`: a plain web request, a GET
   with no values and a POST of the values as JSON with some. The answer is read as JSON when it says it is JSON, else it
   is its text, and any status but 2xx fails in plain words with the status and the start of what it said:
   `https://api.example.com/v1/x answered 404 Not Found: no such item`. For headers, other methods or tries again, use
   the `request` lingo, on `http.send`.
-- **After an `@`,** where the answer goes. `https://` may be left off. How an address is read, and what happens after
-  its `@`, are in `docs/lingo-function.md`.
+- **After an `@`,** where the answer goes: it is sent on to that address as a plain call, the answer its first value.
+  `https://` may be left off.
 - It compiles to the phrase `lingo.use(address, values)`, every core's own, and is asked of Onsay when the line runs.
 - **`values`** is a record, matched to the function's values by name, a list, in order, or nothing. With a record, a
   name it doesn't take fails (`... takes place, not city`), a required one left out fails (`... needs where`), and an
@@ -247,7 +246,6 @@ saved = use("https://api.example.com/v1/items", {name: "milk"})
   non-empty list fails.
 - **Errors in writing it:** no address, an empty one, or more than two values. A program's own `fn` can't be called
   `use`: `use(...)` always means this.
-- How an address is read and reached, and its errors, are in *An address* in `docs/lingo-function.md`.
 
 **`setting(key)`** reads a setting the person keeps on their account for this lingo, like a key or a token, also part of
 the language:
@@ -313,17 +311,14 @@ weather = lingo("the weather in a city", {city: "Paris"}, "the forecast")
 may be worked out while the program runs, like a goal an AI chose: `lingo(goal, {city: city})`.
 
 It is an ordinary call, made when the program reaches that line. The program asks Onsay, waits, gets back only the
-answer, and goes on. Onsay's lingo function finds the one function that does what is asked, fills its inputs from the
-values, calls it at its address, on the computer that hosts it, and the value it gives is the answer. Nothing is found
-ahead of time, and nothing is added to the computer. Every core compiles `lingo(...)` the same way, as the phrase
+answer, and goes on. Nothing is added to the computer. Every core compiles `lingo(...)` the same way, as the phrase
 `lingo.run`, and asks Onsay over its connection, exactly as for `use(...)` (section 6), saying which of its functions
-asks, so it is never picked for itself.
+asks, so it never gets itself as the answer.
 
-The two ways to reach a function: name it, with a dotted call here or `use(...)` elsewhere, found by name for free, with no
-search and no AI.
-Ask for it in words with `lingo(...)` when you don't know which, and the lingo function searches.
+There are two ways to reach a function: name it, with a dotted call here or `use(...)` elsewhere, or ask for it in
+words with `lingo(...)` when you don't know which.
 
-A lingo's own code may call `lingo(...)` too. How the function is found is in `docs/lingo-function.md`.
+A lingo's own code may call `lingo(...)` too.
 
 ## 8. How a program runs
 
@@ -419,15 +414,14 @@ A phrase that needs any permission that wasn't given stops the program with `den
 ## 11. A lingo is one file
 
 A lingo written in Lingo is one file, `<name>.lingo`, directly in a computer's lingos folder, and nothing else: no folder,
-no manifest, nothing to list. The person writes only the code. Onsay's own listing of it, what it shares and how to find
-it, the way a search engine indexes a page, is made from the code by the compiler (`listing` in `core/src/compile.c`):
+no manifest, nothing to list. The person writes only the code. Its listing, what it shares, is made from the code by the
+compiler (`listing` in `core/src/compile.c`):
 
 - **Every `fn`** is a function it shares, called at its address, like `laptop.brandon/lingos/memo.lingo/recall`, or by
   its dotted name, `memo.recall(k)`, from a lingo in the same folder. Its values and their plain defaults are its `fn`'s
   own. A default worked out as it runs, like `o={a: 1}`, shows as `nothing`.
-- **The comment lines right above a `fn`** say what it does, and they are what the lingo function searches and the
-  decider reads, so they say what it gives, when to use it and when not to, in the words a person would ask with. A
-  number at their start, like `1.`, a legend's, is left off.
+- **The comment lines right above a `fn`** say what it does: what it gives, when to use it and when not to, in the
+  words a person would ask with. A number at their start, like `1.`, a legend's, is left off.
 - **The first comment lines of the file,** up to a blank line or an empty `//`, are what the lingo is, its about, with
   `memo - ` or `memo.lingo - ` at their start left off. They are never a `fn`'s too, so a blank line goes after them.
 - **Its settings** are the names its code reads with `setting("key")`.
@@ -482,7 +476,7 @@ the core and the device's native lingos, the functions of every lingo in the sam
 
 **What Onsay is told.** A core tells Onsay what each lingo shares, never its code: each function's head and what it
 does, its `inputSchema`, and how many `lingo(...)` calls it makes, counted from the code through every function it
-reaches, which the lingo function's depths go by. The dashboard shows the same.
+reaches. The dashboard shows the same.
 
 **Native and host lingos** are a folder with a `lingo.json`, their manifest: `name`, `version` (three numbers, like
 `1.0.0`, a label only), `about`, and `runs`, `native` with its `library`, like `windows.dll`, or `host`. A native one
@@ -513,12 +507,12 @@ files.add_to needs permission for files.write`.
 Code runs where it lives. A lingo in a computer's lingos folder runs in that computer's core, when Onsay relays a call to
 it, `{type:"call", lingo:"test.lingo/find", values}`, and only the answer goes back. Its code may call `lingo(...)`,
 `use(...)` or `setting(...)`, which asks Onsay and waits. Anything at any other address runs there, its own way, reached
-by a plain web request. Onsay runs no Lingo: it reads addresses, searches and relays. An answer sent to a computer after
-an `@` is a plain call too, the answer the function's first value. More on this is in `docs/lingo-function.md`.
+by a plain web request. Onsay runs no Lingo: it relays calls and answers. An answer sent to a computer after an `@` is a
+plain call too, the answer the function's first value.
 
 The person gives the permissions on each device, in the Onsay app. The core refuses any phrase that needs one not given,
 and stops any program the moment Onsay or the person says stop. `core/README.md` lists the messages between a core and
-the server, and `core/test/server.mjs` runs real programs on a real core.
+Onsay, and `core/test/server.mjs` runs real programs on a real core.
 
 ## 13. The tree: what the compiler gives
 
@@ -603,7 +597,7 @@ tool big_programs(limit=500){big=[]for p in commands.running(){if p.memory>limit
 - **Dense** is for the fewest tokens: no space or new line that isn't needed, and a `;` only where two names would
   otherwise run together, like `a=b;c=1`. Measured on realistic programs, dense takes about a quarter fewer tokens.
 
-Onsay writes dense, because what a model writes costs far more than what it reads, and nothing a person sees has to be
+Dense suits a model writing a program, since what a model writes costs far more than what it reads, and nothing a person sees has to be
 dense: since whitespace carries no meaning, the same program can always be laid out again for reading. Keyword
 spellings are not worth shortening: words like `return` and `continue` are already a single token each.
 
