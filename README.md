@@ -28,8 +28,8 @@ for Windows, the core for Linux servers, and `install.sh`, which puts it on a Li
 curl -fsSL https://github.com/brandozer1/lingo-client/releases/latest/download/install.sh | sh
 ```
 
-A release is made by [`.github/workflows/release.yml`](.github/workflows/release.yml) when a tag like `v0.3.0` is
-pushed, the version from `CORE_VERSION` in `core/src/core.h`.
+A release is made by [`.github/workflows/release.yml`](.github/workflows/release.yml): push a tag like `v0.3.0`, or open
+Actions on GitHub, pick release and press Run workflow. The version is `CORE_VERSION` in `core/src/core.h`.
 
 ## Build and test
 

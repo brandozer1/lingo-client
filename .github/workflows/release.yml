@@ -1,5 +1,6 @@
-# release.yml - a release of the lingo client, made on GitHub when a tag like v0.3.0 is pushed: core/build.ps1 run,
-# then its files put on the tag's release page, which onsay.dev and core/install.sh download from.
+# release.yml - a release of the lingo client, made on GitHub two ways: push a tag like v0.3.0, or open Actions,
+# pick "release", press "Run workflow" and type the version. core/build.ps1 runs, then its files go on the release
+# page, which onsay.dev and core/install.sh download from.
 #   lingo-client-windows-x64.zip   onsay-core.exe and the lingos folder, what the Windows app ships
 #   onsay-core-linux-x64           the core for Linux servers, and onsay-core-linux-arm64
 #   install.sh                     puts the core on a Linux server
@@ -9,6 +10,11 @@ name: release
 on:
   push:
     tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version, like 0.3.1 (CORE_VERSION in core/src/core.h)'
+        required: true
 
 jobs:
   release:
@@ -31,4 +37,5 @@ jobs:
         shell: pwsh
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.version && format('v{0}', inputs.version) || github.ref_name }}
           files: release/*
