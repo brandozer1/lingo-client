@@ -1,8 +1,7 @@
 # Lingo Client
 
-A lightweight, very portable web server that runs lingos. It signs in or listens, and when a call comes to one of its
-routes it runs the lingo there and sends the answer back. Think of it as a small operating system of its own, with its
-own programs: a route is a program, and lingos are programs.
+A small, very portable program that runs lingos on a computer, so the lingos there can be used by you and by Onsay,
+wherever you are.
 
 The client is the engine in [`core/`](core/), written in C and built with Zig down to native code for Windows and
 Linux. It ships two sets of lingos: [`lingos/`](lingos/), the device toolsets (`windows` for Windows itself, `native`
