@@ -1,0 +1,43 @@
+// list.lingo - Lists for a program: sorting, smallest first or records by one of their parts, and reversing.
+//
+// 1. sort(list, part=nothing)   -> list: smallest first, records by part, equal ones kept in their order
+// 2. reverse(x)                 -> list or text: last first
+
+////////// 1-2. ORDER //////////
+
+// 1. A list sorted smallest first: numbers, or texts by character code, or records by one of their parts, like sort(rows,
+// "price"). Equal ones keep the order they had. part is the part of each record to sort by, nothing to sort the items
+// themselves. For largest first, reverse what it gives.
+fn sort(list, part=nothing) {
+  n = std.length(list)
+  if n < 2 {return std.slice(list, 0)}
+  h = (n - n % 2) / 2
+  a = sort(std.slice(list, 0, h), part)
+  b = sort(std.slice(list, h), part)
+  out = []
+  i = 0
+  j = 0
+  while i < h and j < n - h {
+    x = part == nothing ? a[i] : a[i][part]
+    y = part == nothing ? b[j] : b[j][part]
+    if y < x {
+      out += [b[j]]
+      j += 1
+    } else {
+      out += [a[i]]
+      i += 1
+    }
+  }
+  return out + std.slice(a, i) + std.slice(b, j)
+}
+
+// 2. A list with its last item first, or text with its last character first.
+fn reverse(x) {
+  out = []
+  for i in 1..std.length(x) {out += [x[-i]]}
+  // Text is the one kind that is itself when written as text.
+  if "{x}" != x {return out}
+  t = ""
+  for c in out {t += c}
+  return t
+}

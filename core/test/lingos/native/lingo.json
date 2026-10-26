@@ -1,0 +1,7 @@
+{
+  "name": "native",
+  "version": "1.0.0",
+  "about": "Calls a function in the operating system or any shared library directly, by its name and the shape of what it takes and returns. This is how an indexed function of the OS, on Windows or Linux, is run without code written for it by hand: given the layout, it makes the call and gives back the answer. Needs the run permission, since a call can do anything the device can.",
+  "runs": "native",
+  "library": "native.dll"
+}

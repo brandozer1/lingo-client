@@ -1,0 +1,48 @@
+// openrouter.lingo - AI models through OpenRouter, on your own OpenRouter API key: GPT, Claude, Gemini, Llama, Mistral,
+// DeepSeek, Qwen and hundreds more, for a program that needs a model to answer, write, summarize or translate. It keeps
+// no conversation and uses no lingos: to chat with the person, use the agent.
+//
+// 1. ask(prompt, model=nothing)                    -> text: one question's answer
+// 2. chat(messages, model=nothing)                 -> text: the next reply in a conversation
+// 3. reply(messages, tools=nothing, model=nothing) -> message: the next reply whole, {role, content, tool_calls}, the
+//                                                     model given tools in OpenAI's format, the way an agent asks
+// Its settings, key, model and url, are the person's, set on the dashboard for openrouter and read with setting(...).
+
+// 1. Asks one AI model one question for a program and gives its answer as text. It sees only this prompt: no chat, no
+// memory and no other lingos. Not for chatting with the person or answering them in the chat: the agent does that.
+// prompt is the whole question or task for the model, with everything it needs to know. model is an OpenRouter model
+// id, like openai/gpt-4o-mini. The one in settings when left out.
+fn ask(prompt, model=nothing) {
+  return chat([{role: "user", content: prompt}], model)
+}
+
+// 2. An AI model's next reply to messages a program already has, each {role, content}, role being system, user or
+// assistant. For a program keeping its own conversation with a model. Not for chatting with the person in Onsay's chat:
+// the agent does that. messages is the messages so far: a list of {role, content}, role being system, user or
+// assistant. model is an OpenRouter model id, like openai/gpt-4o-mini. The one in settings when left out.
+fn chat(messages, model=nothing) {
+  return reply(messages, nothing, model).content
+}
+
+// 3. An AI model's next message whole, {role, content, tool_calls}, given tools it may ask for in OpenAI's format. For
+// a program building an agent of its own. Not for chatting with the person. messages is the messages so far: a list of
+// {role, content}, with tool_calls and tool messages as OpenAI has them. tools is the tools the model may ask for, each
+// {type: "function", function: {name, description, parameters}}. model is an OpenRouter model id, like
+// openai/gpt-4o-mini. The one in settings when left out.
+fn reply(messages, tools=nothing, model=nothing) {
+  key = setting("key")
+  if key == nothing or key == "" {
+    fail "OpenRouter needs your API key: add it in your settings for openrouter on Onsay. Get one at openrouter.ai/keys"
+  }
+  base = setting("url") ?? "https://openrouter.ai/api/v1"
+  body = {model: model ?? setting("model") ?? "openai/gpt-4o-mini", messages: messages}
+  if tools != nothing {body.tools = tools}
+  r = request.post("{base}/chat/completions", body, {headers: {Authorization: "Bearer {key}"}, retries: 2})
+  if r.status == 401 {
+    fail "OpenRouter turned the API key down: check it in your settings for openrouter on Onsay"
+  }
+  if not r.ok {
+    fail "OpenRouter answered {r.status}: {r.text}"
+  }
+  return r.json.choices[0].message
+}

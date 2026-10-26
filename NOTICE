@@ -1,0 +1,14 @@
+Lingo Client
+Copyright 2026 Onsay
+
+This product includes software developed at Onsay (https://github.com/brandozer1).
+
+Licensed under the Apache License, Version 2.0. See LICENSE.
+
+----------------------------------------------------------------------
+Third-party components:
+
+libffi (lingos/native/libffi/)
+  A small, call-only subset is vendored in to call OS and library
+  functions by their layout. libffi is distributed under the MIT license.
+  See lingos/native/libffi/LICENSE for its full text and copyright.

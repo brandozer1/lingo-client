@@ -1,0 +1,7 @@
+{
+  "name": "windows",
+  "version": "1.0.0",
+  "about": "Windows itself: open apps and windows and their buttons and controls, the screen and reading it, the mouse and keyboard, files and folders, the clipboard, PowerShell commands and processes, settings, the taskbar, the Start menu and shortcuts, notifications, and panel, a small window of his own that shows a page of HTML. input uses the mouse and keyboard the way a person does, through Onsay's own pointer, which glides to each place and rings what it clicks: click words seen on screen or a control by name, type into a box, paste, shortcuts, scroll until something shows, wait for words, point at things, and click, move, drag and scroll at places in a window wherever it is now. look is Onsay's eyes: see shows him a picture of the screen, a window or a part of it, and the rest read the screen as text: a window in brief, what has focus, its words, what to press and type in, which words sit near which, and where words are.",
+  "runs": "native",
+  "library": "windows.dll"
+}

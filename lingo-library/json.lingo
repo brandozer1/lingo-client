@@ -1,0 +1,63 @@
+// json.lingo - JSON for a program: text read as JSON without failing, a value written as JSON, a value reached by a
+// path like a.b[0].c, two records merged deeply, and the kind of a value.
+//
+// 1. parse(text, fallback=nothing)       -> any: fallback when the text isn't JSON
+// 2. stringify(value, indent=0)          -> text: indent spaces for each level, or all on one line
+// 3. get(value, path, fallback=nothing)  -> any: a.b[0].c, fallback when anything on the way is missing
+// 4. merge(a, b)                         -> any: b's parts over a's, records inside merged too, and b when either isn't a record
+// 5. kind(value)                         -> text: nothing, bool, number, text, list or record
+
+// 1. Text read as JSON, or the fallback when it isn't JSON, so bad input never fails. fallback is what to give when it
+// isn't JSON.
+fn parse(text, fallback=nothing) {
+  try {return std.from_json(text)} catch e {return fallback}
+}
+
+// 2. A value written as JSON text, laid out over lines with indent spaces for each level, or on one line when indent is
+// 0. indent is spaces for each level. Laid out as JSON.stringify(value, null, indent) lays it out.
+fn stringify(value, indent=0) {
+  if indent == nothing or indent < 1 {return std.to_json(value)}
+  step = ""
+  for i in 1..indent {step += " "}
+  return laid(value, step, "")
+}
+
+// 3. The value at a path like a.b[0].c inside a record or list, or the fallback when anything on the way is missing.
+// value is a record or list. path is like user.emails[0] or items.2.name. fallback is what to give when it is missing.
+// A part named by digits is an item when the value there is a list.
+fn get(value, path, fallback=nothing) {
+  v = value
+  for p in text.split(text.replace(text.replace(std.text(path), "[", "."), "]", ""), ".") {
+    if p == "" {continue}
+    n = std.number(p)
+    v = n != nothing and std.text(n) == p ? v[n] ?? v[p] : v[p]
+    if v == nothing {return fallback}
+  }
+  return v
+}
+
+// 4. Two records as one, b's parts over a's, and records inside them merged the same way. When either isn't a record,
+// it gives b.
+fn merge(a, b) {
+  if kind(a) != "record" or kind(b) != "record" {return b}
+  out = a
+  for k, v in b {out[k] = merge(a[k], v)}
+  return out
+}
+
+// 5. What kind of value it is: nothing, bool, number, text, list or record. As the first character of its JSON says.
+fn kind(value) {
+  return {n: "nothing", t: "bool", f: "bool", "\"": "text", "[": "list", "\{": "record"}[std.slice(std.to_json(value), 0, 1)] ?? "number"
+}
+
+////////// HELPERS //////////
+
+// A list or record as JSON over lines, at the depth at, each level a step further in. For json's own use: stringify
+// lays out with it.
+fn laid(value, step, at) {
+  k = kind(value)
+  if (k != "list" and k != "record") or std.length(value) == 0 {return std.to_json(value)}
+  out = []
+  for key, v in value {out += [at + step + (k == "record" ? std.to_json(key) + ": " : "") + laid(v, step, at + step)]}
+  return (k == "list" ? "[" : "\{") + "\n" + text.join(out, ",\n") + "\n" + at + (k == "list" ? "]" : "\}")
+}

@@ -1,0 +1,9 @@
+{
+  "token": "test-token",
+  "name": "test core",
+  "home": "test/data",
+  "lingos": "test/lingos",
+  "allow": ["none", "screen.read", "files.read", "files.write", "run", "net"],
+  "steps": 1000000000,
+  "ms": 600000
+}
