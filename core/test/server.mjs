@@ -417,7 +417,7 @@ const session = (link) => {
     // A ping from the server gets a pong.
     const ponged = await new Promise((done) => { link.onPong = () => done(true); link.send({ type: 'ping' }); setTimeout(() => done(false), 2000) })
     report('ping', ponged)
-    report('hello carries the core version', version === '0.3.0')
+    report('hello carries the core version', version === '0.3.1')
     // Then the connection drops, and the core must come back by itself.
     console.log('  dropping the connection...')
     link.drop()

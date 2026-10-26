@@ -14,7 +14,7 @@
 #include "lingo.h"
 
 #define CORE_CLIENT "onsay-core-c"
-#define CORE_VERSION "0.3.0"
+#define CORE_VERSION "0.3.1"
 #define CORE_LOOK 5   // seconds between looks at the lingos folder while idle
 
 typedef int (*core_send)(const char *text, size_t n);   // 1 when it went, 0 with no connection
