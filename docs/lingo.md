@@ -634,8 +634,8 @@ What is around a `lingo(...)`, the device and its time, goes with it, so no phra
 
 ## 16. The Windows lingo
 
-The Windows app ships `windows 1.0`, a native lingo in its own folder (`lingos/windows`), and no
-other lingo, with these groups.
+The Windows app ships `windows 1.0`, a native lingo in its own folder (`lingos/windows`), and `agent`, the AI agent from
+`lingo-library`. windows has these groups.
 `core/bin/onsay-core.exe <settings> --manifest` prints every line of it, and of the core's, when it is in that core's
 lingos folder.
 

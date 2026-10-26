@@ -344,7 +344,7 @@ const TESTS = [
     name: 'agent, called by its file: the model reaches a lingo by its address and one in words, and replies with what they gave, its lingo(...) saying it asks',
     before: () => { SETTINGS.openrouter = { key: 'test-key', url: 'http://127.0.0.1:8787/openrouter' } },
     call: { lingo: 'agent.lingo/ask', values: { prompt: 'what is the weather in Rome?' } },
-    check: (r) => r.ok && r.value === 'openai/gpt-4o-mini heard: Rome: sunny for 2 days and heard: 2 litres' && device?.ok === true && every.some((m) => m.ask === 'something only this device knows' && m.asking === 'agent.ask'),
+    check: (r) => r.ok && r.value === 'openai/gpt-5-mini heard: Rome: sunny for 2 days and heard: 2 litres' && device?.ok === true && every.some((m) => m.ask === 'something only this device knows' && m.asking === 'agent.ask'),
   },
 ]
 
@@ -406,7 +406,7 @@ const session = (link) => {
       report('catalog: core without windows', entry('core')?.native === true && !entry('core').folder && entry('windows')?.status === 'broken')
     }
     report('catalog: openrouter is ready on every core, its settings the ones its code reads', entry('openrouter')?.status === 'ok' && same(entry('openrouter').settings, ['key', 'url', 'model']))
-    report('catalog: agent is ready on every core, calling openrouter beside it', entry('agent')?.status === 'ok' && entry('agent').phrases.some((p) => p.id === 'agent.ask'))
+    report('catalog: agent is ready on every core, on its own', entry('agent')?.status === 'ok' && entry('agent').phrases.some((p) => p.id === 'agent.ask'))
     if (has('native')) report('catalog: native is ready, one phrase that calls into the OS', entry('native')?.status === 'ok' && entry('native').phrases.some((p) => p.id === 'native.call'))
     report('catalog: a native without its library', entry('nolibrary')?.status === 'broken' && /nolibrary\.dll/.test(entry('nolibrary').error))
     if (!has('hosted')) report('catalog: a host lingo where there is no host', entry('hosted')?.status === 'broken' && /has none/.test(entry('hosted').error))

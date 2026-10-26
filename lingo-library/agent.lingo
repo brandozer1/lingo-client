@@ -1,91 +1,190 @@
-// agent.lingo - Onsay's chat assistant, the one the person talks to in Onsay's chat. An AI model answers through
-// OpenRouter on their own key, reading the whole conversation, and uses any other lingo it needs on the way.
+// agent.lingo - An AI agent on your own key: Claude, ChatGPT, OpenRouter, or any service that answers the way OpenAI
+// does, like Ollama on your own computer. It talks with the person, and uses any lingo it needs on the way.
 //
-// 1. ask(prompt, chat=nothing, model=nothing) -> text: the model's reply, after at most 8 turns. chat is the turns before
-//                                  the prompt, each {from: you or onsay, text}, as the desktop chat gives them, and model
-//                                  any OpenRouter model id, the one in openrouter's settings when left out
-// The model has two tools: lingo(task, values), the lingo function itself, and use(address, values), anything named by its
-// address. Each tool's answer, or what went wrong, goes back to the model, until it replies. Only that reply comes back.
+// 1. ask(prompt, chat=nothing, model=nothing) -> text: its reply, after at most 8 turns. chat is the turns before the
+//                                  prompt, each {from: you or onsay, text}, and model any model id of the service it uses
+// The model has two tools: lingo(task, values), which finds a lingo that does a task and runs it, and use(address,
+// values), anything named by its address. Each tool's answer, or what went wrong, goes back to the model until it replies.
+//
+// Its settings, each set for agent on Onsay. One key is enough:
+//   claude_key      a Claude API key, from console.anthropic.com
+//   openai_key      a ChatGPT (OpenAI) API key, from platform.openai.com
+//   openrouter_key  an OpenRouter key, from openrouter.ai/keys. openrouter's own key works too
+//   url             any other service that answers the way OpenAI does, up to /v1, like http://localhost:11434/v1 for
+//                   Ollama, with openai_key when it needs one
+//   service         claude, chatgpt or openrouter, when you keep more than one key. Else the first of those it has
+//   model           the model to use. Else claude-opus-5-5, gpt-5-mini or openai/gpt-5-mini
 
 ////////// 1. ASK //////////
 
-// 1. The chat assistant answers what the person just said, reading the conversation so far. Use it for anything said to
-// Onsay in a chat: greetings, small talk, questions, questions about the conversation like what did I just say, and
-// tasks that need other lingos. Not for a program that only needs one answer from an AI model. prompt is what the
-// person just said, in their own words. chat is the conversation before it, oldest first: a list of {from, text}, from
-// being you or onsay. Give it whenever there is one. model is an OpenRouter model id, like openai/gpt-4o-mini, the one
-// in openrouter's settings when left out.
+// 1. The AI agent answers what the person just said, reading the conversation so far. Use it for anything said to Onsay
+// in a chat: greetings, small talk, questions, questions about the conversation like what did I just say, and tasks
+// that need other lingos. Not for a program that only needs one answer from an AI model. prompt is what the person just
+// said, in their own words. chat is the conversation before it, oldest first: a list of {from, text}, from being you or
+// onsay. Give it whenever there is one. model is a model id of the service it uses, the one in its settings when left out.
 fn ask(prompt, chat=nothing, model=nothing) {
-  said = [{role: "system", content: guide()}]
+  ai = service(model)
+  said = []
   for t in chat ?? [] {said += [{role: t.from == "you" ? "user" : "assistant", content: t.text}]}
   said += [{role: "user", content: prompt}]
   turns = 8
   for turn in 1..turns {
-    m = openrouter.reply(said, tools(), model)
-    if std.length(m.tool_calls ?? []) == 0 {return m.content ?? ""}
-    said += [{role: "assistant", content: m.content, tool_calls: m.tool_calls}]
-    for c in m.tool_calls {said += [{role: "tool", tool_call_id: c.id, content: used(c.function)}]}
+    m = reply(ai, said)
+    if std.length(m.calls) == 0 {return m.text}
+    said += [m.said]
+    results = []
+    for c in m.calls {results += [{id: c.id, text: used(c.name, c.args)}]}
+    said += answered(ai, results)
   }
   return "I took {turns} turns and still hadn't finished, so I stopped. Try asking for less at once."
 }
 
 ////////// HELPERS //////////
 
+// Which AI it talks to, from its settings: {kind, name, key, url, model}, kind claude or openai, the way it is spoken
+// to. For the agent's own use.
+fn service(model) {
+  claude = given(setting("claude_key"))
+  openai = given(setting("openai_key"))
+  router = given(setting("openrouter_key")) ?? given(setting("key", "openrouter"))
+  url = given(setting("url"))
+  pick = given(setting("service"))
+  if pick == nothing {
+    if claude != nothing {
+      pick = "claude"
+    } else if openai != nothing or url != nothing {
+      pick = "chatgpt"
+    } else if router != nothing {
+      pick = "openrouter"
+    }
+  }
+  model = model ?? given(setting("model"))
+  if pick == "claude" {
+    if claude == nothing {fail "Claude needs your API key: add claude_key in your settings for agent on Onsay. Get one at console.anthropic.com"}
+    return {kind: "claude", name: "Claude", key: claude, url: "https://api.anthropic.com/v1/messages", model: model ?? "claude-opus-5-5"}
+  }
+  if pick == "chatgpt" {
+    if openai == nothing and url == nothing {fail "ChatGPT needs your API key: add openai_key in your settings for agent on Onsay. Get one at platform.openai.com"}
+    return {kind: "openai", name: url == nothing ? "ChatGPT" : url, key: openai, url: (url ?? "https://api.openai.com/v1") + "/chat/completions", model: model ?? "gpt-5-mini"}
+  }
+  if pick == "openrouter" {
+    if router == nothing {fail "OpenRouter needs your key: add openrouter_key in your settings for agent on Onsay. Get one at openrouter.ai/keys"}
+    base = given(setting("url", "openrouter")) ?? "https://openrouter.ai/api/v1"
+    return {kind: "openai", name: "OpenRouter", key: router, url: base + "/chat/completions", model: model ?? given(setting("model", "openrouter")) ?? "openai/gpt-5-mini"}
+  }
+  fail "I need a key for an AI to answer: add claude_key, openai_key or openrouter_key in your settings for agent on Onsay"
+}
+
+// A setting, or nothing when it is left empty. For the agent's own use.
+fn given(x) {
+  return x == "" ? nothing : x
+}
+
+// The model's next message: {text, calls, said}, calls each {id, name, args} and said the message to keep in the
+// conversation, as that service writes it. For the agent's own use.
+fn reply(ai, said) {
+  headers = {}
+  headers["Content-Type"] = "application/json"
+  if ai.kind == "claude" {
+    headers["x-api-key"] = ai.key
+    headers["anthropic-version"] = "2023-06-01"
+    headers["anthropic-beta"] = "server-side-fallback-2026-07-01"
+    body = {model: ai.model, max_tokens: 16000, system: guide(), messages: said, tools: tools("claude"), fallbacks: "default"}
+    a = answer(ai, http.send("POST", ai.url, headers, std.to_json(body), 120))
+    if a.stop_reason == "refusal" {return {text: "Claude declined to help with that one.", calls: [], said: nothing}}
+    text = ""
+    calls = []
+    for b in a.content {
+      if b.type == "text" {text += b.text}
+      if b.type == "tool_use" {calls += [{id: b.id, name: b.name, args: b.input ?? {}}]}
+    }
+    return {text: text, calls: calls, said: {role: "assistant", content: a.content}}
+  }
+  if ai.key != nothing {headers["Authorization"] = "Bearer {ai.key}"}
+  body = {model: ai.model, messages: [{role: "system", content: guide()}] + said, tools: tools("openai")}
+  m = answer(ai, http.send("POST", ai.url, headers, std.to_json(body), 120)).choices[0].message
+  calls = []
+  for c in m.tool_calls ?? [] {
+    args = {}
+    try {args = std.from_json(c.function.arguments) ?? {}} catch e {args = {}}
+    calls += [{id: c.id, name: c.function.name, args: args}]
+  }
+  return {text: m.content ?? "", calls: calls, said: {role: "assistant", content: m.content, tool_calls: m.tool_calls}}
+}
+
+// A web answer from the AI, read as JSON, or what went wrong in plain words. For the agent's own use.
+fn answer(ai, r) {
+  if r.status == 401 or r.status == 403 {fail "{ai.name} turned the key down: check it in your settings for agent on Onsay"}
+  if r.status < 200 or r.status > 299 {fail "{ai.name} answered {r.status}: {r.text}"}
+  return std.from_json(r.text)
+}
+
+// What the tools gave, as the messages that service reads next. For the agent's own use.
+fn answered(ai, results) {
+  if ai.kind == "claude" {
+    blocks = []
+    for x in results {blocks += [{type: "tool_result", tool_use_id: x.id, content: x.text}]}
+    return [{role: "user", content: blocks}]
+  }
+  out = []
+  for x in results {out += [{role: "tool", tool_call_id: x.id, content: x.text}]}
+  return out
+}
+
 // What the agent's model is told it is, and what its tools are for. For the agent's own use.
 fn guide() {
-  return "You are Onsay's chat agent, an AI model the person talks to in Onsay's chat, and you run as a lingo, a small " +
-    "program on one of their computers. Answer plainly and truthfully. The messages before this one are your conversation with the " +
-    "person so far: use them, and quote them exactly when asked what was said. You have two tools. lingo(task, values) is the lingo function: Onsay " +
-    "finds the lingo that does the task, runs it and gives back only its answer. Use it for anything you can't know or do " +
-    "yourself, like the time now, the weather, a web page, writing a lingo, or something on the person's computers, " +
-    "instead of saying you can't: say the task in plain words with every detail it needs, and give any values it needs " +
-    "by name in values, like city for the weather. use(address, values) reaches what an address names and gives back its answer: " +
-    "a lingo's function, like laptop.brandon/lingos/text.lingo/slug with the value text, an MCP tool after a #, or a web address, " +
-    "asked with no values or sent them as JSON, when the person or an answer names one. So when you are asked whether " +
-    "you can use the lingo function, or what you can do, say yes and name these two tools. A tool that fails says why: " +
-    "try another way, or tell the person. When you have what you need, reply."
+  return "You are Onsay's AI agent, and the person talks to you in Onsay's chat. You run as a lingo, an app that lets " +
+    "Onsay work with one of their computers. Answer plainly and truthfully. The messages before this one are your " +
+    "conversation with the person so far: use them, and quote them exactly when asked what was said. You have two tools. " +
+    "lingo(task, values) finds a lingo that does the task, runs it and gives back only its answer. Use it for anything you " +
+    "can't know or do yourself, like the time now, the weather, a web page, or something on the person's computers, " +
+    "instead of saying you can't: say the task in plain words with every detail it needs, and give any values it needs by " +
+    "name in values, like city for the weather. use(address, values) reaches what an address names and gives back its " +
+    "answer: a lingo's function, like laptop.brandon/lingos/text.lingo/slug with the value text, or a web address, when " +
+    "the person or an answer names one. A tool that fails says why: try another way, or tell the person. When you have " +
+    "what you need, reply."
 }
 
-// The agent's tools, in OpenAI's format. The first value each takes is the one it needs. For the agent's own use.
-fn tools() {
-  return [
-    offered("lingo", "The lingo function: Onsay finds the lingo that does a task, runs it, and gives back its answer. For anything you can't know or do yourself", {
+// The agent's tools, in the format kind reads: claude or openai. The first value each takes is the one it needs. For the
+// agent's own use.
+fn tools(kind) {
+  all = [
+    {name: "lingo", does: "Finds a lingo that does a task, runs it, and gives back its answer. For anything you can't know or do yourself", takes: {
       task: {type: "string", description: "What to do, in plain words, with every detail it needs"},
       values: {type: "object", description: "The values it needs, by name, like city for the weather, or none"},
-    }),
-    offered("use", "Reaches what an address names and gives back its answer: a lingo's function, like laptop.brandon/lingos/text.lingo/slug, an MCP tool, or a web address", {
+    }},
+    {name: "use", does: "Reaches what an address names and gives back its answer: a lingo's function, like laptop.brandon/lingos/text.lingo/slug, or a web address", takes: {
       address: {type: "string", description: "What to reach: a computer, then the lingo's file and its function, like laptop.brandon/lingos/text.lingo/slug, or a web address"},
       values: {type: "object", description: "Its values by name, like text for text.lingo/slug, or none"},
-    }),
+    }},
   ]
-}
-
-// One tool for the model, in OpenAI's format. For the agent's own use.
-fn offered(name, does, takes) {
-  return {type: "function", function: {name: name, description: does, parameters: {type: "object", properties: takes, required: [std.keys(takes)[0]]}}}
+  out = []
+  for t in all {
+    schema = {type: "object", properties: t.takes, required: [std.keys(t.takes)[0]]}
+    if kind == "claude" {
+      out += [{name: t.name, description: t.does, input_schema: schema}]
+    } else {
+      out += [{type: "function", function: {name: t.name, description: t.does, parameters: schema}}]
+    }
+  }
+  return out
 }
 
 // What a tool the model asked for gave, as text, or what went wrong, in plain words. It never reaches itself: its lingo
 // tool never picks it, since a lingo(...) never picks the function asking, and its use tool refuses an address of it.
-fn used(f) {
+fn used(name, a) {
   try {
-    a = std.from_json(f.arguments) ?? {}
-    if f.name == "lingo" {
+    if name == "lingo" {
       got = lingo(a.task, a.values)
-    } else if f.name == "use" and itself(a.address) {
+    } else if name == "use" and "/agent.lingo" in std.text(a.address) {
       return "That is this agent, which would only ask itself again: answer, or use another lingo"
-    } else if f.name == "use" {
+    } else if name == "use" {
       got = use(a.address, a.values)
     } else {
-      return "There's no tool called {f.name}: there are lingo and use"
+      return "There's no tool called {name}: there are lingo and use"
     }
     return std.text(got ?? "It gave nothing back")
   } catch e {
     return "That didn't work: {e}"
   }
-}
-
-// Whether an address names this agent, like laptop.brandon/lingos/agent.lingo/ask.
-fn itself(address) {
-  return "/agent.lingo" in text.lower(address)
 }

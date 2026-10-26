@@ -258,7 +258,7 @@ const CHECKS = [
     return (!bad.length && !silent.length && library.every((l) => lingo({ op: 'read', ...l }).lingo.about)) || JSON.stringify([bad, silent])
   }],
   ['every library lingo compiles against core and windows, and calls the others by their dotted names', () => {
-    const r = compile(library, library.map((l) => l.file.slice(0, -6)), 'return agent.ask("hi")')
+    const r = compile(library, library.map((l) => l.file.slice(0, -6)), 'return [agent.ask("hi"), writer.write("hi")]')
     return !!(library.length >= 9 && !r.error && r.program.fns['openrouter.reply'] && r.program.fns['request.send']) || JSON.stringify(r.error)
   }],
 ]

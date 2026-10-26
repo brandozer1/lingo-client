@@ -16,7 +16,7 @@ Windows that is `%AppData%\Onsay\core\lingos`, which Open lingos folder in the O
 core reads them within 5 seconds, and the dashboard's Lingos page then shows each function with its address, like
 `laptop.brandon/lingos/agent.lingo/ask`. What each one calls:
 
-- `agent.lingo` and `writer.lingo` need `openrouter.lingo`, `request.lingo`, `url.lingo`, `json.lingo`, `encode.lingo`,
+- `agent.lingo` needs nothing: it is one file. `writer.lingo` needs `openrouter.lingo`, `request.lingo`, `url.lingo`, `json.lingo`, `encode.lingo`,
   `text.lingo` and `math.lingo`.
 - `request.lingo` needs `url.lingo`, `json.lingo`, `encode.lingo`, `text.lingo` and `math.lingo`. `url.lingo` needs
   `encode.lingo` and `text.lingo`, `encode.lingo` needs `text.lingo` and `math.lingo`, `json.lingo` and `time.lingo`
@@ -24,7 +24,8 @@ core reads them within 5 seconds, and the dashboard's Lingos page then shows eac
 
 The simplest is to copy them all.
 
-Then set openrouter's `key` in the dashboard's Settings, for `openrouter`. The app ships none of them: it ships only
+Then set a key in the dashboard's Settings: for `agent`, `claude_key`, `openai_key` or `openrouter_key`, and for
+`openrouter` and `writer`, openrouter's `key`. The Windows app ships `agent` beside
 `windows` (`../lingos`). `core/test/compiler.mjs` checks each one reads and compiles, and `core/test/server.mjs` copies
 `agent.lingo` and those it calls into its test core's folder and runs them.
 
@@ -48,7 +49,7 @@ POST of JSON, `use("https://...", values)` is a line of the language itself.
 | `url` | `encode`, `text` | `parse(address)` to `{scheme, user, host, port, path, query, hash}` with the query a record, `build(parts)`, `join(base, path)`, `to_query(values)`, `from_query(text)`, `encode(text)`, `decode(text)` |
 | `encode` | `text`, `math` | `base64(text, url_safe)` and `from_base64`, `url` and `from_url` (%XX), `html` and `from_html` (entities), `hex` and `from_hex` |
 | `openrouter` | `request` | `ask(prompt, model)`, `chat(messages, model)` and `reply(messages, tools, model)`: an AI model through OpenRouter, on the person's own key, set in their settings for `openrouter` with the model and address |
-| `agent` | `openrouter`, `text` | `ask(prompt, chat, model)`: a chat agent, chat the turns before the prompt, which the model reads as the conversation so far. The model has two tools: `lingo(task, values)`, the lingo function itself, values an optional record by name, and `use(address, values)`, anything named by its address, for at most 8 turns, and only its reply comes back. Its guide tells the model what it is, that the messages before are its conversation with the person, to quote them when asked, what its tools are, and to use its lingo tool for anything it can't do itself instead of saying it can't. A `lingo(...)` never picks the function asking, and its `use` refuses an address of `agent.lingo`, so it never asks itself |
+| `agent` | | `ask(prompt, chat, model)`: an AI agent on your own key, Claude, ChatGPT, OpenRouter, or any service that answers the way OpenAI does (its `url`), chat the turns before the prompt, which the model reads as the conversation so far. Its settings: `claude_key`, `openai_key`, `openrouter_key` (or openrouter's `key`), `url`, `service` when more than one key is set, and `model`. The model has two tools: `lingo(task, values)`, which finds a lingo that does a task and runs it, values an optional record by name, and `use(address, values)`, anything named by its address, for at most 8 turns, and only its reply comes back. Its guide tells the model what it is, that the messages before are its conversation with the person, to quote them when asked, what its tools are, and to use its lingo tool for anything it can't do itself instead of saying it can't. A `lingo(...)` never picks the function asking, and its `use` refuses an address of `agent.lingo`, so it never asks itself |
 | `time` | `text`, `math` | `now()`, `parse(text)` for ISO dates, `format(time, pattern, offset)` with a pattern like `"dddd D MMMM YYYY, h:mm a"`, `add(time, amount, unit)` from seconds to years (back when below 0), `difference(a, b, unit)` (`"days"` for the days between two ISO dates), `ago(time, now)` like "3 minutes ago", `start_of_day(time, offset)`, `day_of_week(time, offset)`, and `now_in_words(zone)`: the date and time now as a person reads it, like "Tuesday 20 October 2026, 3:42 PM", in UTC (said so) when no zone is given |
 | `writer` | `openrouter`, `json`, `text` | `write(request, chat, model)`: a new lingo from a plain description, and `revise(name, code, change, model)`: one changed as asked. Each gives `{name, file, code, notes}`, file its `<name>.lingo` to put in the lingos folder, notes what it made, the settings to set and the lingos it calls. A model drafts it, a second pass reviews it against a checklist, and a third pass fixes what it found, at most twice. Its code isn't loaded to check it: the computer does that when the file is put in its lingos folder, and the notes say so. Best with a strong coding model, set as its `model` setting, else openrouter's |
 
