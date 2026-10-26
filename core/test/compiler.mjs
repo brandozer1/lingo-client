@@ -167,7 +167,9 @@ console.log(`\n${passed} same, ${failed} different, of ${requests.length}`)
 
 const repo = (path) => new URL(`../../${path}`, import.meta.url)
 const manifestOf = (path) => JSON.parse(readFileSync(repo(`${path}/lingo.json`), 'utf8'))
-const files = (dir) => readdirSync(repo(dir)).filter((f) => f.endsWith('.lingo')).map((file) => ({ file, code: readFileSync(repo(`${dir}/${file}`), 'utf8') }))
+// Every Lingo lingo in a lingos folder: a .lingo file, or a folder with its code beside its lingo.json.
+const files = (dir) => readdirSync(repo(dir)).map((f) => f.endsWith('.lingo') ? f : existsSync(repo(`${dir}/${f}/${f}.lingo`)) ? `${f}/${f}.lingo` : null)
+  .filter(Boolean).map((path) => ({ file: path.split('/').pop(), code: readFileSync(repo(`${dir}/${path}`), 'utf8') }))
 const NOTES = { file: 'notes.lingo', code: `// notes - Notes, for the tests: kept and found again.
 // A second line of what it is.
 //
@@ -236,9 +238,9 @@ const CHECKS = [
     return JSON.stringify(bad) === JSON.stringify(['Notes.lingo: a lingo is a file named for it, like notes.lingo, its name lower case letters, digits, _ and -',
       'notes.lingo: only fn blocks belong in it, with no tool and no steps outside them', 'notes.lingo: a lingo shares its fn blocks, and it has none']) || JSON.stringify(bad)
   }],
-  ['a lingo.json is only for a native or host lingo: one of a Lingo lingo says it is one file now', () => {
+  ['a lingo.json that runs neither native nor host is a Lingo lingo\'s, and says its code goes beside it', () => {
     const r = lingo({ op: 'read', manifest: { name: 'memo', version: '1.0.0', main: 'memo.lingo', functions: [] } })
-    return /^a lingo written in Lingo is one file, memo\.lingo, in the lingos folder itself/.test(r.error?.message) || JSON.stringify(r)
+    return r.error?.message === 'its runs is native or host, or it is a lingo written in Lingo, with its code beside it in memo.lingo' || JSON.stringify(r)
   }],
   ['a native lingo\'s functions are described in the same JSON shape, and read back the same', () => {
     const all = CORES.flatMap((t) => manifest(t).phrases), bad = all.filter((p) => !p.inputSchema || p.gives !== gives(p.outputSchema, Object.assign({}, ...CORES.map((t) => manifest(t).shapes)))).map((p) => p.id)

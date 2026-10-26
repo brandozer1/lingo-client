@@ -1,8 +1,9 @@
 # Lingo library
 
-Lingos written in Lingo, kept here as files: web requests, JSON, text, lists, numbers, web addresses, encodings, time,
-AI models through OpenRouter, a chat agent, and a writer of lingos. Each is one file, `<name>.lingo`, its code and nothing else
-(section 11 of `../docs/lingo.md`), meant to be put in a computer's lingos folder, where it runs. Onsay keeps none of them:
+Lingos written in Lingo: web requests, JSON, text, lists, numbers, web addresses, encodings, time, AI models through
+OpenRouter, a chat agent, and a writer of lingos. Each is its code, `<name>.lingo`, one file, or a folder of its name when
+it has settings, its `lingo.json` beside its code saying what they are: `agent/`, `openrouter/` and `writer/` (section 11
+of `../docs/lingo.md`). Each is meant to be put in a computer's lingos folder, where it runs. Onsay keeps none of them:
 it reads what each one shares from its code, and relays to the computer that has them. One lingo calls another in the
 same folder by its dotted name, like `request.get(...)`, with nothing to list. Each needs nothing but the core, the floor
 every computer has: `std`, `compute`, `store` and `http` (section 15 of `../docs/lingo.md`). The language is only its
@@ -11,23 +12,26 @@ written here in Lingo: `text`, `list`, `math` and `time`.
 
 ## Putting them on a computer
 
-Copy the `.lingo` files you want into the computer's lingos folder, with every lingo each one calls beside it: on
+Copy the lingos you want, files and folders as they are here, into the computer's lingos folder, with every lingo each
+one calls beside it: on
 Windows that is `%AppData%\Onsay\core\lingos`, which Open lingos folder in the Onsay app's right click menu opens. The
 core reads them within 5 seconds, and the dashboard's Lingos page then shows each function with its address, like
 `laptop.brandon/lingos/agent.lingo/ask`. What each one calls:
 
-- `agent.lingo` needs nothing: it is one file. `writer.lingo` needs `openrouter.lingo`, `request.lingo`, `url.lingo`, `json.lingo`, `encode.lingo`,
-  `text.lingo` and `math.lingo`.
+- `agent` needs nothing else. `writer` needs `openrouter`, `request.lingo`, `url.lingo`, `json.lingo`, `encode.lingo`,
+  `text.lingo` and `math.lingo`, and `openrouter` needs `request.lingo` and those it needs.
 - `request.lingo` needs `url.lingo`, `json.lingo`, `encode.lingo`, `text.lingo` and `math.lingo`. `url.lingo` needs
   `encode.lingo` and `text.lingo`, `encode.lingo` needs `text.lingo` and `math.lingo`, `json.lingo` and `time.lingo`
   need `text.lingo` (and `time.lingo` `math.lingo`). `text.lingo`, `list.lingo` and `math.lingo` need nothing.
 
 The simplest is to copy them all.
 
-Then set a key in the dashboard's Settings: for `agent`, `claude_key`, `openai_key` or `openrouter_key`, and for
-`openrouter` and `writer`, openrouter's `key`. The Windows app ships `agent` beside
-`windows` (`../lingos`). `core/test/compiler.mjs` checks each one reads and compiles, and `core/test/server.mjs` copies
-`agent.lingo` and those it calls into its test core's folder and runs them.
+Then set a key in that lingo's settings in the Onsay app, kept on that computer and never on Onsay's servers: for
+`agent`, `claude_key`, `openai_key` or `openrouter_key`, and for `openrouter` and `writer`, openrouter's `key`. On a
+server, `onsay-core core.json --set openrouter key "your key"` does the same (*Lingo settings* in `../core/README.md`).
+The Windows app ships `agent` beside `windows` (`../lingos`). `core/test/compiler.mjs` checks each one reads and
+compiles, and `core/test/server.mjs` copies every lingo here, files and folders, into its test core's folder and runs
+them.
 
 ## The web: `http.send` and `use(...)`
 
@@ -72,6 +76,8 @@ is shared, so a helper's comment says so: "For request's own use".
 
 Write the `.lingo` file: its first comment lines say what it is, then an empty `//` and a numbered legend of its
 functions, and a blank line. Each `fn` has its comment right above it, starting with its number. Its settings are its
-`setting("...")` calls, and a lingo of the library is called by its dotted name. The core reads the file and makes its
+`setting("...")` calls. When it has any, make it a folder of its name with a `lingo.json` beside the file, listing each
+with its `title` and `about`, and as it needs `default`, `required` and `secret`, like `openrouter/lingo.json`, so the
+Onsay app can show a form of them. A lingo of the library is called by its dotted name. The core reads the file and makes its
 listing from it, and sets it aside with the reason when it doesn't load. A text in Lingo can't hold `{` or `}` unescaped,
 since `{...}` puts a value in it: write `\{` and `\}`. Nor can it write a carriage return: `std.from_bytes([13])` is one.

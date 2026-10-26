@@ -5,11 +5,17 @@
 //                                             a line, so the program around the core can keep a log the person reads
 //   onsay-core settings.json --sign-in        signs this device in from any other device's browser, for a server with
 //                                             none, and writes its token into the settings
+//   onsay-core settings.json --settings <lingo>
+//                                             prints every setting of a lingo as JSON, as settings.get gives them, for
+//                                             the app's form of them
+//   onsay-core settings.json --set <lingo> <key> <value>
+//                                             changes one wherever that lingo keeps it, as settings.set does. value is
+//                                             JSON, or text as it is when it isn't JSON
 //
 // Three threads: main (connects, then runs queued jobs one at a time, or looks at the lingos folder), receiver (hands
 // every message to the core, answers pings, queues jobs) and heartbeat (pings every BEAT seconds, drops a silent link).
-// A job that reaches lingo(...), use(...) or setting(...) asks Onsay and waits on main for the answer, running the calls
-// Onsay sends meanwhile (ask_).
+// A job that reaches lingo(...) or use(...) asks Onsay and waits on main for the answer, running the calls Onsay sends
+// meanwhile (ask_).
 #include "core.h"
 #include "platform.h"
 #include <stdio.h>
@@ -46,8 +52,8 @@ static int send_(const char *text, size_t n) {
   return sent;
 }
 
-/* lingo.run, lingo.use or lingo.setting on main, the job's thread: {"type":"lingo","id","ask","values","gives"}, for
-   use(...) {"type":"lingo","id","address","values"}, or {"type":"lingo","id","key","reference"}, goes to Onsay, and the queue is read until its answer, {"type":"lingo","id",
+/* lingo.run or lingo.use on main, the job's thread: {"type":"lingo","id","ask","values","gives"}, or for use(...)
+   {"type":"lingo","id","address","values"}, goes to Onsay, and the queue is read until its answer, {"type":"lingo","id",
    "value"} or with "error" and "code", which is the phrase's answer as it is. A call that comes meanwhile runs here,
    inside the job, since Onsay may need this device to answer. Everything else waits, in order, at the front of the queue.
    Gives 0 when the link closed or the job was stopped first. */
@@ -268,6 +274,23 @@ int main(int argc, char **argv) {
     buf out = { 0 };
     core_manifests(&out);
     fwrite(out.s, 1, out.n, stdout);
+    return 0;
+  }
+  int setting = argc > 2 && !strcmp(argv[2], "--set");
+  if (setting || (argc > 2 && !strcmp(argv[2], "--settings"))) {
+    if (argc < (setting ? 6 : 4)) { core_say("Say which lingo, like --settings agent, or --set agent model claude-opus-5-5"); return 1; }
+    static const char *none[] = { "none" };
+    volatile int stop = 0;
+    arena *a = arena_new();
+    const char *problem = NULL;
+    val *values = v_list(a), *value = setting ? json_parse(a, argv[5], strlen(argv[5]), &problem) : NULL;
+    for (int i = 3; i < (setting ? 5 : 4); i++) list_push(a, values, v_cstr(a, argv[i]));
+    if (setting) list_push(a, values, problem ? v_cstr(a, argv[5]) : value);
+    buf out = { 0 }, shown = { 0 };
+    run_phrase(a, "null", setting ? "settings.set" : "settings.get", values, &stop, none, 1, &out);
+    val *done = json_parse(a, out.s, out.n, NULL), *error = rec_get(done, "error");
+    if (error) { core_say("%s", field(error, "message")); return 1; }
+    if (!setting) { buf_json(&shown, rec_get(done, "value")); buf_chr(&shown, '\n'); fwrite(shown.s, 1, shown.n, stdout); }
     return 0;
   }
   pl_thread(heartbeat, NULL);

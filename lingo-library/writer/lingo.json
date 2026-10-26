@@ -1,0 +1,5 @@
+{
+  "settings": [
+    { "name": "model", "title": "Model", "about": "The OpenRouter model id that writes lingos. A strong coding model writes the best ones. Else openrouter's model." }
+  ]
+}

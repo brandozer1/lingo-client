@@ -3,14 +3,14 @@ test/data/
 # Built by build.ps1 from ../lingos
 test/lingos/windows/
 # Copied from ../lingo-library by test/server.mjs
-test/lingos/agent.lingo
+test/lingos/agent/
 test/lingos/encode.lingo
 test/lingos/json.lingo
 test/lingos/list.lingo
 test/lingos/math.lingo
-test/lingos/openrouter.lingo
+test/lingos/openrouter/
 test/lingos/request.lingo
 test/lingos/text.lingo
 test/lingos/time.lingo
 test/lingos/url.lingo
-test/lingos/writer.lingo
+test/lingos/writer/

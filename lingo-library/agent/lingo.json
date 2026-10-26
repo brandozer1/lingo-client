@@ -1,0 +1,10 @@
+{
+  "settings": [
+    { "name": "claude_key", "title": "Claude API key", "about": "A Claude API key, from console.anthropic.com. One key is enough.", "secret": true },
+    { "name": "openai_key", "title": "ChatGPT API key", "about": "A ChatGPT (OpenAI) API key, from platform.openai.com. One key is enough.", "secret": true },
+    { "name": "openrouter_key", "title": "OpenRouter key", "about": "An OpenRouter key, from openrouter.ai/keys. openrouter's own key works too.", "secret": true },
+    { "name": "url", "title": "Another service", "about": "Any other service that answers the way OpenAI does, up to /v1, like http://localhost:11434/v1 for Ollama, with the ChatGPT key when it needs one." },
+    { "name": "service", "title": "Service", "about": "claude, chatgpt or openrouter, when you keep more than one key. Else the first of those it has." },
+    { "name": "model", "title": "Model", "about": "The model to use. Else claude-opus-5-5, gpt-5-mini or openai/gpt-5-mini, for the service it uses." }
+  ]
+}

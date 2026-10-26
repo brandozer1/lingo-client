@@ -2,13 +2,13 @@
 
 **The language is its syntax and three calls: `lingo(...)`, `use(...)` and `setting(...)`.** The syntax is values,
 names, operators and control flow. The three calls are references: `lingo(...)` asks for something in words,
-`use(...)` reaches anything at an address, and `setting(...)` reads the person's own setting. Nothing else is part of
+`use(...)` reaches anything at an address, and `setting(...)` reads a lingo's setting, kept on the person's computer. Nothing else is part of
 the language.
 
 Lingo is an orchestration language, made for AI to read and write as easily as possible. On its own it does little but
 run code written in C. It is Turing complete, so any program can be written in it, and lingos
 stack on lingos, so any computation, anywhere, is some number of layers of lingos or steps away. Every function a
-program can call is a **phrase**, supplied by a **lingo**: one file of Lingo code, or the set of phrases one platform
+program can call is a **phrase**, supplied by a **lingo**: Lingo code, a file or a folder, or the set of phrases one platform
 offers, listed in its **manifest**. Even what every computer has is a lingo, the core's own (section 15), never the
 language. The language never changes from device to device, and only the lingos do.
 
@@ -28,7 +28,7 @@ through the lingos they use, the same C on every device, and `run.c` runs them.
 8. How a program runs
 9. Errors
 10. Lingos and permissions
-11. A lingo is one file
+11. A lingo written in Lingo
 12. Where programs run
 13. The tree: what the compiler gives
 14. Laid out and dense
@@ -247,8 +247,8 @@ saved = use("https://api.example.com/v1/items", {name: "milk"})
 - **Errors in writing it:** no address, an empty one, or more than two values. A program's own `fn` can't be called
   `use`: `use(...)` always means this.
 
-**`setting(key)`** reads a setting the person keeps on their account for this lingo, like a key or a token, also part of
-the language:
+**`setting(key)`** reads one of this lingo's settings, like a key or a token, kept on the person's own computer, also
+part of the language:
 
 ```
 key = setting("key")
@@ -259,11 +259,11 @@ token = setting("token", "github")
 - Inside a lingo, `setting("key")` is that lingo's own: the compiler fills in its name, like `openrouter`.
   `setting("key", "github")` reads another lingo's, so one token serves many lingos. A program that isn't a lingo always
   says whose.
-- It compiles to the phrase `lingo.setting(key, reference)`, every core's own, and is asked of Onsay over the computer's
-  connection when the line runs, the way `use(...)` is. Onsay answers from the account the run is for, never the
-  lingo's maker. One that isn't set is `nothing`.
-- A lingo's settings are its own `setting("...")` calls: its listing names each one, and the dashboard shows a field for
-  each in Settings, a name like key, token, secret or password hidden. See *Lingo settings* in `core/README.md`.
+- It compiles to the phrase `lingo.setting(key, reference)`, every core's own, answered by the core on the computer when
+  the line runs, never asked of Onsay: the value kept for that lingo on this computer, else the default its `lingo.json`
+  gives, else `nothing`. Settings are never kept on Onsay's servers.
+- A lingo's settings are those its `lingo.json` lists, with what each one is (section 11), then any other its code reads
+  with `setting("...")`. The Onsay app builds a form from them. See *Lingo settings* in `core/README.md`.
 - **Errors in writing it:** no key, more than two values, or no lingo named outside a lingo:
   `setting(...) outside a lingo says whose setting it is too, like setting("key", "openrouter")`. A program's own
   `fn` can't be called `setting`: `setting(...)` always means this.
@@ -363,7 +363,7 @@ A **lingo** is a set of phrases, and its listing, or for a native lingo its **ma
 can call nothing else. A lingo's
 phrases come from one of three places, and a program can't tell them apart:
 
-- **Lingo:** written in Lingo, one file, on top of other lingos, its listing made from its code. See section 11.
+- **Lingo:** written in Lingo, a file or a folder, on top of other lingos, its listing made from its code. See section 11.
 - **Native:** a library built for the device, like `windows.dll`.
 - **Host:** run by the program around the core, in its own language, where the core can't load a library.
   Its folder holds only its `lingo.json`.
@@ -411,11 +411,12 @@ A host lingo lists the same phrases in its `lingo.json`, as JSON (section 11).
 and `net`. The person gives them to the device, never to the program, so no program can do more than was allowed.
 A phrase that needs any permission that wasn't given stops the program with `denied`, and `try` can't hide that.
 
-## 11. A lingo is one file
+## 11. A lingo written in Lingo
 
-A lingo written in Lingo is one file, `<name>.lingo`, directly in a computer's lingos folder, and nothing else: no folder,
-no manifest, nothing to list. The person writes only the code. Its listing, what it shares, is made from the code by the
-compiler (`listing` in `core/src/compile.c`):
+A lingo written in Lingo is its code, `<name>.lingo`, in a computer's lingos folder: one file on its own, or a folder of
+its name holding the file and its manifest, `lingos/<name>/<name>.lingo` beside `lingos/<name>/lingo.json`, when it has
+settings to say. The person writes only the code, and the manifest when it has settings. Its listing, what it shares,
+is made from the code by the compiler (`listing` in `core/src/compile.c`):
 
 - **Every `fn`** is a function it shares, called at its address, like `laptop.brandon/lingos/memo.lingo/recall`, or by
   its dotted name, `memo.recall(k)`, from a lingo in the same folder. Its values and their plain defaults are its `fn`'s
@@ -424,7 +425,7 @@ compiler (`listing` in `core/src/compile.c`):
   words a person would ask with. A number at their start, like `1.`, a legend's, is left off.
 - **The first comment lines of the file,** up to a blank line or an empty `//`, are what the lingo is, its about, with
   `memo - ` or `memo.lingo - ` at their start left off. They are never a `fn`'s too, so a blank line goes after them.
-- **Its settings** are the names its code reads with `setting("key")`.
+- **Its settings** are those its `lingo.json` lists, below, then any other its code reads with `setting("key")`.
 - **Its name** is its file's: lower case letters, digits, `_` and `-`, not starting or ending with `-` or `_`. `lingo` is
   never one.
 
@@ -452,7 +453,7 @@ fn all(prefix="") {
 fn key(k) {return "memo/" + k}
 ```
 
-and the listing made from it, as the core sends Onsay in its catalog (6. CONNECTION in `core/src/core.c`):
+and the listing made from it, as the core sends Onsay in its catalog (7. CONNECTION in `core/src/core.c`):
 
 ```json
 {
@@ -474,6 +475,33 @@ A file holds only `fn` blocks: no `tool`, and no steps outside them. Its code ma
 the core and the device's native lingos, the functions of every lingo in the same folder by their dotted names,
 `lingo(...)`, `use(...)` and `setting(...)`, and nothing else.
 
+**Its manifest.** A lingo written in Lingo with settings is a folder, its `lingo.json` saying what they are, so a form
+can be made of them (the `agent` of `lingo-library/`, shortened, with a `keep` it hasn't got added to show one):
+
+```json
+{
+  "settings": [
+    { "name": "claude_key", "title": "Claude API key", "about": "A Claude API key, from console.anthropic.com.", "secret": true },
+    { "name": "model", "title": "Model", "about": "The model to use." },
+    "service"
+  ],
+  "keep": { "read": "read", "write": "write" }
+}
+```
+
+- **`settings`** is a list. Each is a name alone, or a record of its `name`, and as it needs: `title`, the words a form
+  shows, `about`, what it is and where to get it, `default`, its value when none is kept, `required`, true when the lingo
+  can't work without it, and `secret`, true for a key or a password, which a form hides.
+- **`keep`**, which most lingos leave out, names two of the lingo's own functions that keep its settings wherever its
+  maker wants them: `read(key)` gives one's value and `write(key, value)` keeps one. Inside them, `setting(...)` of
+  that lingo reads the core's own file. Without it, the core keeps them in its own folder, `home/settings/<name>.json`.
+- **Its runs** is left out, since it isn't native or host. A folder whose `lingo.json` lists its settings wrongly is
+  set aside with the reason.
+
+The core answers `setting(...)` from them, `settings.get(lingo)` gives every one with what its manifest says and its
+value now, and `settings.set(lingo, key, value)` changes one wherever it is kept (section 15). A lingo's settings are
+never sent to Onsay: its catalog names them only.
+
 **What Onsay is told.** A core tells Onsay what each lingo shares, never its code: each function's head and what it
 does, its `inputSchema`, and how many `lingo(...)` calls it makes, counted from the code through every function it
 reaches. The dashboard shows the same.
@@ -484,8 +512,8 @@ lists no functions: the library adds them, and the text listing in section 10 is
 lists its `shapes`, its `groups` with what each needs, like `{"name": "tabs", "needs": ["screen.read"]}`, and its
 `functions`, each shaped like an MCP tool: a `name`, its `group`, a `description`, and an `inputSchema` and
 `outputSchema` in JSON Schema, its permissions in `onsay.needs` when they aren't its group's. A folder without a
-`lingo.json` isn't a lingo and is left alone. A `lingo.json` of a lingo written in Lingo is set aside, saying it is one
-file now.
+`lingo.json` isn't a lingo and is left alone, and one whose `lingo.json` runs neither native nor host is a lingo
+written in Lingo, set aside when its code isn't beside it. A native or host one may list `settings` too, the same way.
 
 **Loading.** A core compiles every lingo in its folder when it loads it, so a broken one is set aside with the reason
 then, never in the middle of a task. A dotted call to a lingo that isn't in the folder is one such reason. A lingo whose
@@ -506,7 +534,7 @@ files.add_to needs permission for files.write`.
 
 Code runs where it lives. A lingo in a computer's lingos folder runs in that computer's core, when Onsay relays a call to
 it, `{type:"call", lingo:"test.lingo/find", values}`, and only the answer goes back. Its code may call `lingo(...)`,
-`use(...)` or `setting(...)`, which asks Onsay and waits. Anything at any other address runs there, its own way, reached
+`use(...)`, which asks Onsay and waits, or `setting(...)`, answered by that computer's core itself. Anything at any other address runs there, its own way, reached
 by a plain web request. Onsay runs no Lingo: it relays calls and answers. An answer sent to a computer after an `@` is a
 plain call too, the answer the function's first value.
 
@@ -620,6 +648,7 @@ instead, written in Lingo on this floor (`lingo-library/`).
 | `compute.wait(seconds)` | Pausing, at most 60 seconds, still stopping when asked |
 | `compute.log(x)` | A line shown to the person, which nothing else can show |
 | `store.get`, `put`, `keys`, `delete` | Onsay's own storage on the device, its files |
+| `settings.get(lingo)`, `settings.set(lingo, key, value)` | A lingo's settings, kept on the device wherever that lingo keeps them, for a form of them and to change one (section 11) |
 | `http.send(method, url, headers=nothing, body=nothing, timeout=30)` | The device's own web request, needing `net`. `request` and `use(...)` stand on it |
 
 `http.send` gives `{status, headers, text}`, its headers a record by lower case name, redirects followed, at most 4 MB

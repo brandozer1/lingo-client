@@ -18,11 +18,11 @@
 #define CORE_LOOK 5   // seconds between looks at the lingos folder while idle
 
 typedef int (*core_send)(const char *text, size_t n);   // 1 when it went, 0 with no connection
-// lingo(...), use(...) or setting(...) as a program reaches it, asked of Onsay on the job's thread: values is
-// the phrase's values by name as JSON, {"ask","values","gives"} for lingo.run, {"address","values"} for lingo.use or
-// {"key","reference"} for lingo.setting, and the answer
-// goes in answer as {"value"} or {"error", "code"}, as pl_call gives one. 0 when Onsay can't be asked, or stop was set
-// while it waited. NULL when the host answers them itself, through pl_call, like the web host.
+// lingo(...) or use(...) as a program reaches it, asked of Onsay on the job's thread: values is the phrase's values by
+// name as JSON, {"ask","values","gives"} for lingo.run or {"address","values"} for lingo.use, and the answer goes in
+// answer as {"value"} or {"error", "code"}, as pl_call gives one. 0 when Onsay can't be asked, or stop was set while it
+// waited. NULL when the host answers them itself, through pl_call, like the web host. setting(...) is never asked: the
+// core answers it from this device (6. in core.c).
 typedef int (*core_ask)(const char *values, size_t n, volatile int *stop, buf *answer);
 
 enum { CORE_DONE, CORE_JOB, CORE_PING, CORE_PONG };   // what core_heard made of a message

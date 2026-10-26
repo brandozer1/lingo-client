@@ -10,7 +10,9 @@
 
 import http from 'node:http'
 import crypto from 'node:crypto'
-import { rmSync, cpSync, readdirSync } from 'node:fs'
+import { rmSync, cpSync, readdirSync, existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 import { lingo as compiler } from '../web/compiler.js'
 import { run } from './reference/run.mjs'
 import { STD } from './reference/std.mjs'
@@ -200,24 +202,60 @@ const TESTS = [
     raw: { code: 'w=window.list()[0];look.see(w,"what?");look.see(w,"what?",nothing,false);return 1', names: ['look', 'windows'] },
     check: (r) => r.ok && r.pictures?.length === 2 && r.pictures[0].marks?.length > 0 && r.pictures[0].marks[0].id === 1 && !r.pictures[1].marks,
   },
-  // setting(...): a call of lingo.setting, asked of Onsay as the line runs, here the stand-in's SETTINGS. A lingo's own is
-  // under its reference, a Lingo lingo's its name alone, and a program says whose.
+  // setting(...): a call of lingo.setting, answered on the device as the line runs, never asked of Onsay: the value kept
+  // in the test core's home (keep, below), else its lingo.json's default, else nothing. A Lingo lingo's own is under its
+  // name, and a program says whose.
   {
-    name: 'setting(...) of a reference, asked of Onsay as it runs, and nothing when unset',
+    name: 'setting(...) of a reference, answered on the device, and nothing when unset',
+    before: () => keep('github', { token: 'tok' }),
     raw: { code: 'return [setting("token", "github"), setting("nope", "github") ?? "metric"]', names: ['core'] },
-    check: (r) => r.ok && same(r.value, ['tok', 'metric']) && asked.key === 'nope' && asked.reference === 'github',
+    check: (r) => r.ok && same(r.value, ['tok', 'metric']) && !every.some((m) => 'key' in m),
   },
   { name: 'setting(...) outside a lingo says whose', raw: { code: 'return setting("token")', names: ['core'] }, check: (r) => !r.ok && r.error.code === 'compile' && /says whose setting/.test(r.error.message) },
-  // openrouter: AI models with the person's own key, from their settings on Onsay.
+  { name: 'setting(...): the default its lingo.json gives, else nothing', raw: { code: 'return [prefs.units(), prefs.name()]', names: ['prefs'] }, check: (r) => r.ok && same(r.value, ['metric', 'no name']) },
+  {
+    name: 'setting(...): a value kept on the device wins over the default',
+    before: () => keep('prefs', { units: 'imperial', name: 'Ana' }),
+    raw: { code: 'return [prefs.units(), prefs.name()]', names: ['prefs'] },
+    check: (r) => r.ok && same(r.value, ['imperial', 'Ana']),
+  },
+  { name: 'setting(...): another lingo\'s, by its reference, from a lingo', raw: { code: 'return prefs.token()', names: ['prefs'] }, check: (r) => r.ok && r.value === 'tok' },
+  {
+    name: 'settings.set keeps one in its file, and settings.get gives every setting with what its lingo.json says and its value',
+    raw: { code: 'settings.set("prefs", "units", "kelvin");return [prefs.units(), settings.get("prefs")]', names: ['core', 'prefs'] },
+    check: (r) => r.ok && r.value[0] === 'kelvin' && same(r.value[1], [
+      { name: 'units', title: 'Units', about: 'metric or imperial.', default: 'metric', required: true, value: 'kelvin' }, { name: 'name', value: 'Ana' }, { name: 'color', value: null }]) &&
+      JSON.parse(readFileSync(new URL('prefs.json', SETTINGS), 'utf8')).units === 'kelvin',
+  },
+  {
+    name: 'keep: a lingo whose lingo.json says keep reads and writes its settings with its own functions',
+    raw: { code: 'a=vault.pin();settings.set("vault", "pin", "1234");return [a, vault.pin(), store.get("vault/pin"), settings.get("vault")[0].value]', names: ['core', 'vault'] },
+    check: (r) => r.ok && same(r.value, ['0000', '1234', '"1234"', '1234']) && !existsSync(new URL('vault.json', SETTINGS)),
+  },
+  {
+    name: 'the command line: --set changes one, as JSON or as text, and --settings prints them all',
+    before: () => {
+      const core = (...args) => execFileSync(fileURLToPath(new URL('../bin/test/onsay-core.exe', import.meta.url)), ['test/onsay.json', ...args],
+        { cwd: fileURLToPath(new URL('..', import.meta.url)), encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+      try {
+        core('--set', 'prefs', 'units', '"cli"')
+        core('--set', 'prefs', 'name', 'Bo')
+        shown = JSON.parse(core('--settings', 'prefs'))
+      } catch (e) { shown = [e.message] }
+    },
+    raw: { code: 'return [prefs.units(), prefs.name()]', names: ['prefs'] },
+    check: (r) => r.ok && same(r.value, ['cli', 'Bo']) && same(shown.map((s) => s.value), ['cli', 'Bo', null]) && shown[0].title === 'Units',
+  },
+  // openrouter: AI models with the person's own key, from its settings on this device.
   {
     name: 'openrouter: with no key, it says where to add one',
-    before: () => { SETTINGS.openrouter = {} },
+    before: () => keep('openrouter', {}),
     raw: { code: 'return openrouter.ask("hello")', names: ['core', 'openrouter'] },
-    check: (r) => !r.ok && /your settings for openrouter/.test(r.error.message) && asked.reference === 'openrouter',
+    check: (r) => !r.ok && /your settings for openrouter/.test(r.error.message),
   },
   {
     name: 'openrouter: asks with the key, model and address from its settings',
-    before: () => { SETTINGS.openrouter = { key: 'test-key', url: 'http://127.0.0.1:8787/openrouter' } },
+    before: () => keep('openrouter', { key: 'test-key', url: 'http://127.0.0.1:8787/openrouter' }),
     raw: { code: 'return openrouter.ask("hello")', names: ['core', 'openrouter'] },
     check: (r) => r.ok && r.value === 'openai/gpt-4o-mini says: hello',
   },
@@ -228,7 +266,7 @@ const TESTS = [
   },
   {
     name: 'openrouter: a key it turns down',
-    before: () => { SETTINGS.openrouter.key = 'wrong' },
+    before: () => keep('openrouter', { key: 'wrong', url: 'http://127.0.0.1:8787/openrouter' }),
     raw: { code: 'return openrouter.ask("hello")', names: ['core', 'openrouter'] },
     check: (r) => !r.ok && /turned the API key down/.test(r.error.message),
   },
@@ -342,7 +380,7 @@ const TESTS = [
   // Onsay using this device while the agent waits, and replies with what they gave.
   {
     name: 'agent, called by its file: the model reaches a lingo by its address and one in words, and replies with what they gave, its lingo(...) saying it asks',
-    before: () => { SETTINGS.openrouter = { key: 'test-key', url: 'http://127.0.0.1:8787/openrouter' } },
+    before: () => keep('openrouter', { key: 'test-key', url: 'http://127.0.0.1:8787/openrouter' }),
     call: { lingo: 'agent.lingo/ask', values: { prompt: 'what is the weather in Rome?' } },
     check: (r) => r.ok && r.value === 'openai/gpt-5-mini heard: Rome: sunny for 2 days and heard: 2 litres' && device?.ok === true && every.some((m) => m.ask === 'something only this device knows' && m.asking === 'agent.ask'),
   },
@@ -405,7 +443,8 @@ const session = (link) => {
     } else {
       report('catalog: core without windows', entry('core')?.native === true && !entry('core').folder && entry('windows')?.status === 'broken')
     }
-    report('catalog: openrouter is ready on every core, its settings the ones its code reads', entry('openrouter')?.status === 'ok' && same(entry('openrouter').settings, ['key', 'url', 'model']))
+    report('catalog: openrouter is ready on every core, a folder whose lingo.json says its settings', entry('openrouter')?.status === 'ok' && entry('openrouter').file === 'openrouter.lingo' && same(entry('openrouter').settings, ['key', 'url', 'model']))
+    report('catalog: settings are names alone, its lingo.json\'s first, then any other its code reads', same(entry('prefs')?.settings, ['units', 'name', 'color']) && same(entry('memo')?.settings, []) && !('settings' in entry('core')))
     report('catalog: agent is ready on every core, on its own', entry('agent')?.status === 'ok' && entry('agent').phrases.some((p) => p.id === 'agent.ask'))
     if (has('native')) report('catalog: native is ready, one phrase that calls into the OS', entry('native')?.status === 'ok' && entry('native').phrases.some((p) => p.id === 'native.call'))
     report('catalog: a native without its library', entry('nolibrary')?.status === 'broken' && /nolibrary\.dll/.test(entry('nolibrary').error))
@@ -451,20 +490,30 @@ const report = (name, ok, more = '', ms) => {
   console.log(`${ok ? '  ok  ' : '  FAIL'} ${name}${ms === undefined ? '' : ` (${ms} ms)`}${more}`)
 }
 
-// Every run starts with an empty store, so what the last run kept, like memo's, can't change what this one sees.
+// Every run starts with an empty store and no settings, so what the last run kept, like memo's, can't change what this
+// one sees.
+const SETTINGS = new URL('./data/settings/', import.meta.url)   // the test core's home is test/data (test/onsay.json)
 rmSync(new URL('./data/store', import.meta.url), { recursive: true, force: true })
-// Every library lingo, copied into the test core's folder from ../../lingo-library, as a person puts them in a computer's
-// lingos folder. The app ships none of them.
-for (const file of readdirSync(new URL('../../lingo-library', import.meta.url)).filter((f) => f.endsWith('.lingo'))) {
-  cpSync(new URL(`../../lingo-library/${file}`, import.meta.url), new URL(`./lingos/${file}`, import.meta.url))
+rmSync(SETTINGS, { recursive: true, force: true })
+// A lingo's settings as this device keeps them, a record by name in home/settings/<lingo>.json, as settings.set writes them.
+const keep = (lingo, values) => {
+  mkdirSync(SETTINGS, { recursive: true })
+  writeFileSync(new URL(`${lingo}.json`, SETTINGS), JSON.stringify(values))
+}
+// Every library lingo, a file or a folder, copied into the test core's folder from ../../lingo-library, as a person puts
+// them in a computer's lingos folder, the other shape of each taken away first. The app ships none of them.
+const LIBRARY = new URL('../../lingo-library/', import.meta.url)
+for (const name of readdirSync(LIBRARY).filter((f) => f.endsWith('.lingo') || existsSync(new URL(`${f}/lingo.json`, LIBRARY)))) {
+  const lingo = name.replace(/\.lingo$/, '')
+  for (const was of [lingo, `${lingo}.lingo`]) rmSync(new URL(`./lingos/${was}`, import.meta.url), { recursive: true, force: true })
+  cpSync(new URL(name, LIBRARY), new URL(`./lingos/${name}`, import.meta.url), { recursive: true })
 }
 
-/* Canned answers to lingo.run and lingo.use, and lingo.setting from SETTINGS: each ask, by its words or its address,
-   answered as the program runs, or failed with why. One uses the device on the way with a call: memo.recall on the exe,
-   run while the program waits, and on the web host, which serves calls itself while the core waits, one of its host
-   phrases. asked is the last request, device the last call's result, for the tests to look at. */
-let asked = {}, device = null, every = []   // every: each ask, in order
-const SETTINGS = { github: { token: 'tok' } }   // the person's settings, by lingo
+/* Canned answers to lingo.run and lingo.use: each ask, by its words or its address, answered as the program runs, or
+   failed with why. One uses the device on the way with a call: memo.recall on the exe, run while the program waits, and
+   on the web host, which serves calls itself while the core waits, one of its host phrases. asked is the last request,
+   device the last call's result, shown what the command line printed, for the tests to look at. */
+let asked = {}, device = null, every = [], shown = null   // every: each ask, in order
 const LINGO = [
   [/capital of a country/, ({ values }) => ({ France: 'Paris', Japan: 'Tokyo' })[values.country]],
   [/kept under a name/, ({ values }) => `kept: ${values.name}`],
@@ -479,7 +528,6 @@ const LINGO = [
 const answer = async (m, link, call) => {
   asked = m
   every.push(m)
-  if ('key' in m) return link.send({ type: 'lingo', id: m.id, value: SETTINGS[m.reference]?.[m.key] ?? null })
   const found = LINGO.find(([match]) => match.test(m.ask ?? m.address))
   try {
     if (!found) throw new Error(m.address ? `There's no lingo called ${m.address.split(/[./]/)[0]}` : `Nothing can do "${m.ask}" yet`)

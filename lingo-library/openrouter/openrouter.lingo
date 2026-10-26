@@ -6,7 +6,7 @@
 // 2. chat(messages, model=nothing)                 -> text: the next reply in a conversation
 // 3. reply(messages, tools=nothing, model=nothing) -> message: the next reply whole, {role, content, tool_calls}, the
 //                                                     model given tools in OpenAI's format, the way an agent asks
-// Its settings, key, model and url, are the person's, set on the dashboard for openrouter and read with setting(...).
+// Its settings, key, url and model, are said in lingo.json beside it and kept on the person's computer.
 
 // 1. Asks one AI model one question for a program and gives its answer as text. It sees only this prompt: no chat, no
 // memory and no other lingos. Not for chatting with the person or answering them in the chat: the agent does that.

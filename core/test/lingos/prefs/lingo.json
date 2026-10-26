@@ -1,0 +1,6 @@
+{
+  "settings": [
+    { "name": "units", "title": "Units", "about": "metric or imperial.", "default": "metric", "required": true },
+    "name"
+  ]
+}

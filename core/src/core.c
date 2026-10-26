@@ -1,12 +1,13 @@
 // core.c - the Lingo core's engine: hello, jobs and results, and the lingos folder it watches, loads and lists for Onsay.
 //
 // 1. Settings      onsay.json
-// 2. Floor         the compute, store and http phrases every core has
-// 3. Lingos        Lingo lingos, one file each, and native and host ones, a folder each: the catalog and loading
+// 2. Floor         the compute, store, http and settings phrases every core has
+// 3. Lingos        Lingo lingos, a file or a folder each, and native and host ones, a folder each: the catalog and loading
 // 4. Messages      what a message is, and stopping the running job
 // 5. Jobs          run and call, to a result, lingo(...) asked of Onsay as a program runs
-// 6. Connection    hello with the catalog, and looking at the lingos folder again
-// 7. Beginning
+// 6. Lingo settings  setting(...), settings.get and settings.set, kept on this device, never on Onsay
+// 7. Connection    hello with the catalog, and looking at the lingos folder again
+// 8. Beginning
 // It never starts a thread or touches the connection (see core.h), but core_heard may run on another thread, so the
 // running job's stop is kept behind one gate.
 #include "core.h"
@@ -19,7 +20,7 @@
 #define say core_say
 
 static core_send sender;     // the host's way to Onsay
-static core_ask asker;       // and to Onsay, for lingo.run, lingo.use and lingo.setting, or NULL when pl_call answers them
+static core_ask asker;       // and to Onsay, for lingo.run and lingo.use, or NULL when pl_call answers them
 static char calling[128];    // the function the running call is of, like agent.ask, told with each lingo(...) it asks
 
 ////////// 1. SETTINGS //////////
@@ -168,7 +169,7 @@ static val *keys(run *r, val **a) {
   return l.out;
 }
 
-static val *hosted(run *r, val **a);   // 3. LINGOS
+static val *hosted(run *r, val **a), *settings_get(run *r, val **a), *settings_set(run *r, val **a);   // 3. and 6.
 
 // http is one web request, made by the device itself where it can (pl_http), or by its host.
 static void floor_phrases(void) {
@@ -184,18 +185,23 @@ static void floor_phrases(void) {
   group_add("http", "net");
   phrase_add("http", "net", "send(method, url, headers=nothing, body=nothing, timeout=30) -> {status,headers,text}: one request, "
              "headers a record, body text, redirects followed, at most 4 MB back", hosted);
+  group_add("settings", "none");
+  phrase_add("settings", "none", "get(lingo) -> [record]: every setting of a lingo, as its lingo.json and its code say, each with "
+             "its value now", settings_get);
+  phrase_add("settings", "none", "set(lingo, key, value): kept wherever that lingo keeps its settings", settings_set);
 }
 
 ////////// 3. LINGOS //////////
 
-// Core is the only lingo built in. A lingo written in Lingo is one file in the lingos folder, like memo.lingo, its listing
-// made from its code. A native lingo (a library like windows.dll) or a host one (phrases the program around the core
-// runs) is a folder with a lingo.json. One that can't load is set aside with its reason, and the rest still load. Onsay
-// is told what each one shares, never its code (6. CONNECTION).
+// Core is the only lingo built in. A lingo written in Lingo is one file in the lingos folder, like memo.lingo, or a folder
+// with its lingo.json beside it, like agent/agent.lingo, its listing made from its code. A native lingo (a library like
+// windows.dll) or a host one (phrases the program around the core runs) is a folder with a lingo.json. One that can't
+// load is set aside with its reason, and the rest still load. Onsay is told what each one shares, never its code (7.
+// CONNECTION).
 static arena *library;
 static val *device;                  // the compiler's instance of every lingo that loaded
 static val *catalog;                 // Onsay's table of contents: every lingo, whether it works, and what it shares
-static val *folders;                 // each lingo as read: {file, code} or {folder, manifest}, with error if it failed
+static val *folders;                 // each lingo as read: {file, code}, {folder, manifest} or both, with error if it failed
 static val *offered;                 // the manifest of every native lingo offered now, core first
 static unsigned long long looked;    // a fingerprint of the lingos folder when it was last read
 #define FNV 14695981039346656037ULL
@@ -244,8 +250,18 @@ static val *look(arena *a, unsigned long long *print) {
   return n.names;
 }
 
-// One name in the lingos folder: a .lingo file as {file, code}, a folder as {folder, manifest}, or NULL for a folder with
-// no lingo.json, which isn't a lingo.
+// Sets one aside, with why.
+static void set_aside(arena *a, val *e, const char *why) {
+  buf b = { 0 };
+  buf_fmt(&b, "%s: %s", rec_get(e, "folder")->t.s, why);
+  rec_set(a, e, "error", v_text(a, b.s, b.n));
+  say("Lingo %s can't be used: %s", rec_get(e, "folder")->t.s, b.s);
+  buf_free(&b);
+}
+
+// One name in the lingos folder: a .lingo file as {file, code}, a folder as {folder, manifest}, and the folder of a lingo
+// written in Lingo, its lingo.json's runs neither native nor host and its code beside it as <name>.lingo, as both. NULL
+// for a folder with no lingo.json, which isn't a lingo. One whose lingo.json lists its settings wrongly is set aside.
 static val *read_lingo(arena *a, const char *name) {
   buf path = { 0 }, text = { 0 };
   size_t len = strlen(name);
@@ -259,7 +275,22 @@ static val *read_lingo(arena *a, const char *name) {
     const char *problem = NULL;
     val *m = file ? NULL : json_parse(a, text.s, text.n, &problem);
     if (file) rec_set(a, e, "code", v_text(a, text.s, text.n));
-    else if (!problem) rec_set(a, e, "manifest", m);
+    else if (!problem && m->k == V_REC) {
+      rec_set(a, e, "manifest", m);
+      const char *runs = text_or(m, "runs", "");
+      path.n = text.n = 0;
+      buf_fmt(&path, "%s/%s/%s.lingo", set.lingos, name, name);
+      if (strcmp(runs, "native") && strcmp(runs, "host") && pl_read(path.s, &text)) {
+        rec_set(a, e, "file", v_cstr(a, path.s + strlen(set.lingos) + len + 2));
+        rec_set(a, e, "code", v_text(a, text.s, text.n));
+      }
+      val *settings = rec_get(m, "settings"), *keep = rec_get(m, "keep");
+      int listed = !settings || settings->k == V_LIST;
+      for (size_t i = 0; listed && settings && i < settings->l.n; i++) listed = settings->l.v[i]->k == V_TEXT || text_or(settings->l.v[i], "name", NULL);
+      if (!listed) set_aside(a, e, "its settings are a list, each a name or a record with its name, like {\"name\": \"key\", \"secret\": true}");
+      else if (keep && (!text_or(keep, "read", NULL) || !text_or(keep, "write", NULL)))
+        set_aside(a, e, "keep names its own functions that read and write its settings, like {\"read\": \"read\", \"write\": \"write\"}");
+    }
   }
   buf_free(&path);
   buf_free(&text);
@@ -272,19 +303,35 @@ static int native_called(const char *name) {
   return -1;
 }
 
-// Sets one aside, with why.
-static void set_aside(arena *a, val *e, const char *why) {
-  buf b = { 0 };
-  buf_fmt(&b, "%s: %s", rec_get(e, "folder")->t.s, why);
-  rec_set(a, e, "error", v_text(a, b.s, b.n));
-  say("Lingo %s can't be used: %s", rec_get(e, "folder")->t.s, b.s);
-  buf_free(&b);
+static const char *keeping;   // the lingo whose own read or write runs now, so its setting(...) reads this device's file
+
+/* One lingo's settings, as a form shows them: each its lingo.json lists, a name alone or a record of its name, title,
+   about, default, required and secret, then each other one its code reads, by name. keep, when asked for, is where its
+   lingo.json says they are kept, {read, write}, its own functions, or NULL for this device's file of them, as it is
+   inside those functions too. */
+static val *declared(arena *a, const char *lingo, val **keep) {
+  val *out = v_list(a), *m = NULL, *own = rec_get(rec_get(device, "lingos"), lingo);
+  for (size_t i = 0; i < folders->l.n; i++)
+    if (!strcmp(text_or(folders->l.v[i], "folder", ""), lingo) && !rec_get(folders->l.v[i], "error")) m = rec_get(folders->l.v[i], "manifest");
+  val *listed = m ? rec_get(m, "settings") : NULL, *read = own ? rec_get(own, "settings") : NULL;
+  for (size_t i = 0; listed && i < listed->l.n; i++) {
+    val *s = listed->l.v[i], *one = v_rec(a);
+    if (s->k == V_TEXT) rec_set(a, one, "name", s);
+    else for (size_t k = 0; k < s->r.n; k++) rec_set(a, one, s->r.key[k], s->r.v[k]);
+    list_push(a, out, one);
+  }
+  for (size_t i = 0; read && i < read->l.n; i++) {
+    int has = 0;
+    for (size_t k = 0; k < out->l.n && !has; k++) has = !strcmp(text_or(out->l.v[k], "name", ""), read->l.v[i]->t.s);
+    if (!has) { val *one = v_rec(a); rec_set(a, one, "name", read->l.v[i]); list_push(a, out, one); }
+  }
+  if (keep) *keep = m && !(keeping && !strcmp(keeping, lingo)) ? rec_get(m, "keep") : NULL;
+  return out;
 }
 
 // A host lingo's lingo.json lists its groups, shapes and functions (see README). This one function serves every host
 // phrase, however many: it hands the running phrase's values to the host through pl_call, and gives back its answer.
-// lingo.run, lingo.use and lingo.setting, lingo(...), use(...) and setting(...) as the program reaches them, go to the
-// host's ask instead where it has one, like host.c's, their values by name, lingo.run's with its context last
+// lingo.run and lingo.use, lingo(...) and use(...) as the program reaches them, go to the host's ask instead where it has one, like host.c's, their values by name, lingo.run's with its context last
 // (pl_context), what was around it. http.send goes to pl_http, the same way.
 static val *hosted(run *r, val **a) {
   const char *id = phrase_running();
@@ -410,7 +457,8 @@ static int lingos(void) {
   folders = v_list(a);
   for (size_t i = 0; i < names->l.n; i++) {
     val *e = read_lingo(a, names->l.v[i]->t.s);
-    if (e) { list_push(a, folders, e); list_push(a, rec_get(e, "file") ? stacked : native_found, e); }
+    if (e) list_push(a, folders, e);
+    if (e && !rec_get(e, "error")) list_push(a, rec_get(e, "file") ? stacked : native_found, e);
   }
   // core, then every native whose folder is here now. One whose folder is gone stays loaded, but isn't offered.
   load_natives(a, native_found);
@@ -446,7 +494,7 @@ static int lingos(void) {
     stacked->l.n--;
   }
 
-  // The table of contents: each lingo, what it is, the settings it reads and every function it shares, for
+  // The table of contents: each lingo, what it is, the names of its settings and every function it shares, for
   // Onsay. A native one has its version and folder, and a Lingo one its file.
   catalog = v_list(a);
   val *all = rec_get(device, "lingos");
@@ -466,7 +514,9 @@ static int lingos(void) {
     }
     if (rec_get(l, "about")) rec_set(a, one, "about", rec_get(l, "about"));
     if (core) rec_set(a, one, "about", v_cstr(a, CORE_ABOUT));
-    if (rec_get(l, "settings")) rec_set(a, one, "settings", rec_get(l, "settings"));
+    val *mine = declared(a, all->r.key[i], NULL), *names = v_list(a);
+    for (size_t k = 0; k < mine->l.n; k++) list_push(a, names, rec_get(mine->l.v[k], "name"));
+    if (rec_get(l, "settings") || names->l.n) rec_set(a, one, "settings", names);
     if (!core) rec_set(a, one, "phrases", shared(a, rec_get(l, "phrases")));
     if (rec_get(l, "native")) rec_set(a, one, "native", VBOOL(1));
     else say("Lingo %s is ready", rec_get(l, "name")->t.s);
@@ -697,7 +747,107 @@ int core_do(const char *text, size_t n) {
   return ready;
 }
 
-////////// 6. CONNECTION //////////
+////////// 6. LINGO SETTINGS //////////
+
+// A lingo's settings are kept on this device, never on Onsay: in home/settings/<lingo>.json, a record by name, or by the
+// lingo's own functions when its lingo.json says keep: {read, write}, so its maker decides where they live. setting(...)
+// is lingo.setting(key, reference), its value the one kept, else its lingo.json's default, else nothing.
+
+// The lingo a setting is of, checked, since it names a file, and the setting's name when there is one.
+static const char *whose(run *r, val *lingo, val *key) {
+  if (lingo->k != V_TEXT || !lingo->t.len || lingo->t.len > 64 || strspn(lingo->t.s, "abcdefghijklmnopqrstuvwxyz0123456789_-") != lingo->t.len)
+    fail(r, "phrase", "a lingo's settings are named by the lingo, like openrouter");
+  if (key && (key->k != V_TEXT || !key->t.len)) fail(r, "phrase", "a setting is named by its name, like key");
+  return lingo->t.s;
+}
+
+// The settings this device keeps for a lingo, a record by name, and the file they are in.
+static val *stored(run *r, const char *lingo, buf *path) {
+  buf text = { 0 };
+  buf_fmt(path, "%s/settings/%s.json", set.home, lingo);
+  val *s = pl_read(path->s, &text) ? json_parse(r->a, text.s, text.n, NULL) : NULL;
+  buf_free(&text);
+  return s && s->k == V_REC ? s : v_rec(r->a);
+}
+
+// A lingo's own function that keeps its settings, read(key) or write(key, value), run as a program of its own. Its value.
+static val *kept(run *r, const char *lingo, const char *fn, val *values) {
+  buf id = { 0 }, out = { 0 };
+  buf_fmt(&id, "%s.%s", lingo, fn);
+  val *code = written(r->a, id.s, values), *names = v_list(r->a), *input = v_rec(r->a), *program = NULL;
+  const char *why = "it has no function by that name", *was = keeping;
+  int line = 0;
+  list_push(r->a, names, v_cstr(r->a, lingo));
+  rec_set(r->a, input, "v", values);
+  if (code) program = lingo_prepare(r->a, device, code->t.s, code->t.len, names, &line, &why);
+  if (program) {
+    keeping = lingo;
+    run_program(r->a, "null", program, input, set.steps, set.ms, r->stop, set.allow, set.allowed, &out);
+    keeping = was;
+  }
+  val *got = program ? json_parse(r->a, out.s, out.n, NULL) : NULL, *error = got ? rec_get(got, "error") : NULL;
+  val *fn_ = v_text(r->a, id.s, id.n);
+  buf_free(&id);
+  buf_free(&out);
+  if (!program || error) fail(r, error ? text_or(error, "code", "phrase") : "phrase", "%s, which keeps %s's settings: %s", fn_->t.s, lingo, error ? text_or(error, "message", "") : why);
+  return rec_get(got, "value") ? rec_get(got, "value") : NOTHING;
+}
+
+// lingo.setting(key, reference).
+static val *setting_(run *r, val **a) {
+  const char *lingo = whose(r, a[1], a[0]);
+  val *keep = NULL, *all = declared(r->a, lingo, &keep), *v;
+  if (keep) {
+    val *values = v_list(r->a);
+    list_push(r->a, values, a[0]);
+    v = kept(r, lingo, text_or(keep, "read", ""), values);
+  } else {
+    buf path = { 0 };
+    v = rec_get(stored(r, lingo, &path), a[0]->t.s);
+    buf_free(&path);
+  }
+  for (size_t i = 0; (!v || v->k == V_NOTHING) && i < all->l.n; i++)
+    if (!strcmp(text_or(all->l.v[i], "name", ""), a[0]->t.s)) v = rec_get(all->l.v[i], "default");
+  return v ? v : NOTHING;
+}
+
+// settings.get(lingo), for a form of them: each its lingo.json lists, with what it says, then each other one its code
+// reads, each with its value now.
+static val *settings_get(run *r, val **a) {
+  val *all = declared(r->a, whose(r, a[0], NULL), NULL), *asked[2] = { NULL, a[0] };
+  for (size_t i = 0; i < all->l.n; i++) {
+    asked[0] = rec_get(all->l.v[i], "name");
+    rec_set(r->a, all->l.v[i], "value", setting_(r, asked));
+  }
+  return all;
+}
+
+// settings.set(lingo, key, value), wherever that lingo keeps them.
+static val *settings_set(run *r, val **a) {
+  const char *lingo = whose(r, a[0], a[1]);
+  val *keep = NULL;
+  declared(r->a, lingo, &keep);
+  if (keep) {
+    val *values = v_list(r->a);
+    list_push(r->a, values, a[1]);
+    list_push(r->a, values, a[2]);
+    kept(r, lingo, text_or(keep, "write", ""), values);
+    return NOTHING;
+  }
+  buf path = { 0 }, text = { 0 }, folder = { 0 };
+  val *s = stored(r, lingo, &path);
+  rec_set(r->a, s, a[1]->t.s, a[2]);
+  buf_json(&text, s);
+  buf_fmt(&folder, "%s/settings", set.home);
+  int ok = pl_folder(folder.s) && pl_write(path.s, text.s, text.n);
+  buf_free(&path);
+  buf_free(&text);
+  buf_free(&folder);
+  if (!ok) fail(r, "phrase", "this device couldn't save the setting");
+  return NOTHING;
+}
+
+////////// 7. CONNECTION //////////
 
 // Ends a message with the native lingos' manifests, core first, and the catalog of every lingo, then sends it.
 static void send_catalog(buf *out) {
@@ -735,10 +885,10 @@ void core_open(void) {
   send_catalog(&out);
 }
 
-////////// 7. BEGINNING //////////
+////////// 8. BEGINNING //////////
 
 // lingo.run, lingo.use and lingo.setting are in no listing: they are lingo(...), use(...) and setting(...), part of the
-// language, so every core has them, unless a host lingo of its own gave them.
+// language, so every core has them, unless a host lingo of its own gave them. lingo.setting is answered here (6.).
 int core_begin(const char *text, size_t n, core_send send, core_ask ask) {
   if (!settings(text, n)) return 0;
   sender = send;
@@ -750,7 +900,7 @@ int core_begin(const char *text, size_t n, core_send send, core_ask ask) {
   if (!lingos()) return 0;
   if (!phrase_find("lingo.run")) phrase_add("lingo", "none", "run(ask, values=nothing, gives=\"\")", hosted);
   if (!phrase_find("lingo.use")) phrase_add("lingo", "none", "use(address, values=nothing)", hosted);
-  if (!phrase_find("lingo.setting")) phrase_add("lingo", "none", "setting(key, reference)", hosted);
+  if (!phrase_find("lingo.setting")) phrase_add("lingo", "none", "setting(key, reference)", setting_);
   return 1;
 }
 

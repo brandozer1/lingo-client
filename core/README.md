@@ -11,7 +11,7 @@ The core itself is an engine (`src/core.c`, see `src/core.h`) that never starts 
 a host drives it: `src/host.c` on a device with threads and a WebSocket in C, like Windows and Linux. A new device is a
 `platform_*.c`, and a host if it holds its connection differently.
 
-The language, and what a lingo is, one file of code, are in `../docs/lingo.md`.
+The language, and what a lingo is, its code alone or in a folder with its `lingo.json`, are in `../docs/lingo.md`.
 
 ## The compiler
 
@@ -19,9 +19,9 @@ The language, and what a lingo is, one file of code, are in `../docs/lingo.md`.
 Lingo code
    |  parse: checked against the lingos it may use
    v
-tree with phrases written in Lingo in it, like memo.remember, lingo(...) as lingo.run, use(...) as lingo.use and
-setting(...) as lingo.setting, asked of Onsay as they run. A dotted call is local, a phrase here or a lingo in the
-same lingos folder, and any other is a compile error that says to use use(...)
+tree with phrases written in Lingo in it, like memo.remember, lingo(...) as lingo.run and use(...) as lingo.use,
+asked of Onsay as they run, and setting(...) as lingo.setting, answered here. A dotted call is local, a phrase here or
+a lingo in the same lingos folder, and any other is a compile error that says to use use(...)
    |  link: each phrase written in Lingo swapped for its fn, layer by layer down
    v
 tree of native and host phrases only, and the permissions it really needs  ->  the runner
@@ -48,7 +48,7 @@ Where Onsay is is built in, never a setting. Everything else is in one file, giv
 | `token` | sent in hello. The Onsay app writes this file with its own token (`src/Core/Core.cs` in onsay-desktop). On a server, `onsay-core settings.json --sign-in` writes it: it says a web address and a code to open on any device, waits while the person signs in there and presses Connect, as the app does, and keeps the file's other settings |
 | `install` | this device's own id, which `--sign-in` makes and keeps, so signing in again gets the device back, not a new one |
 | `name` | what the person calls this device |
-| `home` | the core's own folder. Its storage is in `home/store` |
+| `home` | the core's own folder. Its storage is in `home/store`, and the settings of its lingos in `home/settings` |
 | `lingos` | the folder of lingos. `home/lingos` when left out |
 | `allow` | the permissions the person gives. The core refuses any phrase that needs one not listed |
 | `steps`, `ms` | the most any program may take. Onsay may ask for less, never more |
@@ -75,7 +75,6 @@ back as it came.
 | `{type:"result", id, ok:false, error:{code, message, at, line}, log, pictures?}` | it failed. `code` is `compile`, `type`, `limit`, `stopped`, `denied`, `unknown`, `phrase` or `fail`, `at` its place in the tree, and `line` its line, or null |
 | `{type:"lingo", id, ask, values, gives, context, asking}` | a program reached `lingo(...)`. `id` is a number the core counts up from 1. The program waits for the answer. `context` is what was around it, from `pl_context` in `src/platform.h`: `os`, `time` (local, with its offset), `zone`, `language`, and the `app` and `window` in front, those the device knows. A Linux server sends no `app` or `window`. `asking` is the function the running call is of, like `agent.ask` |
 | `{type:"lingo", id, address, values}` | a program reached `use(...)`, like `use("laptop.brandon/lingos/text.lingo/slug", {text: "Hello there"})` or `use("https://api.example.com/v1/items")`. `values` is a record, a list or nothing. It waits the same way |
-| `{type:"lingo", id, key, reference}` | a program reached `setting(...)`, `reference` the lingo's name. It waits the same way |
 | `{type:"catalog", manifests, catalog}` | the lingos folder changed |
 
 Its host adds `ping`, and on the device's stop key `halt`. Run with `--sent`, `host.c` prints every message it sends
@@ -84,15 +83,15 @@ the Windows app does under Settings, Privacy.
 
 **The catalog** is each lingo's listing, made from its code for a Lingo lingo (`listing` in `src/compile.c`): its
 `name`, its `file`, like `memo.lingo`, or for a native one its `version` and `folder`, its `about`, whether it's `ok` or
-`broken` and why, its `settings`, the names its code reads with `setting("...")`, and `phrases`, every function it
+`broken` and why, its `settings`, names alone, those its `lingo.json` lists and then any other its code reads with
+`setting("...")`, never their values, and `phrases`, every function it
 shares: `id`, `head`, `does` from the comments right above its fn, `gives` for a native
 one, its `inputSchema`, and `lingos`, how many `lingo(...)` calls it makes, counted from its code through every function
 it reaches, none for a native. Never its code.
 
-**lingo(...), use(...) and setting(...), as they run.** `lingo("what it does", {name: value}, "what it gives")` compiles to
-the phrase `lingo.run(ask, values, gives)`, `use(address, values)` to `lingo.use(address, values)`, and `setting(key)`
-to `lingo.setting(key, reference)`, the reference its lingo's own name, like `openrouter`. All are every core's own, in
-no listing, and all reach the host's ask with their values by name. When a program reaches one, the core sends one of
+**lingo(...) and use(...), as they run.** `lingo("what it does", {name: value}, "what it gives")` compiles to the phrase
+`lingo.run(ask, values, gives)`, and `use(address, values)` to `lingo.use(address, values)`. Both are every core's own,
+in no listing, and both reach the host's ask with their values by name. When a program reaches one, the core sends one of
 the `lingo` messages above, and waits. Onsay answers `{type:"lingo", id, value}`, which the program goes on with, or
 `{type:"lingo", id, error, code}`, which is the phrase's error (`phrase` when no code is given). While it waits, Onsay
 may send `call`s, since what answers may be on this device: the core runs each inside the waiting job and answers it
@@ -110,18 +109,19 @@ use `request` (`../lingo-library/request.lingo`), built on it, or `use(...)` for
 
 Every lingo is a tree rooted at the core, and the core is the only one built in: `core 0.1`, the same on every device,
 used by every lingo and never listed. It is the floor, only what Lingo can't write for itself: `std` (`length`, `keys`,
-`slice`, `number`, `text`, `to_json`, `from_json`, `bytes`, `from_bytes`), `compute` (`now`, `wait`, `log`), `store` and
-`http`, each with its reason in section 15 of `../docs/lingo.md`. The language itself is only its syntax and
+`slice`, `number`, `text`, `to_json`, `from_json`, `bytes`, `from_bytes`), `compute` (`now`, `wait`, `log`), `store`,
+`http` and `settings` (`get`, `set`), each with its reason in section 15 of `../docs/lingo.md`. The language itself is only its syntax and
 `lingo(...)`, `use(...)` and `setting(...)`. Splitting, case, rounding, sorting and dates are library lingos written in
 Lingo on this floor, `text`, `list`, `math` and `time` in `../lingo-library`. Everything else is in the lingos folder:
 
-- **A lingo written in Lingo is one file there,** `<name>.lingo`, like the lingos of `../lingo-library`. Its listing is
-  made from its code (section 11 of `../docs/lingo.md`). It may call the core, the native lingos here, and every other
-  Lingo lingo in the folder by its dotted name, `text.slug(title)`, linked in here, and reaches anything else with
-  `use(...)`.
-- **A native or host lingo is a folder with a `lingo.json`,** the device's own native lingo too: the Windows app ships
-  `windows` (`../lingos/windows`) and puts it there. A folder without a `lingo.json` isn't a lingo, and one whose
-  `lingo.json` is for a lingo written in Lingo is set aside, saying it is one file now.
+- **A lingo written in Lingo is its code there,** `<name>.lingo`, like the lingos of `../lingo-library`: one file, or a
+  folder, `<name>/<name>.lingo` beside `<name>/lingo.json`, its manifest saying its settings (*Lingo settings*, below).
+  Its listing is made from its code (section 11 of `../docs/lingo.md`). It may call the core, the native lingos here,
+  and every other Lingo lingo in the folder by its dotted name, `text.slug(title)`, linked in here, and reaches anything
+  else with `use(...)`.
+- **A native or host lingo is a folder with a `lingo.json`,** its `runs` `native` or `host`, the device's own native
+  lingo too: the Windows app ships `windows` (`../lingos/windows`) and puts it there. A folder without a `lingo.json`
+  isn't a lingo, and one whose `lingo.json` runs neither, with no `<name>.lingo` beside it, is set aside with the reason.
 
 The core reads them all at start and again within 5 seconds of any change: it loads the natives, then compiles every
 Lingo lingo against all of them, and sets aside any that can't load with the reason, like `broken.lingo line 3: There's
@@ -177,16 +177,46 @@ listing from its code; `parse`, `face` and `prepare` compile code, `stacked` the
 ## Lingo settings
 
 Any lingo may ask the person for settings it needs, like an account name or a key for a web service, by reading them
-with `setting("name")`, part of the language. Its listing names each one its code reads, and the person fills them in
-on Onsay, kept by the lingo's name, like `openrouter`.
+with `setting("name")`, part of the language. They are kept on this device, never on Onsay's servers. Its `lingo.json`
+says what each one is, so the program around the core can build a form of them, the Onsay app's:
 
-The core asks Onsay over its connection as the line runs, and gets the setting of the person the run is for, never the
-lingo's maker. `setting("token", "github")` reads another lingo's, so one token serves many lingos, and isn't one of
-this lingo's own. A setting the person never set is nothing, so the lingo applies its own default:
+```json
+{
+  "settings": [
+    { "name": "key", "title": "OpenRouter API key", "about": "Your OpenRouter key, from openrouter.ai/keys.", "required": true, "secret": true },
+    { "name": "url", "title": "Address", "about": "Where OpenRouter answers, up to /v1.", "default": "https://openrouter.ai/api/v1" },
+    "model"
+  ]
+}
+```
+
+Each is a name alone or a record: its `name`, and as it needs `title`, `about`, `default`, `required` and `secret`. A
+setting its code reads that its `lingo.json` doesn't list is a setting too, by its name alone, and a lingo with no
+`lingo.json` has only those.
+
+`setting(key)` compiles to the phrase `lingo.setting(key, reference)`, the reference its lingo's own name, like
+`openrouter`, and the core answers it on the device as the line runs (6. LINGO SETTINGS in `src/core.c`): the value
+kept, else the `default` its `lingo.json` gives, else nothing, so the lingo may apply its own:
 
 ```
 fn units() { return setting("units") ?? "metric" }
 ```
+
+`setting("token", "github")` reads another lingo's, so one token serves many lingos, and isn't one of this lingo's
+own. Values are kept in the core's own folder, `home/settings/<lingo>.json`, a record by name, unless its `lingo.json`
+says `"keep": {"read": "read", "write": "write"}`: then the core calls the lingo's own `read(key)` for a value and
+`write(key, value)` to keep one, so its maker decides where they live. Inside those two, `setting(...)` of that lingo
+reads the core's file.
+
+Two phrases of the core, and the same on the command line for the program around it, change and show them wherever
+they are kept:
+
+| Phrase | Command line | Does |
+|--------|--------------|------|
+| `settings.get(lingo)` | `onsay-core settings.json --settings <lingo>` | every setting of a lingo, its `lingo.json`'s first, each with what it says and its `value` now, as JSON, for a form |
+| `settings.set(lingo, key, value)` | `onsay-core settings.json --set <lingo> <key> <value>` | changes one. On the command line value is JSON, like `"metric"` or `5`, or text as it is when it isn't JSON |
+
+The catalog names a lingo's settings, never their values.
 
 ## Files
 
@@ -199,8 +229,8 @@ fn units() { return setting("units") ?? "metric" }
 | `src/compile.c` | the compiler: lex, parse, manifests, a Lingo lingo's listing made from its code, `lingo(...)` as `lingo.run`, `use(...)` as `lingo.use` and `setting(...)` as `lingo.setting`, link, and loading a folder of lingos |
 | `src/phrase.c` | the phrase table, and the listing made from it |
 | `src/std.c` | the core lingo's `std` group: reaching inside values and converting them |
-| `src/core.h`, `src/core.c` | the engine: settings, hello and the catalog, stops, jobs, a call by a lingo's file, lingos, and the floor phrases `compute`, `store` and `http` |
-| `src/host.c` | the core as a program: the settings file, signing in with `--sign-in`, the connection, heartbeat, reconnecting, and the engine on three threads |
+| `src/core.h`, `src/core.c` | the engine: settings, hello and the catalog, stops, jobs, a call by a lingo's file, lingos and their settings, and the floor phrases `compute`, `store`, `http` and `settings` |
+| `src/host.c` | the core as a program: the settings file, signing in with `--sign-in`, a lingo's settings with `--settings` and `--set`, the connection, heartbeat, reconnecting, and the engine on three threads |
 | `web/compiler.js` | the compiler on its own, run from JavaScript against `bin/lingo.wasm`, for the tests (`test/compiler.mjs`) |
 | `src/platform.h` | everything the core needs from a device. Porting the core is writing this for the new device |
 | `src/platform_win.c` | that, for Windows: WinHTTP WebSockets and `pl_http` (its own timer ends a request on time, since WinHTTP looks at its timeouts only every 4 seconds or so), threads, files |
@@ -220,6 +250,10 @@ fn units() { return setting("units") ?? "metric" }
                                                 or later, built on Windows with zig too
 bin/onsay-core.exe settings.json --manifest     prints what it tells Onsay it can do
 bin/onsay-core.exe settings.json --sign-in      signs the device in from any device's browser, and writes its token
+bin/onsay-core.exe settings.json --settings agent
+                                                prints every setting of agent as JSON, for a form of them
+bin/onsay-core.exe settings.json --set agent model claude-opus-5-5
+                                                changes one, wherever agent keeps its settings
 
 sh install.sh ./bin/linux-x64/onsay-core        on a Linux server: installs that core, signs it in and starts it as a
                                                 service. With nothing after it, it downloads the core
@@ -229,14 +263,16 @@ node test/server.mjs                            a stand-in for Onsay, then in an
 bin/test/onsay-core.exe test/onsay.json         runs every test, and prints each result on the stand-in's side
 ```
 
-Every library lingo needs only the core: `test/server.mjs` copies every file of `../lingo-library` into `test/lingos` as
-it starts, since the app ships none of them, and tests `text`, `list`, `math` and `time` on the cases the core once did
+Every library lingo needs only the core: `test/server.mjs` copies every lingo of `../lingo-library`, file or folder,
+into `test/lingos` as it starts, since the app ships none of them, and tests `text`, `list`, `math` and `time` on the cases the core once did
 itself. The exe has no host, so the tests of `test/lingos/hosted`, a host lingo, are skipped.
 
 The test build talks to the stand-in on this computer instead of Onsay. The stand-in compiles with the `bin/lingo.wasm`
 compiler, runs every pure program on both the C core and the reference and requires identical results, then checks
 stop, limits, memory, calls (of a phrase written in Lingo too, and by a lingo's file and function, main when none),
-storage, `lingo(...)` asked of it as
+storage, settings answered on the device and never asked of Onsay (the value kept in `test/data/settings`, which it
+writes as a device has them, else the `lingo.json` default, another lingo's by reference, the test lingo `vault` keeping
+its own with its read and write, `settings.get` and `settings.set`, and `--settings` and `--set`), `lingo(...)` asked of it as
 programs run (using the device meanwhile, saying which function asks, and stopped while it waits), `use(...)` asked by
 its address (from a program and from a lingo's own code), a lingo calling one in the same folder by its dotted name, a
 dotted call to one that isn't here refused, `http.send` against the stand-in's own pages (a timeout on time too), `request`

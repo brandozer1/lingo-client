@@ -8,7 +8,7 @@
 // 4. lingo_read(a, manifest, folder, why)   -> a native or host lingo's lingo.json read to the same record, its functions'
 //                                              heads and gives from their schemas: lingo_schema and lingo_gives, the two
 //                                              ways, and lingo_line(b, phrase, group_needs)
-//    listing(a, file, code, why)            -> a lingo written in Lingo, one file, its listing made from its code: every
+//    listing(a, file, code, why)            -> a lingo written in Lingo, its listing made from its code: every
 //                                              fn, the comments above each, its about, and the settings it reads
 // 5. lingo_link(a, program, stack)          -> Lingo lingos' phrases swapped for their code, until only native ones are left
 // 6. lingo_load, lingo_face, lingo_prepare  -> every lingo a device has, what Onsay is shown, and code made ready to run
@@ -571,8 +571,8 @@ static val *wanted(cx *c, val *args, int line) {
   return mk(a, "say", 2, T(a, "lingo.run"), named);
 }
 
-/* setting("key") is a call of lingo.setting, made as the program reaches it: Onsay answers with the setting of that name
-   the person the run is for keeps under this lingo's name, or nothing. setting("key", "github") reads another lingo's,
+/* setting("key") is a call of lingo.setting, made as the program reaches it: the device answers with this lingo's setting
+   of that name, kept there, or its default, or nothing (6. in core.c). setting("key", "github") reads another lingo's,
    so one token serves many lingos. A program that is no lingo always says whose. */
 static val *setting(cx *c, val *args, int line) {
   arena *a = c->a;
@@ -1198,7 +1198,8 @@ val *lingo_manifest(arena *a, const char *text, size_t n, const char **message) 
 ////////// 4. LINGO.JSON //////////
 
 /* lingo.json, a native or host lingo's manifest, read to the same record a native lingo's text is read to (see
-   docs/lingo.md). A lingo written in Lingo has none: its listing is made from its code (listing, below).
+   docs/lingo.md). A lingo written in Lingo needs none: its listing is made from its code (listing, below), and a lingo.json
+   beside its code only says its settings, read by the core (core.c).
      name, version   lower case letters, digits, _ and -, and a version like 1.2.0
      runs            native: a library, its library. host: run by the program around the core
      shapes, groups  a host lingo's records and groups, as in a listing. groups: [{name, needs: [permission]}]
@@ -1454,7 +1455,7 @@ val *lingo_read(arena *a, val *m, const char *folder, const char **why) {
   val *name = rec_get(m, "name"), *version = rec_get(m, "version"), *runs = rec_get(m, "runs"), *about = rec_get(m, "about");
   long n[3];
   if (!is_text(runs, "native") && !is_text(runs, "host"))
-    return failed(why, fmt(a, "a lingo written in Lingo is one file, %s.lingo, in the lingos folder itself, with no folder and no lingo.json. A lingo.json is only for a native or host lingo, its runs native or host",
+    return failed(why, fmt(a, "its runs is native or host, or it is a lingo written in Lingo, with its code beside it in %s.lingo",
                            lingo_name(name) ? name->t.s : folder ? folder : "its_name"));
   if (!lingo_name(name)) return failed(why, "its name must be lower case letters, digits, _ and -, like notes");
   if (folder && strcmp(name->t.s, folder)) return failed(why, fmt(a, "its name is %s, so its folder must be called %s too", name->t.s, name->t.s));
@@ -1543,7 +1544,7 @@ static val *plain(arena *a, val *d) {
   return d && d->k != V_LIST && d->k != V_REC ? d : NULL;
 }
 
-/* 4. A lingo written in Lingo is one file, <name>.lingo, and its listing is made from its code, never written by hand:
+/* 4. A lingo written in Lingo is its code, <name>.lingo, and its listing is made from it, never written by hand:
      each fn        a function it shares, called at its address, like laptop.brandon/lingos/memo.lingo/recall, its values
                     and their defaults its fn's own
      the comments   right above a fn, what it does. The first lines of the file, when they are comments, up to a blank
