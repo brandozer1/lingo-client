@@ -5,11 +5,13 @@
 // 3. Links              a WebSocket written here on a connection curl opens (TCP, TLS and proxies), RFC 6455
 // 4. Files and device, and loading a native lingo
 // 5. Web                http.send, one request through curl
+// 6. Port               web requests coming in, on plain sockets
 // libcurl's own WebSocket API is left alone, since many distributions build curl without it.
 #define _GNU_SOURCE
 #include <dlfcn.h>
 #include <dirent.h>
 #include <errno.h>
+#include <netinet/in.h>
 #include <poll.h>
 #include <pthread.h>
 #include <signal.h>
@@ -20,6 +22,7 @@
 #include <sys/random.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
 #include "platform.h"
@@ -572,4 +575,61 @@ int pl_http(const char *values, size_t n, buf *out) {
   buf_free(&method), buf_free(&url), buf_free(&body), buf_free(&error), buf_free(&text), buf_free(&raw);
   arena_free(a);
   return 1;
+}
+
+////////// 6. PORT //////////
+
+struct pl_socket { int s; };
+
+pl_socket *pl_listen(int port, int network, buf *error) {
+  struct sockaddr_in here = { 0 };
+  struct sockaddr_in6 every = { 0 };   // its address all zeros: every one, IPv4 too once V6ONLY is off
+  int no = 0, yes = 1, s = socket(network ? AF_INET6 : AF_INET, SOCK_STREAM, 0);
+  here.sin_family = AF_INET, here.sin_port = htons((unsigned short)port), here.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  every.sin6_family = AF_INET6, every.sin6_port = htons((unsigned short)port);
+  if (s >= 0) {
+    setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes);   // so a restart doesn't wait for the last one's connections
+    if (network) setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY, &no, sizeof no);
+  }
+  if (s < 0 || bind(s, network ? (struct sockaddr *)&every : (struct sockaddr *)&here, network ? sizeof every : sizeof here) || listen(s, SOMAXCONN)) {
+    buf_fmt(error, "Port %d couldn't be opened: %s", port, errno == EADDRINUSE ? "another program is using it" : strerror(errno));
+    if (s >= 0) close(s);
+    return NULL;
+  }
+  pl_socket *p = malloc(sizeof *p);
+  p->s = s;
+  return p;
+}
+
+pl_socket *pl_accept(pl_socket *port, int *here) {
+  struct sockaddr_storage from;
+  socklen_t n = sizeof from;
+  int c = accept(port->s, (struct sockaddr *)&from, &n);
+  if (c < 0) return NULL;
+  struct timeval quiet = { 10, 0 };
+  setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, &quiet, sizeof quiet);
+  setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, &quiet, sizeof quiet);
+  // 127.x.x.x, ::1, or 127.x.x.x as IPv6 writes it, ::ffff:127.x.x.x.
+  static const unsigned char loop[16] = { [15] = 1 }, mapped[12] = { [10] = 255, [11] = 255 };
+  const unsigned char *v4 = (unsigned char *)&((struct sockaddr_in *)&from)->sin_addr, *v6 = ((struct sockaddr_in6 *)&from)->sin6_addr.s6_addr;
+  *here = from.ss_family == AF_INET ? v4[0] == 127 : !memcmp(v6, loop, 16) || (!memcmp(v6, mapped, 12) && v6[12] == 127);
+  pl_socket *s = malloc(sizeof *s);
+  s->s = c;
+  return s;
+}
+
+int pl_take(pl_socket *c, char *to, size_t n) {
+  ssize_t got = recv(c->s, to, n, 0);
+  return got > 0 ? (int)got : 0;
+}
+
+int pl_give(pl_socket *c, const char *data, size_t n) {
+  for (ssize_t sent; n; data += sent, n -= (size_t)sent) if ((sent = send(c->s, data, n, MSG_NOSIGNAL)) <= 0) return 0;
+  return 1;
+}
+
+void pl_hang_up(pl_socket *c) {
+  shutdown(c->s, SHUT_WR);
+  close(c->s);
+  free(c);
 }

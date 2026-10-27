@@ -415,7 +415,7 @@ A phrase that needs any permission that wasn't given stops the program with `den
 
 A lingo written in Lingo is its code, `<name>.lingo`, in a computer's lingos folder: one file on its own, or a folder of
 its name holding the file and its manifest, `lingos/<name>/<name>.lingo` beside `lingos/<name>/lingo.json`, when it has
-settings to say. The person writes only the code, and the manifest when it has settings. Its listing, what it shares,
+settings, a route or `open` to say. The person writes only the code, and the manifest when it has any. Its listing, what it shares,
 is made from the code by the compiler (`listing` in `core/src/compile.c`):
 
 - **Every `fn`** is a function it shares, called at its address, like `laptop.brandon/lingos/memo.lingo/recall`, or by
@@ -495,12 +495,35 @@ can be made of them (the `agent` of `lingo-library/`, shortened, with a `keep` i
 - **`keep`**, which most lingos leave out, names two of the lingo's own functions that keep its settings wherever its
   maker wants them: `read(key)` gives one's value and `write(key, value)` keeps one. Inside them, `setting(...)` of
   that lingo reads the core's own file. Without it, the core keeps them in its own folder, `home/settings/<name>.json`.
+- **`route`** is where it answers web requests on its computer, like `"/onsay"`. Without it, it answers at `/<name>`.
+- **`open`**, true, lets requests from other computers and through Onsay reach it. Without it, only programs on its own
+  computer can, and to anyone else it isn't there.
 - **Its runs** is left out, since it isn't native or host. A folder whose `lingo.json` lists its settings wrongly is
   set aside with the reason.
 
 The core answers `setting(...)` from them, `settings.get(lingo)` gives every one with what its manifest says and its
 value now, and `settings.set(lingo, key, value)` changes one wherever it is kept (section 15). A lingo's settings are
 never sent to Onsay: its catalog names them only.
+
+**Web requests.** A computer's lingo client answers web requests on its port, 6969, each lingo at its route
+(`core/README.md`, *Routes*). A lingo with a function `serve(request)` answers every request to its route itself:
+
+```
+// hello - a page that says hello, open to anyone.
+
+// Every request to /hello: hello to whoever the query names.
+fn serve(request) {
+  if request.method != "GET" {return {status: 405, body: {error: "Only GET"}}}
+  return "hello " + (request.query.name ?? "there")
+}
+```
+
+`request` is `{method, path, query, headers, body, json}`: `path` is the part after its route, starting with `/`,
+`query` a record, `headers` a record by lower case name, `body` text, and `json` the body read as JSON when it is
+JSON, else nothing. What serve gives is the answer: a record with a number `status` is `{status, headers, body}`, its
+body text, or written as JSON when it isn't text, and anything else is the body of a 200, as text when it is text and
+as JSON when it isn't. A lingo without `serve` is called function by function, `POST /memo/recall` with its values as a
+JSON record by name, `{"k": "milk"}`, or `GET /memo/recall?k=milk`, answered with the function's value as JSON.
 
 **What Onsay is told.** A core tells Onsay what each lingo shares, never its code: each function's head and what it
 does, its `inputSchema`, and how many `lingo(...)` calls it makes, counted from the code through every function it
@@ -533,7 +556,8 @@ files.add_to needs permission for files.write`.
 ## 12. Where programs run
 
 Code runs where it lives. A lingo in a computer's lingos folder runs in that computer's core, when Onsay relays a call to
-it, `{type:"call", lingo:"test.lingo/find", values}`, and only the answer goes back. Its code may call `lingo(...)`,
+it, `{type:"call", lingo:"test.lingo/find", values}`, or when a web request reaches its route (section 11), and only
+the answer goes back. Its code may call `lingo(...)`,
 `use(...)`, which asks Onsay and waits, or `setting(...)`, answered by that computer's core itself. Anything at any other address runs there, its own way, reached
 by a plain web request. Onsay runs no Lingo: it relays calls and answers. An answer sent to a computer after an `@` is a
 plain call too, the answer the function's first value.

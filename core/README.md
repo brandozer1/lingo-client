@@ -3,7 +3,8 @@
 The Lingo runtime, in C: a small program that runs lingos, built for Windows and for Linux. A lingo is an app that lets
 Onsay talk to the device the lingo client is on. The core runs from that computer's lingos folder: it signs in to Onsay,
 says what its lingos share, and runs a call to one when Onsay sends it, an answer sent to it after an `@` included. It
-has no screen: a product is this core plus its own app around it, like the Windows app, which lives in its own project,
+also answers web requests on port 6969, each lingo at its own route (*Routes*, below), so any program on the computer
+can use its lingos, with or without Onsay. It has no screen: a product is this core plus its own app around it, like the Windows app, which lives in its own project,
 onsay-desktop, beside this repo, and ships `bin/onsay-core.exe` and `bin/lingos`. On a Linux machine it is the product
 on its own: `install.sh` puts it there, signs it in and keeps it running.
 
@@ -37,6 +38,9 @@ Where Onsay is is built in, never a setting. Everything else is in one file, giv
   "name": "Office PC",
   "home": "onsay-data",
   "lingos": "onsay-data/lingos",
+  "port": 6969,
+  "listen": "here",
+  "inbound": "onsay",
   "allow": ["none", "screen.read", "screen.act"],
   "steps": 5000000,
   "ms": 600000
@@ -45,7 +49,10 @@ Where Onsay is is built in, never a setting. Everything else is in one file, giv
 
 | Setting | What it is |
 |---------|------------|
-| `token` | sent in hello. The Onsay app writes this file with its own token (`src/Core/Core.cs` in onsay-desktop). On a server, `onsay-core settings.json --sign-in` writes it: it says a web address and a code to open on any device, waits while the person signs in there and presses Connect, as the app does, and keeps the file's other settings |
+| `token` | sent in hello. The Onsay app writes this file with its own token (`src/Core/Core.cs` in onsay-desktop). On a server, `onsay-core settings.json --sign-in` writes it: it says a web address and a code to open on any device, waits while the person signs in there and presses Connect, as the app does, and keeps the file's other settings. With none, the core runs bare: no connection to Onsay, answering its port only, and `lingo(...)` and `use(...)` fail with "This lingo client isn't connected to Onsay" |
+| `port` | where it answers web requests. 6969 when left out |
+| `listen` | `here`, the default, answers this computer only (127.0.0.1). `network` answers every address it has, so other computers can reach it |
+| `inbound` | `onsay` takes web requests that come down its connection to Onsay too (*Messages*). Left out, it answers those with a 403. Onsay Desktop sets it when signed in |
 | `install` | this device's own id, which `--sign-in` makes and keeps, so signing in again gets the device back, not a new one |
 | `name` | what the person calls this device |
 | `home` | the core's own folder. Its storage is in `home/store`, and the settings of its lingos in `home/settings` |
@@ -65,6 +72,7 @@ back as it came.
 | `{type:"call", id, phrase, values}` | runs one phrase the device has by its id, `values` in the phrase's order. A native or host phrase runs as it is. A phrase written in Lingo, like `memo.recall`, runs as the program `tool phrase(v) {return memo.recall(v[0], ...)}` compiled against its lingo, with the settings' limits, so a stop, a limit or a compile error ends it as a program's would. Its id must be only `a` to `z`, `0` to `9`, `_` and `.`. One the device hasn't got is code `unknown` |
 | `{type:"run", id, code, names?, input, limits}` | compiles the code here against the lingos named, or all it has, then runs it. A compile error comes back as code `compile`, with its line. For the tests and other hosts |
 | `{type:"run", id, program, input, limits}` | runs a tree compiled elsewhere. For the tests |
+| `{type:"request", id, method, path, headers, body, base64}` | a web request that came to Onsay for this computer, answered as its port answers one (*Routes*), only when `inbound` is `onsay`, and as from the network, so only open lingos are there. `path` has its query, like `/hello?name=Ana`, `headers` are by lower case name, and `body` is text, or base64 when `base64` is true. The answer is a `response`, below, not a result |
 | `{type:"stop", id}` | stops that job between two steps, or while it waits on `lingo(...)` |
 | `{type:"error", error}` | something it said couldn't be done. The core logs it |
 
@@ -75,6 +83,7 @@ back as it came.
 | `{type:"result", id, ok:false, error:{code, message, at, line}, log, pictures?}` | it failed. `code` is `compile`, `type`, `limit`, `stopped`, `denied`, `unknown`, `phrase` or `fail`, `at` its place in the tree, and `line` its line, or null |
 | `{type:"lingo", id, ask, values, gives, context, asking}` | a program reached `lingo(...)`. `id` is a number the core counts up from 1. The program waits for the answer. `context` is what was around it, from `pl_context` in `src/platform.h`: `os`, `time` (local, with its offset), `zone`, `language`, and the `app` and `window` in front, those the device knows. A Linux server sends no `app` or `window`. `asking` is the function the running call is of, like `agent.ask` |
 | `{type:"lingo", id, address, values}` | a program reached `use(...)`, like `use("laptop.brandon/lingos/text.lingo/slug", {text: "Hello there"})` or `use("https://api.example.com/v1/items")`. `values` is a record, a list or nothing. It waits the same way |
+| `{type:"response", id, status, headers, body, base64}` | a `request` is answered: its status, its headers by lower case name, and its body as text, `base64` always false |
 | `{type:"catalog", manifests, catalog}` | the lingos folder changed |
 
 Its host adds `ping`, and on the device's stop key `halt`. Run with `--sent`, `host.c` prints every message it sends
@@ -218,6 +227,34 @@ they are kept:
 
 The catalog names a lingo's settings, never their values.
 
+## Routes
+
+The core answers web requests (HTTP/1.1) on its `port`, each lingo at its route: `/<name>`, like `/memo`, or the
+`route` its `lingo.json` names, like `"/onsay"`. A request goes to the lingo with the longest route its path starts
+with. One request is answered per connection, its body sent with a `Content-Length` of at most 4 MB, and anything else
+is answered with why: a 400 for what isn't a web request, 411 for a body in chunks, 413 for one too big.
+
+- **A lingo with `serve(request)`** gets every request to its route. `request` is `{method, path, query, headers, body,
+  json}`: `path` the part after its route, starting with `/`, `query` a record, `headers` a record by lower case name,
+  `body` text, and `json` the body read as JSON when it is JSON, else nothing. A record with a number `status` that
+  serve gives is the response, `{status, headers, body}`, its body text, or written as JSON when it isn't text.
+  Anything else is a 200: text as `text/plain`, and anything else as `application/json`.
+- **Any other lingo** is called as `POST /<name>/<function>` with its values as a JSON record by name, or a list in
+  order, or as `GET` with its values in the query, the same call `{type:"call", lingo:"<name>.lingo/<function>"}` makes,
+  and `/<name>` alone is its `main`. The answer is the function's value as JSON.
+- **`GET /`** lists the lingos the caller may reach, `{lingos: [{name, route}]}`.
+- **An error** is `{error}`, as JSON: 404 for no such lingo or function, 400 for values it doesn't take, 403 for a
+  permission not given (`allow` holds for every call), and 500 for a program that failed.
+
+**Safe by default.** A request from this computer (127.0.0.1 or ::1) reaches every lingo. A request from the network,
+or down the connection from Onsay, reaches only a lingo whose `lingo.json` says `"open": true`, and any other answers
+404, exactly as if it weren't there. So does one from a page in a browser on this computer that another site sent: a
+request counts as from this computer only when its `Host` names this computer and its `Origin` and `Sec-Fetch-Site`
+say no other site sent it.
+
+**One at a time.** The engine runs one program at a time, so a request waits its turn while another program runs,
+and so does a call from Onsay. Each request is read on its own thread (`src/host.c`), so a stop still lands at once.
+
 ## Files
 
 | File | Job |
@@ -229,12 +266,12 @@ The catalog names a lingo's settings, never their values.
 | `src/compile.c` | the compiler: lex, parse, manifests, a Lingo lingo's listing made from its code, `lingo(...)` as `lingo.run`, `use(...)` as `lingo.use` and `setting(...)` as `lingo.setting`, link, and loading a folder of lingos |
 | `src/phrase.c` | the phrase table, and the listing made from it |
 | `src/std.c` | the core lingo's `std` group: reaching inside values and converting them |
-| `src/core.h`, `src/core.c` | the engine: settings, hello and the catalog, stops, jobs, a call by a lingo's file, lingos and their settings, and the floor phrases `compute`, `store`, `http` and `settings` |
-| `src/host.c` | the core as a program: the settings file, signing in with `--sign-in`, a lingo's settings with `--settings` and `--set`, the connection, heartbeat, reconnecting, and the engine on three threads |
+| `src/core.h`, `src/core.c` | the engine: settings, hello and the catalog, stops, jobs, a call by a lingo's file, web requests answered at their routes, lingos and their settings, and the floor phrases `compute`, `store`, `http` and `settings` |
+| `src/host.c` | the core as a program: the settings file, signing in with `--sign-in`, a lingo's settings with `--settings` and `--set`, the connection, heartbeat, reconnecting, the port and reading each web request, and the engine on its own thread, every job in turn |
 | `web/compiler.js` | the compiler on its own, run from JavaScript against `bin/lingo.wasm`, for the tests (`test/compiler.mjs`) |
 | `src/platform.h` | everything the core needs from a device. Porting the core is writing this for the new device |
-| `src/platform_win.c` | that, for Windows: WinHTTP WebSockets and `pl_http` (its own timer ends a request on time, since WinHTTP looks at its timeouts only every 4 seconds or so), threads, files |
-| `src/platform_linux.c` | that, for Linux: pthreads, POSIX files, `dlopen` for native lingos, and the web through libcurl, loaded as it starts, so it builds with nothing of Linux's and says to install libcurl when it's missing. Curl only opens the connection, TCP, TLS and any proxy, and the WebSocket on it is written here, since many builds of curl have none |
+| `src/platform_win.c` | that, for Windows: WinHTTP WebSockets and `pl_http` (its own timer ends a request on time, since WinHTTP looks at its timeouts only every 4 seconds or so), threads, files, and the port through Winsock |
+| `src/platform_linux.c` | that, for Linux: pthreads, POSIX files, the port on plain sockets, `dlopen` for native lingos, and the web through libcurl, loaded as it starts, so it builds with nothing of Linux's and says to install libcurl when it's missing. Curl only opens the connection, TCP, TLS and any proxy, and the WebSocket on it is written here, since many builds of curl have none |
 | `install.sh` | puts the core on a Linux server: the program for its processor, its folder (`~/.onsay`, or `/var/lib/onsay` as root) with `core.json` in it, `--sign-in`, and a systemd service that keeps it running. Where it downloads the core from is `ONSAY_DOWNLOAD`, at its top |
 | `../lingos/windows/` | the Windows lingo, a native lingo of its own: windows, controls through UI Automation, the screen and OCR, mouse, keyboard, files, clipboard, commands, notifications, `input` (the mouse and keyboard the way a person uses them) and `look` (Onsay's eyes) |
 | `../lingos/native/` | the native lingo: one phrase, `native.call`, that calls a function in the operating system or a shared library by its name and layout, using a small vendored part of libffi (`libffi/`, MIT). Windows only |
@@ -278,5 +315,7 @@ its address (from a program and from a lingo's own code), a lingo calling one in
 dotted call to one that isn't here refused, `http.send` against the stand-in's own pages (a timeout on time too), `request`
 tried again after a 503, compiling on the device through the Lingo lingo `memo.lingo` in `test/lingos`, the Windows
 lingo for real, the catalog (memo ready with its listing made from its code and never its code, broken set aside with its
-reason, the test lingo `input.lingo` set aside since that is a group of windows, notalingo ignored), ping, and coming
-back after a dropped connection. It never clicks or types: the test core isn't given `screen.act`.
+reason, the test lingo `input.lingo` set aside since that is a group of windows, notalingo ignored), web requests to its
+port, 6970 in `test/onsay.json` (the test lingo `page` and its `serve` at `/hello`, open, and `memo`'s functions called
+by their routes, the open rule, a page elsewhere in a browser, and what isn't a web request) and down its connection,
+a second core with no token answering its own port, ping, and coming back after a dropped connection. It never clicks or types: the test core isn't given `screen.act`.

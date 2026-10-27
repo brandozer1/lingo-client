@@ -12,8 +12,10 @@
 //                                             changes one wherever that lingo keeps it, as settings.set does. value is
 //                                             JSON, or text as it is when it isn't JSON
 //
-// Three threads: main (connects, then runs queued jobs one at a time, or looks at the lingos folder), receiver (hands
-// every message to the core, answers pings, queues jobs) and heartbeat (pings every BEAT seconds, drops a silent link).
+// Threads: main (runs queued jobs one at a time, in order, or looks at the lingos folder), connection (connects, again
+// after a drop, hands every message to the core, answers pings, queues jobs), heartbeat (pings every BEAT seconds, drops
+// a silent link), listener (takes each connection to the port), and one for each web request (reads it, queues it as a
+// job, and writes its answer). With no token there is no connection or heartbeat: it runs bare, answering its port only.
 // A job that reaches lingo(...) or use(...) asks Onsay and waits on main for the answer, running the calls Onsay sends
 // meanwhile (ask_).
 #include "core.h"
@@ -32,15 +34,22 @@
 #endif
 #define BEAT 20       // seconds between pings
 #define SILENT 60     // seconds without a word before the link is taken as dead
+#define HEAD (64 << 10)   // the most a web request's first line and headers may be
+#define ROOM (4 << 20)    // and its body
 
-typedef struct message { struct message *next; char *text; size_t n; int closed; } message;   // closed: the link closed
+typedef struct { buf response; int done; } answer;   // a web request's answer, which its thread waits for
+// One job for main: what Onsay said, the link opening or closing, or a web request from the port, with where it came
+// from and where its answer goes.
+typedef struct message { struct message *next; char *text; size_t n; int kind, from; answer *to; } message;
+enum { SAID, OPENED, CLOSED };
 
 static pl_gate *gate;
 static message *first, *last;
 static pl_link *open_link;        // the open link, or NULL
 static double heard;              // when the server last said anything
 static int ponged;                // whether this server answers pings, so silence means something
-static long asks;                 // lingo(...) requests sent, for their ids
+static int signed_in;             // whether Onsay took this link's hello
+static long asks, requests;       // lingo(...) requests sent and web requests taken, for their ids
 
 static int showing;   // --sent: every message sent to Onsay printed on stdout too, {"sent":...} a line, for the app's log
 
@@ -74,13 +83,13 @@ static int ask_(const char *values, size_t n, volatile int *stop, buf *answer) {
     if (m) { first = m->next; if (!first) last = NULL; m->next = NULL; }
     pl_leave(gate);
     if (!m) break;
-    val *said = m->closed ? NULL : json_parse(a, m->text, m->n, &problem);
+    val *said = m->text && !m->to ? json_parse(a, m->text, m->n, &problem) : NULL;
     const char *type = said && !problem && said->k == V_REC && rec_get(said, "type") && rec_get(said, "type")->k == V_TEXT ? rec_get(said, "type")->t.s : "";
     val *of = said && *type ? rec_get(said, "id") : NULL;
     if (!strcmp(type, "lingo") && of && of->k == V_NUM && of->n == (double)id) { buf_add(answer, m->text, m->n); got = 1; }
     else if (!strcmp(type, "call")) core_do(m->text, m->n);
     else {
-      going = !m->closed;
+      going = m->kind != CLOSED;
       if (held_last) held_last->next = m; else held = m;
       held_last = m;
       continue;
@@ -95,9 +104,9 @@ static int ask_(const char *values, size_t n, volatile int *stop, buf *answer) {
   return got;
 }
 
-static void queue(char *text, size_t n, int closed) {
+static void queue(char *text, size_t n, int kind, int from, answer *to) {
   message *m = malloc(sizeof *m);
-  *m = (message){ NULL, text, n, closed };
+  *m = (message){ NULL, text, n, kind, from, to };
   pl_enter(gate);
   if (last) last->next = m; else first = m;
   last = m;
@@ -105,23 +114,48 @@ static void queue(char *text, size_t n, int closed) {
   pl_leave(gate);
 }
 
-// On its own thread, so stops and pings land while a job runs.
-static void receiver(void *arg) {
-  pl_link *l = arg;
+// Connects to Onsay, and again after a drop, waiting longer each time it fails. Every message heard goes to the core
+// here, on this thread, so stops and pings land while a job runs.
+static void connection(void *arg) {
+  (void)arg;
+  double wait = 1;
   for (;;) {
-    buf in = { 0 };
-    if (!pl_receive(l, &in)) { buf_free(&in); break; }
-    int kind = core_heard(in.s, in.n);
-    pl_enter(gate);
-    heard = pl_now();
-    if (kind == CORE_PONG) ponged = 1;
-    if (kind == CORE_DONE) pl_wake(gate);   // a stop, which may end a job's wait for lingo(...)
-    pl_leave(gate);
-    if (kind == CORE_PING) pl_send(l, "{\"type\":\"pong\"}", 15);
-    if (kind == CORE_JOB) queue(in.s, in.n, 0);   // the queue owns the text now
-    else buf_free(&in);
+    buf error = { 0 };
+    core_say("Connecting to %s", SERVER);
+    pl_link *l = pl_connect(SERVER, &error);
+    if (!l) core_say("%s. Trying again in %.0f seconds", error.s ? error.s : "It couldn't connect", wait);
+    buf_free(&error);
+    if (l) {
+      pl_enter(gate);
+      open_link = l;
+      heard = pl_now();
+      ponged = signed_in = 0;
+      pl_leave(gate);
+      queue(NULL, 0, OPENED, 0, NULL);
+      for (;;) {
+        buf in = { 0 };
+        if (!pl_receive(l, &in)) { buf_free(&in); break; }
+        int kind = core_heard(in.s, in.n);
+        pl_enter(gate);
+        heard = pl_now();
+        if (kind == CORE_PONG) ponged = 1;
+        if (kind == CORE_DONE) pl_wake(gate);   // a stop, which may end a job's wait for lingo(...)
+        pl_leave(gate);
+        if (kind == CORE_PING) pl_send(l, "{\"type\":\"pong\"}", 15);
+        if (kind == CORE_JOB) queue(in.s, in.n, SAID, 0, NULL);   // the queue owns the text now
+        else buf_free(&in);
+      }
+      queue(NULL, 0, CLOSED, 0, NULL);
+      pl_enter(gate);
+      open_link = NULL;
+      if (signed_in) wait = 1;   // so the next drop starts its waiting over
+      pl_leave(gate);
+      pl_free(l);
+      core_say("The connection closed. Trying again in %.0f seconds", wait);
+    }
+    pl_sleep(wait);
+    wait = wait * 2 > 30 ? 30 : wait * 2;
   }
-  queue(NULL, 0, 1);
 }
 
 static void heartbeat(void *arg) {
@@ -137,46 +171,140 @@ static void heartbeat(void *arg) {
   }
 }
 
-static void serve(void) {
-  double wait = 1;
+// main: every job in turn, hello when a link opens, and a look at the lingos folder while there is nothing to do.
+static void jobs(void) {
   for (;;) {
-    buf error = { 0 };
-    core_say("Connecting to %s", SERVER);
-    pl_link *l = pl_connect(SERVER, &error);
-    if (!l) {
-      core_say("%s. Trying again in %.0f seconds", error.s ? error.s : "It couldn't connect", wait);
-      buf_free(&error);
-      pl_sleep(wait);
-      wait = wait * 2 > 30 ? 30 : wait * 2;
-      continue;
-    }
     pl_enter(gate);
-    open_link = l;
-    heard = pl_now();
-    ponged = 0;
+    if (!first) pl_wait(gate, CORE_LOOK);
+    message *m = first;
+    if (m) { first = m->next; if (!first) last = NULL; }
     pl_leave(gate);
-    core_open();
-    pl_thread(receiver, l);
-
-    for (;;) {
+    if (!m) { core_look(); continue; }
+    if (m->kind == OPENED) core_open();
+    else if (m->to) {
+      core_serve(m->text, m->n, m->from, &m->to->response);
       pl_enter(gate);
-      if (!first) pl_wait(gate, CORE_LOOK);
-      message *m = first;
-      if (m) { first = m->next; if (!first) last = NULL; }
+      m->to->done = 1;
+      pl_wake(gate);
       pl_leave(gate);
-      if (!m) { core_look(); continue; }
-      if (m->closed) { free(m); break; }
-      if (core_do(m->text, m->n)) wait = 1;   // signed in, so the next drop starts its waiting over
-      free(m->text);
-      free(m);
+    } else if (m->kind == SAID && core_do(m->text, m->n)) {
+      pl_enter(gate);
+      signed_in = 1;
+      pl_leave(gate);
     }
+    free(m->text);
+    free(m);
+  }
+}
+
+// An answer, {status, headers, body} as core_serve gives one, written to a web request's connection.
+static void respond(pl_socket *c, val *r) {
+  val *h = rec_get(r, "headers"), *status = rec_get(r, "status");
+  buf out = { 0 }, body = { 0 };
+  buf_text(&body, rec_get(r, "body") ? rec_get(r, "body") : NOTHING);
+  buf_fmt(&out, "HTTP/1.1 %d \r\n", status && status->k == V_NUM ? (int)status->n : 500);
+  for (size_t i = 0; h && h->k == V_REC && i < h->r.n; i++) {
+    const char *name = h->r.key[i], *value = h->r.v[i]->k == V_TEXT ? h->r.v[i]->t.s : "";
+    // Its length and closing are written below, and a line break would start a header of its own.
+    if (!*name || strpbrk(name, "\r\n: ") || strpbrk(value, "\r\n") || !strcmp(name, "content-length") || !strcmp(name, "connection") ||
+        !strcmp(name, "transfer-encoding")) continue;
+    buf_fmt(&out, "%s: %s\r\n", name, value);
+  }
+  buf_fmt(&out, "Content-Length: %zu\r\nConnection: close\r\n\r\n", body.n);
+  buf_add(&out, body.s ? body.s : "", body.n);
+  pl_give(c, out.s, out.n);
+  buf_free(&out), buf_free(&body);
+}
+
+typedef struct { pl_socket *c; int here; } visit;
+
+/* One web request to the port, on its own thread: its first line, headers and a body of Content-Length, read whole,
+   answered on main in its turn (core_serve), and closed. One that isn't a web request is answered here with why, and
+   one that went quiet before its headers ended is closed. */
+static void visitor(void *arg) {
+  visit v = *(visit *)arg;
+  free(arg);
+  arena *a = arena_new();
+  buf in = { 0 }, msg = { 0 };
+  char chunk[16384];
+  const char *end = NULL, *bad = NULL;
+  int status = 400, got = 1;
+  size_t method = 0, path = 0, size = 0, from = 0;
+  val *headers = v_rec(a), *r = NULL;
+  while (got && !(end = in.s ? strstr(in.s, "\r\n\r\n") : NULL) && in.n < HEAD) if ((got = pl_take(v.c, chunk, sizeof chunk))) buf_add(&in, chunk, (size_t)got);
+  if (!end && in.n >= HEAD) status = 431, bad = "Its headers are more than 64 KB";
+  else if (end) {
+    method = strspn(in.s, "ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+    path = method && method < 16 && in.s[method] == ' ' && in.s[method + 1] == '/' ? strcspn(in.s + method + 1, " \r\n") : 0;
+    const char *version = in.s + method + 1 + path;
+    if (!path || strncmp(version, " HTTP/1.", 8) || (version[8] != '0' && version[8] != '1') || strncmp(version + 9, "\r\n", 2) || !utf8_ok(in.s, (size_t)(end - in.s)))
+      bad = "That isn't a web request. Its first line is like GET /memo HTTP/1.1";
+    for (const char *s = strstr(in.s, "\r\n") + 2; !bad && s < end; s = strstr(s, "\r\n") + 2) {
+      const char *eol = strstr(s, "\r\n"), *colon = memchr(s, ':', (size_t)(eol - s)), *value = colon, *stop = eol;
+      if (!colon || colon == s || memchr(s, ' ', (size_t)(colon - s))) { bad = "A header isn't a name, a colon and its value"; break; }
+      while (++value < eol && (*value == ' ' || *value == '\t')) {}
+      while (stop > value && (stop[-1] == ' ' || stop[-1] == '\t')) stop--;
+      // A name said twice has both values, joined by ", ".
+      buf name = { 0 }, both = { 0 };
+      for (const char *x = s; x < colon; x++) buf_chr(&name, (char)(*x >= 'A' && *x <= 'Z' ? *x + 32 : *x));
+      val *had = rec_get(headers, name.s);
+      if (had) { buf_add(&both, had->t.s, had->t.len); buf_str(&both, ", "); }
+      buf_add(&both, value, (size_t)(stop - value));
+      rec_set(a, headers, name.s, v_text(a, both.s ? both.s : "", both.n));
+      buf_free(&name), buf_free(&both);
+    }
+    val *length = rec_get(headers, "content-length"), *expect = rec_get(headers, "expect");
+    const char *n = length ? length->t.s : "0";
+    if (!bad && rec_get(headers, "transfer-encoding")) status = 411, bad = "Send its body with a Content-Length, not in chunks";
+    else if (!bad && (!*n || strspn(n, "0123456789") != strlen(n))) bad = "Its Content-Length isn't a number";
+    else if (!bad && (strlen(n) > 9 || (size = strtoul(n, NULL, 10)) > ROOM)) status = 413, bad = "Its body is more than 4 MB";
+    from = (size_t)(end - in.s) + 4;
+    if (!bad && expect && !strcmp(expect->t.s, "100-continue") && in.n - from < size) pl_give(v.c, "HTTP/1.1 100 Continue\r\n\r\n", 25);
+    while (!bad && in.n - from < size && (got = pl_take(v.c, chunk, sizeof chunk))) buf_add(&in, chunk, (size_t)got);
+    if (!bad && in.n - from < size) bad = "Its body was shorter than its Content-Length";
+    else if (!bad && !utf8_ok(in.s + from, size)) bad = "Its body isn't text, and lingos take text, like JSON";
+  }
+
+  if (bad) {
+    buf error = { 0 };
+    buf_str(&error, "{\"error\":");
+    buf_json_str(&error, bad, strlen(bad));
+    buf_chr(&error, '}');
+    buf_fmt(&msg, "{\"status\":%d,\"headers\":{\"content-type\":\"application/json\"},\"body\":", status);
+    buf_json_str(&msg, error.s, error.n);
+    buf_chr(&msg, '}');
+    r = json_parse(a, msg.s, msg.n, NULL);
+    buf_free(&msg), buf_free(&error);
+  } else if (end) {
+    answer to = { { 0 }, 0 };
     pl_enter(gate);
-    open_link = NULL;
+    buf_fmt(&msg, "{\"type\":\"request\",\"id\":%ld,\"method\":\"%.*s\",\"path\":", ++requests, (int)method, in.s);
     pl_leave(gate);
-    pl_free(l);
-    core_say("The connection closed. Trying again in %.0f seconds", wait);
-    pl_sleep(wait);
-    wait = wait * 2 > 30 ? 30 : wait * 2;
+    buf_json_str(&msg, in.s + method + 1, path);
+    buf_str(&msg, ",\"headers\":");
+    buf_json(&msg, headers);
+    buf_str(&msg, ",\"body\":");
+    buf_json_str(&msg, in.s + from, size);
+    buf_str(&msg, ",\"base64\":false}");
+    queue(msg.s, msg.n, SAID, v.here ? CORE_HERE : CORE_NETWORK, &to);   // the queue owns the text now
+    pl_enter(gate);
+    while (!to.done) pl_wait(gate, 1);
+    pl_leave(gate);
+    r = json_parse(a, to.response.s ? to.response.s : "", to.response.n, NULL);
+    buf_free(&to.response);
+  }
+  if (r) respond(v.c, r);
+  pl_hang_up(v.c);
+  buf_free(&in);
+  arena_free(a);
+}
+
+// Takes each connection to the port, and reads it on a thread of its own.
+static void listener(void *arg) {
+  for (;;) {
+    visit *v = malloc(sizeof *v);
+    if ((v->c = pl_accept(arg, &v->here))) pl_thread(visitor, v);
+    else { free(v); pl_sleep(0.1); }
   }
 }
 
@@ -268,6 +396,7 @@ int main(int argc, char **argv) {
   buf settings = { 0 };
   if (!pl_read(path, &settings)) { core_say("Can't read the settings file %s", path); return 1; }
   int began = core_begin(settings.s, settings.n, send_, ask_);
+  val *s = began ? json_parse(arena_new(), settings.s, settings.n, NULL) : NULL, *port = s ? rec_get(s, "port") : NULL;
   buf_free(&settings);
   if (!began) return 1;
   if (argc > 2 && !strcmp(argv[2], "--manifest")) {
@@ -293,7 +422,15 @@ int main(int argc, char **argv) {
     if (!setting) { buf_json(&shown, rec_get(done, "value")); buf_chr(&shown, '\n'); fwrite(shown.s, 1, shown.n, stdout); }
     return 0;
   }
-  pl_thread(heartbeat, NULL);
-  serve();
+  // The port, here (this computer only) unless listen says network, and the connection to Onsay when there is a token.
+  buf error = { 0 };
+  int number = port && port->k == V_NUM ? (int)port->n : 6969;
+  pl_socket *listening = pl_listen(number, !strcmp(field(s, "listen"), "network"), &error);
+  if (listening) { core_say("Answering web requests on port %d", number); pl_thread(listener, listening); }
+  else core_say("%s, so it answers no web requests", error.s);
+  if (*field(s, "token")) { pl_thread(connection, NULL); pl_thread(heartbeat, NULL); }
+  else if (!listening) return 1;
+  else core_say("The settings have no token, so it runs on its own, with no connection to Onsay");
+  jobs();
   return 0;
 }

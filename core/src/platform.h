@@ -5,8 +5,9 @@
 // 3. Links     a WebSocket to Onsay
 // 4. Files     read, write, delete and list, for the core's own storage
 // 5. Device    what is around it, a native lingo's library, the host's phrases, and web requests
-// The engine (core.c) only uses time, the gate, files and the device. Threads and links are for host.c alone. Native
-// lingos may use all of it.
+// 6. Port      web requests coming in: a port to listen on, and each connection to it
+// The engine (core.c) only uses time, the gate, files and the device. Threads, links and the port are for host.c alone.
+// Native lingos may use all of it.
 #ifndef PLATFORM_H
 #define PLATFORM_H
 
@@ -72,6 +73,16 @@ int pl_call(const char *id, const char *values, size_t n, buf *out);
 // {status, headers, text}} or {"error"} in out. Redirects followed, and an answer over 4 MB, or not text, is an error.
 // A device makes the request itself (platform_win.c, platform_linux.c).
 int pl_http(const char *values, size_t n, buf *out);
+
+////////// 6. PORT //////////
+
+// A port this computer listens on, and each connection to it, both a pl_socket. Each connection is read on its own thread.
+typedef struct pl_socket pl_socket;
+pl_socket *pl_listen(int port, int network, buf *error);   // network 0: this computer only (127.0.0.1), 1: every address
+pl_socket *pl_accept(pl_socket *port, int *here);          // the next connection, here 1 when it is from this computer
+int pl_take(pl_socket *c, char *to, size_t n);             // what came, up to n bytes. 0 once it closed or was quiet 10 seconds
+int pl_give(pl_socket *c, const char *data, size_t n);     // all of it, or 0
+void pl_hang_up(pl_socket *c);                              // closes it and frees it
 
 #ifdef _WIN32
 // UTF-8 to and from Windows' UTF-16, for Windows lingos. win_wide's text is freed with free.

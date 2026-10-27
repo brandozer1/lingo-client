@@ -5,7 +5,10 @@
 // 3. Links     connect, send, receive, close and free
 // 4. Files and device, and loading a native lingo
 // 5. Web       http.send, one request through WinHTTP
+// 6. Port      web requests coming in, through Winsock
 #define WIN32_LEAN_AND_MEAN
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <windows.h>
 #include <winhttp.h>
 #include <stdio.h>
@@ -423,3 +426,63 @@ int pl_http(const char *values, size_t n, buf *out) {
   return 1;
 }
 
+
+////////// 6. PORT //////////
+
+struct pl_socket { SOCKET s; };
+
+pl_socket *pl_listen(int port, int network, buf *error) {
+  WSADATA w;
+  struct sockaddr_in here = { 0 };
+  struct sockaddr_in6 every = { 0 };   // its address all zeros: every one, IPv4 too once V6ONLY is off
+  DWORD no = 0, yes = 1;
+  here.sin_family = AF_INET, here.sin_port = htons((u_short)port), here.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  every.sin6_family = AF_INET6, every.sin6_port = htons((u_short)port);
+  SOCKET s = WSAStartup(MAKEWORD(2, 2), &w) ? INVALID_SOCKET : socket(network ? AF_INET6 : AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  if (s != INVALID_SOCKET) {
+    setsockopt(s, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (char *)&yes, sizeof yes);   // so no other program can listen on it too
+    if (network) setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY, (char *)&no, sizeof no);
+  }
+  if (s == INVALID_SOCKET || bind(s, network ? (struct sockaddr *)&every : (struct sockaddr *)&here, network ? sizeof every : sizeof here) || listen(s, SOMAXCONN)) {
+    int code = WSAGetLastError();
+    buf_fmt(error, "Port %d couldn't be opened: %s (%d)", port, code == WSAEADDRINUSE || code == WSAEACCES ? "another program is using it" : "Windows error", code);
+    if (s != INVALID_SOCKET) closesocket(s);
+    return NULL;
+  }
+  pl_socket *p = malloc(sizeof *p);
+  p->s = s;
+  return p;
+}
+
+pl_socket *pl_accept(pl_socket *port, int *here) {
+  struct sockaddr_storage from;
+  int n = sizeof from;
+  SOCKET c = accept(port->s, (struct sockaddr *)&from, &n);
+  if (c == INVALID_SOCKET) return NULL;
+  DWORD ms = 10000;
+  setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, (char *)&ms, sizeof ms);
+  setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, (char *)&ms, sizeof ms);
+  // 127.x.x.x, ::1, or 127.x.x.x as IPv6 writes it, ::ffff:127.x.x.x.
+  static const unsigned char loop[16] = { [15] = 1 }, mapped[12] = { [10] = 255, [11] = 255 };
+  const unsigned char *v4 = (unsigned char *)&((struct sockaddr_in *)&from)->sin_addr, *v6 = ((struct sockaddr_in6 *)&from)->sin6_addr.s6_addr;
+  *here = from.ss_family == AF_INET ? v4[0] == 127 : !memcmp(v6, loop, 16) || (!memcmp(v6, mapped, 12) && v6[12] == 127);
+  pl_socket *s = malloc(sizeof *s);
+  s->s = c;
+  return s;
+}
+
+int pl_take(pl_socket *c, char *to, size_t n) {
+  int got = recv(c->s, to, (int)n, 0);
+  return got > 0 ? got : 0;
+}
+
+int pl_give(pl_socket *c, const char *data, size_t n) {
+  for (int sent; n; data += sent, n -= (size_t)sent) if ((sent = send(c->s, data, (int)n, 0)) <= 0) return 0;
+  return 1;
+}
+
+void pl_hang_up(pl_socket *c) {
+  shutdown(c->s, SD_SEND);
+  closesocket(c->s);
+  free(c);
+}

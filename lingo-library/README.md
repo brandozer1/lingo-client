@@ -78,6 +78,8 @@ Write the `.lingo` file: its first comment lines say what it is, then an empty `
 functions, and a blank line. Each `fn` has its comment right above it, starting with its number. Its settings are its
 `setting("...")` calls. When it has any, make it a folder of its name with a `lingo.json` beside the file, listing each
 with its `title` and `about`, and as it needs `default`, `required` and `secret`, like `openrouter/lingo.json`, so the
-Onsay app can show a form of them. A lingo of the library is called by its dotted name. The core reads the file and makes its
+Onsay app can show a form of them. Its `lingo.json` may also name its `route`, where it answers web requests, and say
+`"open": true` to answer other computers too, and a `serve(request)` function answers every request to its route
+(section 11 of `../docs/lingo.md`). A lingo of the library is called by its dotted name. The core reads the file and makes its
 listing from it, and sets it aside with the reason when it doesn't load. A text in Lingo can't hold `{` or `}` unescaped,
 since `{...}` puts a value in it: write `\{` and `\}`. Nor can it write a carriage return: `std.from_bytes([13])` is one.

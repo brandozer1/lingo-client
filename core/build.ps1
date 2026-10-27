@@ -20,8 +20,8 @@ $core = src "value", "run", "phrase", "std", "compile", "core", "host", "platfor
 $win = "-target", "x86_64-windows-gnu"
 
 function build($what) { & $zig cc @flags @what | Out-Host; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }
-build ($win + $core + "-DLINGO_CORE", "-lwinhttp", "-luser32", "-o", "$here/bin/onsay-core.exe", "-Wl,--out-implib,$here/bin/onsay-core.lib")
-build ($win + $core + "-DLINGO_CORE", "-DTEST", "-lwinhttp", "-luser32", "-o", "$here/bin/test/onsay-core.exe")
+build ($win + $core + "-DLINGO_CORE", "-lwinhttp", "-lws2_32", "-luser32", "-o", "$here/bin/onsay-core.exe", "-Wl,--out-implib,$here/bin/onsay-core.lib")
+build ($win + $core + "-DLINGO_CORE", "-DTEST", "-lwinhttp", "-lws2_32", "-luser32", "-o", "$here/bin/test/onsay-core.exe")
 # Linux. -rdynamic shares the core's words with a native lingo's library, as onsay-core.lib does on Windows.
 $linux = src "value", "run", "phrase", "std", "compile", "core", "host", "platform_linux"
 foreach ($arch in @{ x64 = "x86_64"; arm64 = "aarch64" }.GetEnumerator()) {

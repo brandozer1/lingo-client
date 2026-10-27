@@ -5,13 +5,14 @@
 // input and look are groups of windows, so their tests need windows.
 //
 // 1. WebSocket   just enough of it, with no packages
-// 2. Tests       programs and what they must give
+// 2. Tests       programs and what they must give, and web requests to the core's port and down its connection
 // 3. Session     hello, the tests in order, ping, then a drop the core must come back from
 
 import http from 'node:http'
+import net from 'node:net'
 import crypto from 'node:crypto'
 import { rmSync, cpSync, readdirSync, existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { lingo as compiler } from '../web/compiler.js'
 import { run } from './reference/run.mjs'
@@ -386,6 +387,92 @@ const TESTS = [
   },
 ]
 
+// Web requests, to the test core's own port (test/onsay.json) as any program on this computer sends them, and down its
+// connection as Onsay sends them. Each is [name, ask => whether it passed], ask sending a message to the core.
+const WEB = 6970, BARE = 6971   // the test core's port, and the bare core's, below
+const web = (path, { method = 'GET', body, headers = {}, port = WEB } = {}) => new Promise((done) => {
+  const q = http.request({ host: '127.0.0.1', port, path, method, headers, agent: false }, (s) => {
+    let text = ''
+    s.setEncoding('utf8')
+    s.on('data', (d) => { text += d })
+    s.on('end', () => { let json; try { json = JSON.parse(text) } catch {} done({ status: s.statusCode, headers: s.headers, text, json }) })
+  })
+  q.on('error', (e) => done({ status: 0, text: e.message }))
+  q.end(body === undefined ? undefined : typeof body === 'string' ? body : JSON.stringify(body))
+})
+// Bytes written straight to the port, for what no program would send, and the first line of the answer.
+const raw = (text) => new Promise((done) => {
+  let got = ''
+  const s = net.connect(WEB, '127.0.0.1', () => s.end(text))
+  s.on('data', (d) => { got += d })
+  s.on('close', () => done(got.split('\r\n')[0]))
+  s.on('error', () => done(''))
+})
+const request = (ask, path, more = {}) => ask({ type: 'request', id: `w${path}`, method: 'GET', path, headers: { host: 'api.onsay.dev' }, body: '', base64: false, ...more })
+const CORE = fileURLToPath(new URL('..', import.meta.url)), EXE = fileURLToPath(new URL('../bin/test/onsay-core.exe', import.meta.url))
+const WEB_TESTS = [
+  ['web: GET / lists every lingo for this computer, each at its route', async () => {
+    const r = await web('/')
+    return r.status === 200 && r.json.lingos.some((l) => l.name === 'page' && l.route === '/hello') && r.json.lingos.some((l) => l.name === 'memo' && l.route === '/memo')
+  }],
+  ['web: serve answers text as text', async () => {
+    const r = await web('/hello/text?name=Ana+B%C3%A9')
+    return r.status === 200 && r.text === 'hi Ana Bé' && r.headers['content-type'].startsWith('text/plain')
+  }],
+  ['web: serve gets the method, headers and the body read as JSON, and answers JSON', async () => {
+    const r = await web('/hello/json', { method: 'POST', body: { a: 1 }, headers: { 'Content-Type': 'application/json' } })
+    return r.status === 200 && r.headers['content-type'] === 'application/json' && same(r.json, { got: { a: 1 }, method: 'POST', type: 'application/json' })
+  }],
+  ['web: serve gives its own status, headers and body', async () => {
+    const r = await web('/hello/status')
+    return r.status === 201 && r.headers['x-made'] === 'page' && r.text === 'made'
+  }],
+  ['web: serve failing is a 500 that says why', async () => { const r = await web('/hello/fail'); return r.status === 500 && /it broke/.test(r.json?.error) }],
+  ['web: POST /name/function, its values by name, answered as JSON', async () => {
+    const r = await web('/memo/recall', { method: 'POST', body: { k: 'milk' } })
+    return r.status === 200 && r.headers['content-type'] === 'application/json' && r.json === '2 litres'
+  }],
+  ['web: GET /name/function, its values in the query', async () => { const r = await web('/memo/recall?k=milk'); return r.status === 200 && r.json === '2 litres' }],
+  ['web: a value it does not take is a 400', async () => {
+    const r = await web('/memo/recall', { method: 'POST', body: { key: 'milk' } })
+    return r.status === 400 && /doesn't take a value called key/.test(r.json?.error)
+  }],
+  ['web: a function it has not, and a lingo not here, are 404', async () => {
+    const [a, b] = [await web('/memo/nope'), await web('/nothing/here')]
+    return a.status === 404 && /memo has no function memo.nope/.test(a.json?.error) && b.status === 404
+  }],
+  ['web: a page elsewhere in a browser reaches only open lingos', async () => {
+    const [a, b] = [await web('/memo/recall?k=milk', { headers: { origin: 'http://elsewhere.example' } }), await web('/hello/text', { headers: { origin: 'http://elsewhere.example' } })]
+    return a.status === 404 && b.status === 200
+  }],
+  ['web: what is not a web request is a 400', async () => (await raw('HELLO THERE\r\n\r\n')).startsWith('HTTP/1.1 400')],
+  ['web: a body in chunks is a 411, and one over 4 MB a 413', async () =>
+    (await raw('POST /memo/recall HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n')).startsWith('HTTP/1.1 411') &&
+    (await raw('POST /memo/recall HTTP/1.1\r\nContent-Length: 5000000\r\n\r\n')).startsWith('HTTP/1.1 413')],
+  ['web: a permission not given is a 403', async () => { const r = await web('/windows/keyboard/type', { method: 'POST', body: ['x'] }); return r.status === 403 }, 'windows'],
+  ['onsay: a request down the connection is answered as the port answers it', async (ask) => {
+    const r = await request(ask, '/hello/text?name=Bo')
+    return r.status === 200 && r.body === 'hi Bo' && r.base64 === false && r.headers['content-type'].startsWith('text/plain')
+  }],
+  ['onsay: a body in base64', async (ask) => {
+    const r = await request(ask, '/hello/json', { method: 'POST', body: Buffer.from('{"b":2}').toString('base64'), base64: true })
+    return r.status === 200 && same(JSON.parse(r.body).got, { b: 2 })
+  }],
+  ['onsay: a lingo not open is not there, and / lists the open ones only', async (ask) => {
+    const [a, b] = [await request(ask, '/memo/recall?k=milk'), await request(ask, '/')]
+    return a.status === 404 && same(JSON.parse(b.body).lingos.map((l) => l.name), ['page'])
+  }],
+  ['bare: with no token it runs on its own, answers its port, and lingo(...) says it is not connected', async () => {
+    writeFileSync(new URL('./data/bare.json', import.meta.url), JSON.stringify({ name: 'bare core', home: 'test/data', lingos: 'test/lingos', port: BARE, allow: ['none'] }))
+    const core = spawn(EXE, ['test/data/bare.json'], { cwd: CORE, stdio: 'ignore' })
+    let r = { status: 0 }
+    for (let i = 0; i < 50 && !r.status; i++) { await new Promise((d) => setTimeout(d, 200)); r = await web('/', { port: BARE }) }
+    const asked = await web('/asker/kept', { method: 'POST', body: { k: 'eggs' }, port: BARE })
+    core.kill()
+    return r.status === 200 && r.json.lingos.some((l) => l.name === 'memo') && asked.status === 500 && /isn't connected to Onsay/.test(asked.json?.error)
+  }],
+]
+
 ////////// 3. SESSION //////////
 
 let lingo = null   // run.mjs's view of std, made from the core's own manifest
@@ -453,10 +540,15 @@ const session = (link) => {
     report('catalog: a Lingo lingo can\'t hide a group of windows', entry('input')?.status === 'broken' &&
       (has('windows') ? /already a part of windows/ : /no lingo or group called pointer/).test(entry('input').error))
     report('catalog: not a lingo', !entry('notalingo'))
+    for (const [name, test, lingo] of WEB_TESTS) {
+      if (lingo && !has(lingo)) { skipped++; console.log(`  skip  ${name}: this core has no ${lingo}`); continue }
+      const started = Date.now()
+      report(name, await test(ask).catch(() => false), '', Date.now() - started)
+    }
     // A ping from the server gets a pong.
     const ponged = await new Promise((done) => { link.onPong = () => done(true); link.send({ type: 'ping' }); setTimeout(() => done(false), 2000) })
     report('ping', ponged)
-    report('hello carries the core version', version === '0.3.1')
+    report('hello carries the core version', version === '0.4.0')
     // Then the connection drops, and the core must come back by itself.
     console.log('  dropping the connection...')
     link.drop()
@@ -477,7 +569,7 @@ const session = (link) => {
       link.send({ type: 'ready', device: 'test-device' })
       if (hellos === 1) go()
       else { report('reconnects by itself', true); console.log(`\n${passed} passed, ${failed} failed${skipped ? `, ${skipped} skipped` : ''}`); process.exit(failed ? 1 : 0) }
-    } else if (m.type === 'result') waiting.get(m.id)?.(m)
+    } else if (m.type === 'result' || m.type === 'response') waiting.get(m.id)?.(m)
     else if (m.type === 'lingo' && 'id' in m) answer(m, link, (phrase, values) => ask({ type: 'call', id: `l${++next}`, phrase, values }))
     else if (m.type === 'catalog') catalog = m.catalog
     else if (m.type === 'pong') link.onPong?.()

@@ -6,15 +6,18 @@
 // 4. core_do(text, n)                 -> runs a CORE_JOB on the host's job thread, one at a time, in order. A call may
 //                                        also run inside an ask, on the same thread
 // 5. core_look()                      -> every CORE_LOOK seconds while idle: reads the lingos folder again if it changed
+// 6. core_serve(request, n, from, out) -> a web request, {type:"request"}, answered by the lingo at its route with a
+//                                        {type:"response"} in out. A job too, on the job thread, one at a time
 //    core_manifests(out), core_say(fmt)  -> each native lingo's manifest, and a line on stderr
-// The host owns the connection: connecting, pings, the heartbeat and reconnecting (host.c).
+// The host owns the connection and the port: connecting, pings, the heartbeat, reconnecting, and reading each web
+// request (host.c).
 #ifndef CORE_H
 #define CORE_H
 
 #include "lingo.h"
 
 #define CORE_CLIENT "onsay-core-c"
-#define CORE_VERSION "0.3.1"
+#define CORE_VERSION "0.4.0"
 #define CORE_LOOK 5   // seconds between looks at the lingos folder while idle
 
 typedef int (*core_send)(const char *text, size_t n);   // 1 when it went, 0 with no connection
@@ -26,12 +29,14 @@ typedef int (*core_send)(const char *text, size_t n);   // 1 when it went, 0 wit
 typedef int (*core_ask)(const char *values, size_t n, volatile int *stop, buf *answer);
 
 enum { CORE_DONE, CORE_JOB, CORE_PING, CORE_PONG };   // what core_heard made of a message
+enum { CORE_HERE, CORE_NETWORK, CORE_ONSAY };          // where a web request came from: this computer, or not
 
 int core_begin(const char *settings, size_t n, core_send send, core_ask ask);
 void core_open(void);
 int core_heard(const char *text, size_t n);
 int core_do(const char *text, size_t n);   // 1 when it was ready: Onsay took the hello
 void core_look(void);
+void core_serve(const char *request, size_t n, int from, buf *out);
 void core_manifests(buf *out);             // --- between them
 void core_say(const char *fmt, ...);
 

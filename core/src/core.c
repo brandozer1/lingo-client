@@ -7,7 +7,8 @@
 // 5. Jobs          run and call, to a result, lingo(...) asked of Onsay as a program runs
 // 6. Lingo settings  setting(...), settings.get and settings.set, kept on this device, never on Onsay
 // 7. Connection    hello with the catalog, and looking at the lingos folder again
-// 8. Beginning
+// 8. Requests      web requests, from this computer's port or Onsay's connection, each answered by the lingo at its route
+// 9. Beginning
 // It never starts a thread or touches the connection (see core.h), but core_heard may run on another thread, so the
 // running job's stop is kept behind one gate.
 #include "core.h"
@@ -28,7 +29,7 @@ static char calling[128];    // the function the running call is of, like agent.
 static struct {
   const char *token, *name, *home, *lingos;
   const char **allow;
-  int allowed;
+  int allowed, inbound;   // inbound: requests that come down the connection to Onsay are taken too
   long long steps;
   double ms;
 } set;
@@ -62,7 +63,7 @@ static int settings(const char *text, size_t n) {
   }
   set.steps = (long long)num_or(s, "steps", 5000000);
   set.ms = num_or(s, "ms", 600000);
-  if (!set.token) { say("The settings file needs a token. Sign in from the Onsay app to get one"); return 0; }
+  set.inbound = !strcmp(text_or(s, "inbound", ""), "onsay");
   val *allow = rec_get(s, "allow");
   set.allow = arena_get(kept, ((allow && allow->k == V_LIST ? allow->l.n : 0) + 1) * sizeof *set.allow);
   if (allow && allow->k == V_LIST)
@@ -303,6 +304,15 @@ static int native_called(const char *name) {
   return -1;
 }
 
+// A lingo's lingo.json, a native's from the folder it loaded from, or NULL when it has none.
+static val *manifest_of(const char *lingo) {
+  int k = native_called(lingo);
+  const char *folder = k > 0 && natives[k].folder ? natives[k].folder : lingo;
+  for (size_t i = 0; i < folders->l.n; i++)
+    if (!strcmp(text_or(folders->l.v[i], "folder", ""), folder) && !rec_get(folders->l.v[i], "error")) return rec_get(folders->l.v[i], "manifest");
+  return NULL;
+}
+
 static const char *keeping;   // the lingo whose own read or write runs now, so its setting(...) reads this device's file
 
 /* One lingo's settings, as a form shows them: each its lingo.json lists, a name alone or a record of its name, title,
@@ -310,9 +320,7 @@ static const char *keeping;   // the lingo whose own read or write runs now, so 
    lingo.json says they are kept, {read, write}, its own functions, or NULL for this device's file of them, as it is
    inside those functions too. */
 static val *declared(arena *a, const char *lingo, val **keep) {
-  val *out = v_list(a), *m = NULL, *own = rec_get(rec_get(device, "lingos"), lingo);
-  for (size_t i = 0; i < folders->l.n; i++)
-    if (!strcmp(text_or(folders->l.v[i], "folder", ""), lingo) && !rec_get(folders->l.v[i], "error")) m = rec_get(folders->l.v[i], "manifest");
+  val *out = v_list(a), *m = manifest_of(lingo), *own = rec_get(rec_get(device, "lingos"), lingo);
   val *listed = m ? rec_get(m, "settings") : NULL, *read = own ? rec_get(own, "settings") : NULL;
   for (size_t i = 0; listed && i < listed->l.n; i++) {
     val *s = listed->l.v[i], *one = v_rec(a);
@@ -358,7 +366,7 @@ static val *hosted(run *r, val **a) {
   val *got = asked ? json_parse(r->a, out.s ? out.s : "", out.n, &problem) : NULL;
   buf_free(&out);
   if (got && (problem || got->k != V_REC)) got = NULL;
-  if (!got) fail(r, "phrase", asking ? "Onsay couldn't be asked" : "this device's host didn't answer");
+  if (!got) fail(r, "phrase", asking ? "This lingo client isn't connected to Onsay" : "this device's host didn't answer");
   val *error = rec_get(got, "error"), *code = rec_get(got, "code"), *value = rec_get(got, "value");
   if (error && error->k == V_TEXT) fail(r, code && code->k == V_TEXT ? code->t.s : "phrase", "%s", error->t.s);
   return value ? value : NOTHING;
@@ -509,7 +517,7 @@ static int lingos(void) {
       val *e = folders->l.v[k], *n = rec_get(e, "native");
       if (n && natives[(size_t)n->n].folder && !strcmp(natives[(size_t)n->n].name, all->r.key[i])) {
         rec_set(a, one, "folder", rec_get(e, "folder"));
-        if (rec_get(rec_get(e, "lingo"), "about")) rec_set(a, one, "about", rec_get(rec_get(e, "lingo"), "about"));
+        if (rec_get(rec_get(e, "manifest"), "about")) rec_set(a, one, "about", rec_get(rec_get(e, "manifest"), "about"));   // a native loaded before isn't read again
       }
     }
     if (rec_get(l, "about")) rec_set(a, one, "about", rec_get(l, "about"));
@@ -577,15 +585,12 @@ int core_heard(const char *text, size_t n) {
 
 static int reply(const char *text, size_t n) { return sender && sender(text, n); }
 
-// Answers what it can't run with a result, so Onsay never waits on a job that will never finish. line 0 is no line.
-static void refuse(const char *id, const char *code, const char *why, int line) {
-  buf out = { 0 };
-  buf_fmt(&out, "{\"type\":\"result\",\"id\":%s,\"ok\":false,\"error\":{\"code\":\"%s\",\"message\":", id, code);
-  buf_json_str(&out, why, strlen(why));
-  if (line) buf_fmt(&out, ",\"at\":\"\",\"line\":%d},\"log\":[]}", line);
-  else buf_str(&out, ",\"at\":\"\",\"line\":null},\"log\":[]}");
-  reply(out.s, out.n);
-  buf_free(&out);
+// A result for what it can't run, so Onsay never waits on a job that will never finish. line 0 is no line.
+static void refuse(buf *out, const char *id, const char *code, const char *why, int line) {
+  buf_fmt(out, "{\"type\":\"result\",\"id\":%s,\"ok\":false,\"error\":{\"code\":\"%s\",\"message\":", id, code);
+  buf_json_str(out, why, strlen(why));
+  if (line) buf_fmt(out, ",\"at\":\"\",\"line\":%d},\"log\":[]}", line);
+  else buf_str(out, ",\"at\":\"\",\"line\":null},\"log\":[]}");
 }
 
 // The lingos a job names, or every one this device has.
@@ -633,6 +638,13 @@ static const char *phrase_at(arena *a, const char *path) {
   return out;
 }
 
+// A function's listing, if the lingo has one by that id, like memo.recall of memo or window.list of windows.
+static val *listed(const char *lingo, const char *id) {
+  val *l = rec_get(rec_get(device, "lingos"), lingo), *own = l ? rec_get(l, "phrases") : NULL;
+  for (size_t i = 0; own && i < own->l.n; i++) if (!strcmp(text_or(own->l.v[i], "id", ""), id)) return own->l.v[i];
+  return NULL;
+}
+
 /* A phrase's values in its order: a list as it is, a record by each value's name, nothing for one left out, so its
    default applies. NULL with why when a record names a value it doesn't take. One the device hasn't got keeps its
    values, for run_phrase to say so. */
@@ -640,8 +652,7 @@ static val *in_order(arena *a, const char *id, val *values, const char **why) {
   if (!values || values->k != V_REC) return values && values->k == V_LIST ? values : v_list(a);
   phrase *p = phrase_find(id);
   const char *dot = strrchr(id, '.');
-  val *own = !p && dot ? rec_get(rec_get(rec_get(device, "lingos"), v_text(a, id, (size_t)(dot - id))->t.s), "phrases") : NULL, *params = NULL;
-  for (size_t i = 0; own && i < own->l.n && !params; i++) if (!strcmp(text_or(own->l.v[i], "id", ""), id)) params = rec_get(own->l.v[i], "params");
+  val *own = !p && dot ? listed(v_text(a, id, (size_t)(dot - id))->t.s, id) : NULL, *params = own ? rec_get(own, "params") : NULL;
   if (!p && !params) return v_list(a);
   size_t count = p ? (size_t)p->count : params->l.n;
   val *out = v_list(a);
@@ -667,32 +678,35 @@ static val *in_order(arena *a, const char *id, val *values, const char **why) {
 
 // run: a tree from Onsay, or Lingo code compiled here. call: one phrase the device has, by its id or by its file and
 // function in the lingos folder, a phrase written in Lingo run as a program of its own, so its limits, stop and errors
-// are a program's.
-static void work(arena *a, val *m, const char *type, const char *id) {
-  buf out = { 0 };
+// are a program's. Its result goes in out. A call may come while a job waits on lingo(...), and runs inside it: that
+// job's id, stop and function come back after.
+static void work(arena *a, val *m, const char *type, const char *id, buf *out) {
+  if (strlen(id) >= sizeof running) { refuse(out, "null", "type", "That job's id is too long", 0); return; }
+  char was_running[sizeof running], was[sizeof calling];
+  pl_enter(gate);
+  int was_stopping = stopping;
+  memcpy(was_running, running, sizeof running);
+  snprintf(running, sizeof running, "%s", id);
+  stopping = 0;
+  pl_leave(gate);
+  memcpy(was, calling, sizeof calling);
   double started = pl_now();
   const char *why = NULL;
-  int call = !strcmp(type, "call");
+  int call = !strcmp(type, "call"), line = 0;
   const char *lingo = text_or(m, "lingo", NULL), *phrase = lingo ? phrase_at(a, lingo) : text_or(m, "phrase", "");
-  if (!phrase) { refuse(id, "unknown", "A lingo is called by its file and function, like test.lingo/find", 0); return; }
-  val *values = call ? in_order(a, phrase, rec_get(m, "values"), &why) : NULL, *program = call ? NULL : rec_get(m, "program"), *input = rec_get(m, "input");
-  if (call && !values) { refuse(id, "type", why, 0); return; }
-  val *code = call ? written(a, phrase, values) : rec_get(m, "code"), *names = call ? v_list(a) : NULL;
-  char was[sizeof calling];
-  memcpy(was, calling, sizeof calling);
-  if (call) snprintf(calling, sizeof calling, "%s", phrase);
+  val *values = call && phrase ? in_order(a, phrase, rec_get(m, "values"), &why) : NULL, *program = call ? NULL : rec_get(m, "program"), *input = rec_get(m, "input");
+  val *code = !call ? rec_get(m, "code") : values ? written(a, phrase, values) : NULL, *names = call ? v_list(a) : NULL;
+  if (call && phrase) snprintf(calling, sizeof calling, "%s", phrase);
   if (call && code) {
     list_push(a, names, v_text(a, phrase, (size_t)(strrchr(phrase, '.') - phrase)));
-    rec_set(a, input = v_rec(a), "v", values && values->k == V_LIST ? values : v_list(a));
+    rec_set(a, input = v_rec(a), "v", values->k == V_LIST ? values : v_list(a));
   }
-  if (call && !code) run_phrase(a, id, phrase, values, &stopping, set.allow, set.allowed, &out);
+  if (code && code->k == V_TEXT) program = lingo_prepare(a, device, code->t.s, code->t.len, names ? names : names_of(a, m), &line, &why);
+  if (!phrase) refuse(out, id, "unknown", "A lingo is called by its file and function, like test.lingo/find", 0);
+  else if (call && !values) refuse(out, id, "type", why, 0);
+  else if (code && code->k == V_TEXT && !program) refuse(out, id, "compile", why, line);
+  else if (call && !code) run_phrase(a, id, phrase, values, &stopping, set.allow, set.allowed, out);
   else {
-    if (code && code->k == V_TEXT) {
-      int line = 0;
-      const char *why = NULL;
-      program = lingo_prepare(a, device, code->t.s, code->t.len, names ? names : names_of(a, m), &line, &why);
-      if (!program) { refuse(id, "compile", why, line); memcpy(calling, was, sizeof calling); return; }
-    }
     // Onsay may ask for less than the settings allow, never more.
     val *limits = rec_get(m, "limits");
     long long steps = set.steps;
@@ -703,12 +717,14 @@ static void work(arena *a, val *m, const char *type, const char *id) {
       if (t > 0 && t < ms) ms = t;
     }
     run_program(a, id, program ? program : NOTHING, input && input->k == V_REC ? input : v_rec(a), steps, ms, &stopping,
-                set.allow, set.allowed, &out);
+                set.allow, set.allowed, out);
   }
   memcpy(calling, was, sizeof calling);
+  pl_enter(gate);
+  memcpy(running, was_running, sizeof running);
+  stopping = was_stopping;
+  pl_leave(gate);
   say("%s %s done in %.0f ms", type, id, (pl_now() - started) * 1000);
-  reply(out.s, out.n);
-  buf_free(&out);
 }
 
 // One message core_heard called a job. Gives 1 when it was ready, the sign that hello was accepted.
@@ -724,23 +740,11 @@ int core_do(const char *text, size_t n) {
 
   if (ready) say("Signed in. This device is %s", text_or(m, "device", "?"));
   else if (!strcmp(type, "error")) say("The server says: %s", text_or(m, "error", "an error"));
-  else if (!strcmp(type, "run") || !strcmp(type, "call")) {
-    if (id.n >= sizeof running) refuse("null", "type", "That job's id is too long", 0);
-    else {
-      // A call may come while a job waits on lingo(...), and runs inside it: that job's id and stop come back after.
-      char was[sizeof running];
-      pl_enter(gate);
-      int was_stopping = stopping;
-      memcpy(was, running, sizeof running);
-      snprintf(running, sizeof running, "%s", id.s);
-      stopping = 0;
-      pl_leave(gate);
-      work(a, m, type, id.s);
-      pl_enter(gate);
-      memcpy(running, was, sizeof running);
-      stopping = was_stopping;
-      pl_leave(gate);
-    }
+  else if (!strcmp(type, "run") || !strcmp(type, "call") || !strcmp(type, "request")) {
+    buf out = { 0 };
+    if (!strcmp(type, "request")) core_serve(text, n, CORE_ONSAY, &out); else work(a, m, type, id.s, &out);
+    reply(out.s, out.n);
+    buf_free(&out);
   } else if (strcmp(type, "lingo")) say("The server sent a message this core doesn't know: %s", type);   // lingo: an answer after a stop
   buf_free(&id);
   arena_free(a);
@@ -885,7 +889,161 @@ void core_open(void) {
   send_catalog(&out);
 }
 
-////////// 8. BEGINNING //////////
+////////// 8. REQUESTS //////////
+
+// A web request reaches the lingo at the longest route its path starts with: the route its lingo.json names, like
+// "/onsay", else /<name>. From anywhere but this computer, only a lingo whose lingo.json says "open": true is there. A
+// lingo with serve(request) gets every request to its route, and any other is called as /<name>/<function>, its values a
+// JSON record by name, or the query for a GET. GET / lists the routes the caller may reach.
+
+// Headers as a record by lower case name, each value text.
+static val *header_names(arena *a, val *h) {
+  val *out = v_rec(a);
+  for (size_t i = 0; h && h->k == V_REC && i < h->r.n; i++) {
+    buf name = { 0 }, value = { 0 };
+    for (const char *c = h->r.key[i]; *c; c++) buf_chr(&name, (char)(*c >= 'A' && *c <= 'Z' ? *c + 32 : *c));
+    buf_text(&value, h->r.v[i]);
+    rec_set(a, out, name.s ? name.s : "", v_text(a, value.s ? value.s : "", value.n));
+    buf_free(&name), buf_free(&value);
+  }
+  return out;
+}
+
+// Part of a query with its %XX and + undone, kept as it came when that isn't text.
+static val *unescape(arena *a, const char *s, size_t n) {
+  buf b = { 0 };
+  for (size_t i = 0; i < n; i++) {
+    char x = i + 2 < n ? s[i + 1] : 0, y = i + 2 < n ? s[i + 2] : 0;
+    int hi = s[i] == '%' ? hex(x >= 'a' ? x - 32 : x) : -1, lo = hex(y >= 'a' ? y - 32 : y);
+    if (hi >= 0 && lo >= 0) { buf_chr(&b, (char)(hi * 16 + lo)); i += 2; }
+    else buf_chr(&b, s[i] == '+' ? ' ' : s[i]);
+  }
+  val *v = utf8_ok(b.s ? b.s : "", b.n) ? v_text(a, b.s ? b.s : "", b.n) : v_text(a, s, n);
+  buf_free(&b);
+  return v;
+}
+
+void core_serve(const char *text, size_t n, int from, buf *out) {
+  static const char B64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  arena *a = arena_new();
+  const char *problem = NULL, *lingo = NULL;
+  val *m = json_parse(a, text ? text : "", text ? n : 0, NULL), *query = v_rec(a), *routes = v_list(a), *head = v_rec(a), *got = NOTHING;
+  if (!m || m->k != V_REC) m = v_rec(a);
+  val *headers = header_names(a, rec_get(m, "headers")), *raw = rec_get(m, "body"), *base64 = rec_get(m, "base64");
+  const char *p = text_or(m, "path", ""), *method = text_or(m, "method", "GET");
+  size_t at = strcspn(p, "?"), best = 0;
+  int status = 200, json = 1;   // json: the body is written as JSON, else as text
+  buf id = { 0 }, body = { 0 }, error = { 0 }, call = { 0 };
+  buf_json(&id, rec_get(m, "id") ? rec_get(m, "id") : NOTHING);
+  int coded = base64 && truthy(base64);
+  if (raw && raw->k == V_TEXT && !coded) buf_add(&body, raw->t.s, raw->t.len);
+  for (size_t i = 0, bits = 0, v = 0; coded && raw && raw->k == V_TEXT && i < raw->t.len && raw->t.s[i] != '='; i++) {
+    const char *digit = raw->t.s[i] ? strchr(B64, raw->t.s[i]) : NULL;
+    if (!digit) { buf_str(&error, "Its body isn't base64"); break; }
+    v = v << 6 | (size_t)(digit - B64);
+    bits += 6;
+    if (bits >= 8) { bits -= 8; buf_chr(&body, (char)(v >> bits & 255)); }
+  }
+
+  // A page in a browser on this computer can send requests here too: one counts as from this computer only when it
+  // names this computer as its host and no page elsewhere sent it.
+  if (from == CORE_HERE) {
+    const char *host = text_or(headers, "host", ""), *origin = text_or(headers, "origin", NULL), *site = text_or(headers, "sec-fetch-site", "none");
+    size_t end = host[0] == '[' ? strcspn(host, "]") + 1 : strcspn(host, ":");
+    int named = !end || (((end == 9 && (!strncmp(host, "127.0.0.1", 9) || !strncmp(host, "localhost", 9))) || (end == 5 && !strncmp(host, "[::1]", 5))) &&
+                         (!host[end] || host[end] == ':'));
+    if (!named || (origin && (strncmp(origin, "http://", 7) || strcmp(origin + 7, host))) || (strcmp(site, "none") && strcmp(site, "same-origin"))) from = CORE_NETWORK;
+  }
+  for (const char *q = p + at + (p[at] == '?'); *q;) {
+    size_t len = strcspn(q, "&"), eq = strcspn(q, "=&");
+    if (len) rec_set(a, query, unescape(a, q, eq)->t.s, unescape(a, q + eq + (eq < len), eq < len ? len - eq - 1 : 0));
+    q += len + (q[len] == '&');
+  }
+  for (size_t i = 0; i < catalog->l.n; i++) {
+    val *e = catalog->l.v[i], *mf, *open;
+    const char *name = text_or(e, "name", ""), *own;
+    if (strcmp(text_or(e, "status", ""), "ok") || !strcmp(name, "core")) continue;
+    mf = manifest_of(name), open = mf ? rec_get(mf, "open") : NULL, own = text_or(mf, "route", "");
+    if (from != CORE_HERE && !(open && open->k == V_BOOL && open->b)) continue;
+    buf r = { 0 };
+    if (own[0] == '/' && own[1] && !strchr(own, '?')) buf_str(&r, own); else buf_fmt(&r, "/%s", name);
+    while (r.n > 1 && r.s[r.n - 1] == '/') r.s[--r.n] = 0;
+    val *one = v_rec(a);
+    rec_set(a, one, "name", v_cstr(a, name));
+    rec_set(a, one, "route", v_text(a, r.s, r.n));
+    list_push(a, routes, one);
+    if (r.n > best && at >= r.n && !memcmp(p, r.s, r.n) && (at == r.n || p[r.n] == '/')) lingo = name, best = r.n;
+    buf_free(&r);
+  }
+
+  if (error.n) status = 400;
+  else if (from == CORE_ONSAY && !set.inbound) status = 403, buf_str(&error, "This lingo client doesn't take requests through Onsay");
+  else if (p[0] != '/') status = 400, buf_str(&error, "A path starts with /, like /memo/recall");
+  else if (!utf8_ok(body.s ? body.s : "", body.n)) status = 400, buf_str(&error, "Its body isn't text, and lingos take text, like JSON");
+  else if (at == 1) rec_set(a, got = v_rec(a), "lingos", routes);
+  else if (!lingo) status = 404, buf_fmt(&error, "There's nothing at %.*s", (int)at, p);
+  else {
+    const char *rest = p + best, *why = NULL, *fn = NULL;
+    size_t left = at - best;
+    val *job = v_rec(a), *values = v_list(a);
+    buf_fmt(&call, "%s.serve", lingo);
+    int serving = listed(lingo, call.s) != NULL;
+    if (serving) {
+      val *request = v_rec(a), *parsed = body.n ? json_parse(a, body.s, body.n, &problem) : NOTHING;
+      rec_set(a, request, "method", v_cstr(a, method));
+      rec_set(a, request, "path", left ? v_text(a, rest, left) : v_cstr(a, "/"));
+      rec_set(a, request, "query", query);
+      rec_set(a, request, "headers", headers);
+      rec_set(a, request, "body", v_text(a, body.s ? body.s : "", body.n));
+      rec_set(a, request, "json", problem ? NOTHING : parsed);
+      list_push(a, values, request);
+    } else {
+      call.n = 0;
+      buf_fmt(&call, "%s.lingo%.*s", lingo, (int)left, rest);
+      fn = phrase_at(a, call.s);
+      values = strcmp(method, "GET") && body.n ? json_parse(a, body.s, body.n, &problem) : strcmp(method, "GET") ? v_rec(a) : query;
+      if (!listed(lingo, fn)) status = 404, buf_fmt(&error, "%s has no function %s", lingo, fn);
+      else if (problem || (values->k != V_REC && values->k != V_LIST) || !in_order(a, fn, values, &why))
+        status = 400, buf_str(&error, why ? why : "Its values are a JSON record by name, like {\"text\": \"hello\"}");
+    }
+    if (!error.n) {
+      buf result = { 0 };
+      rec_set(a, job, "phrase", v_cstr(a, serving ? call.s : fn));
+      rec_set(a, job, "values", values);
+      work(a, job, "call", id.s, &result);
+      val *r = json_parse(a, result.s, result.n, NULL), *e = rec_get(r, "error");
+      buf_free(&result);
+      const char *code = text_or(e, "code", "");
+      if (e) status = !strcmp(code, "unknown") ? 404 : !strcmp(code, "denied") ? 403 : 500, buf_str(&error, text_or(e, "message", "It failed"));
+      else got = rec_get(r, "value") ? rec_get(r, "value") : NOTHING;
+      // What serve gives: a record with a number status is the response, and anything else the body of a 200.
+      if (serving && !error.n) {
+        val *s = got->k == V_REC ? rec_get(got, "status") : NULL;
+        if (!s || s->k != V_NUM) json = got->k != V_TEXT;
+        else if (s->n < 100 || s->n > 599 || s->n != (int)s->n) status = 500, buf_str(&error, "serve gave a status that isn't one, like 200 or 404");
+        else {
+          status = (int)s->n, head = header_names(a, rec_get(got, "headers"));
+          got = rec_get(got, "body") ? rec_get(got, "body") : NOTHING;
+          json = got->k != V_TEXT && got->k != V_NOTHING;
+        }
+      }
+    }
+  }
+
+  if (error.n) rec_set(a, got = v_rec(a), "error", v_text(a, error.s, error.n)), json = 1;
+  buf b = { 0 };
+  if (json) buf_json(&b, got); else buf_text(&b, got);
+  if (!rec_get(head, "content-type")) rec_set(a, head, "content-type", v_cstr(a, json ? "application/json" : "text/plain; charset=utf-8"));
+  buf_fmt(out, "{\"type\":\"response\",\"id\":%s,\"status\":%d,\"headers\":", id.s, status);
+  buf_json(out, head);
+  buf_str(out, ",\"body\":");
+  buf_json_str(out, b.s ? b.s : "", b.n);
+  buf_str(out, ",\"base64\":false}");
+  buf_free(&b), buf_free(&id), buf_free(&body), buf_free(&error), buf_free(&call);
+  arena_free(a);
+}
+
+////////// 9. BEGINNING //////////
 
 // lingo.run, lingo.use and lingo.setting are in no listing: they are lingo(...), use(...) and setting(...), part of the
 // language, so every core has them, unless a host lingo of its own gave them. lingo.setting is answered here (6.).
