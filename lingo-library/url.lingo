@@ -1,13 +1,11 @@
 // url.lingo - Web addresses for a program: one taken apart into its scheme, host, port, path, query and hash, and built
-// again, paths joined, queries to and from records, and parts encoded and decoded.
+// again, paths joined, and queries to and from records, their parts encoded and decoded.
 //
 // 1. parse(address)    -> {scheme, user, host, port, path, query, hash}: query a record, port a number, missing parts nothing
 // 2. build(parts)      -> text: those parts as an address again, query a record or text
 // 3. join(base, path)  -> text: one / between them, or path itself when it is a whole address
 // 4. to_query(values)  -> text: a=1&b=two%20words, a list giving its name once for each item
 // 5. from_query(text)  -> record: each name's value as text, a list when the name comes more than once
-// 6. encode(text)      -> text: one part of an address, encoded
-// 7. decode(text)      -> text: and back
 
 ////////// 1-3. ADDRESSES //////////
 
@@ -72,7 +70,7 @@ fn to_query(values) {
   out = []
   for k, v in values ?? {} {
     for x in std.slice(std.to_json(v), 0, 1) == "[" ? v : [v] {
-      if x != nothing {out += [encode(k) + "=" + encode(x)]}
+      if x != nothing {out += [encode.url(k) + "=" + encode.url(x)]}
     }
   }
   return text.join(out, "&")
@@ -87,21 +85,13 @@ fn from_query(text) {
   for pair in text.split(t, "&") {
     if pair == "" {continue}
     kv = cut(text.replace(pair, "+", " "), "=")
-    k = decode(kv[0])
-    v = decode(kv[1] ?? "")
+    k = encode.from_url(kv[0])
+    v = encode.from_url(kv[1] ?? "")
     had = out[k]
     out[k] = had == nothing ? v : std.slice(std.to_json(had), 0, 1) == "[" ? had + [v] : [had, v]
   }
   return out
 }
-
-////////// 6-7. PARTS //////////
-
-// 6. Text encoded as one part of a web address, like a search word.
-fn encode(text) {return encode.url(text)}
-
-// 7. A part of a web address decoded back to text.
-fn decode(text) {return encode.from_url(text)}
 
 ////////// HELPERS //////////
 

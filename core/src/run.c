@@ -1,14 +1,14 @@
-// run.c - runs a Lingo tree by the same rules, with the same errors, as test/reference/run.mjs.
+// run.c - runs a Lingo tree: its statements, expressions and phrases, within its limits.
 //
-// 1. fail(r, code, fmt), tick(r)      -> errors, and the step, time and memory limits
-// 2. op(r, o, a, b), part, order      -> how values meet
-// 3. exec(r, body, frame, back)       -> statements, keeping where they are for errors
-// 4. eval(r, e, frame)                -> expressions
-// 5. run_program(...), run_phrase(...) -> a whole program, or one phrase, to a result message
+// 1. fail(r, code, fmt), tick(r)       -> errors, and the step, time and memory limits
+// 2. op(r, o, a, b), part, order       -> how values meet
+// 3. exec(r, body, frame, back)        -> statements, keeping where they are for errors
+// 4. eval(r, e, frame)                 -> expressions
+// 5. run_program(a, program, input, l) -> a whole program, to its value or its error
 #include "lingo.h"
 #include "platform.h"
-#include "jump.h"
 #include <math.h>
+#include <setjmp.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -42,7 +42,6 @@ static const char *name_of(val *v) { return v->k == V_TEXT ? v->t.s : ""; }
 ////////// 1. ERRORS AND LIMITS //////////
 
 static const char *phrase_now;   // the phrase running, so its errors say which it was
-const char *phrase_running(void) { return phrase_now; }
 
 // 1.
 _Noreturn void fail(run *r, const char *code, const char *fmt, ...) {
@@ -71,18 +70,6 @@ double num_of(run *r, val *x, const char *what) {
   return x->n;
 }
 
-void note(run *r, val *x) {
-  buf t = { 0 };
-  buf_text(&t, x);
-  list_push(r->a, r->log, v_text(r->a, t.s ? t.s : "", t.n));
-  buf_free(&t);
-}
-
-int picture(run *r, val *x) {
-  list_push(r->a, r->pictures, x);
-  return (int)r->pictures->l.n;
-}
-
 // Before anything big is made, so a list that doubles each step is stopped before it is made, not after.
 static void room(run *r, size_t more) {
   if (arena_used(r->a) + more > MEMORY) fail(r, "limit", "It used too much memory, so it was stopped");
@@ -93,7 +80,6 @@ static void tick(run *r) {
   if (--r->left < 0) fail(r, "limit", "It took too many steps, so it was stopped. Is a loop never ending?");
   room(r, 0);
   if ((r->left & 1023) == 0 && pl_now() * 1000 > r->until) fail(r, "limit", "It ran too long, so it was stopped");
-  if ((r->left & 1023) == 0 && pl_stopped()) fail(r, "stopped", "Stopped by the person");
 }
 
 static void at_cut(run *r, size_t n) { r->at.n = n; if (r->at.s) r->at.s[n] = 0; }
@@ -126,7 +112,7 @@ static val *part(run *r, val *from, val *key) {
   return NOTHING;
 }
 
-int order(run *r, val *a, val *b) {
+static int order(run *r, val *a, val *b) {
   if (a->k == V_NUM && b->k == V_NUM) return a->n < b->n ? -1 : a->n > b->n ? 1 : 0;
   if (a->k == V_TEXT && b->k == V_TEXT) {
     size_t n = a->t.len < b->t.len ? a->t.len : b->t.len;
@@ -398,18 +384,20 @@ static int allowed(run *r, const char *need, size_t n) {
 
 static val *say(run *r, const char *id, val *args, val *frame) {
   phrase *p = phrase_find(id);
-  if (!p) fail(r, "unknown", "This device doesn't have the phrase %s", id);
+  if (!p) fail(r, "unknown", "This computer doesn't have the phrase %s", id);
   for (const char *n = p->needs; *n; n += strspn(n, ", ")) {   // every permission it needs, like screen.act, screen.read
     size_t len = strcspn(n, ",");
     if (!allowed(r, n, len)) fail(r, "denied", "%s needs permission for %.*s, which wasn't given", id, (int)len, n);
     n += len;
   }
+  // A value left out, or nothing, takes its default, as a function's does.
   val **values = arena_get(r->a, (size_t)(p->count + 1) * sizeof *values);
   for (int i = 0; i < p->count; i++) {
     val *given = args && args->k == V_REC ? rec_get(args, p->params[i]) : NULL;
-    values[i] = given ? (frame ? eval(r, given, frame) : given) : p->defaults[i] ? p->defaults[i] : NOTHING;
+    values[i] = given ? eval(r, given, frame) : NOTHING;
+    if (values[i]->k == V_NOTHING && p->defaults[i]) values[i] = p->defaults[i];
   }
-  const char *was = phrase_now;   // a phrase may run others inside it, like lingo.run the calls Onsay sends while it waits
+  const char *was = phrase_now;   // a phrase may run others inside it, like lingo.run the requests Onsay sends meanwhile
   phrase_now = id;
   val *out = p->fn(r, values);
   phrase_now = was;
@@ -459,76 +447,27 @@ static val *eval(run *r, val *e, val *frame) {
 
 ////////// 5. RUN //////////
 
-static void begin(run *r, arena *a, volatile int *stop, const char *const *allow, int count) {
-  memset(r, 0, sizeof *r);
-  r->a = a;
-  r->stop = stop;
-  r->allow = allow;
-  r->allowed = count;
-  r->log = v_list(a);
-  r->pictures = v_list(a);
-}
-
-static void finish(run *r, const char *id, int ok, val *value, buf *out) {
-  buf_fmt(out, "{\"type\":\"result\",\"id\":%s,\"ok\":%s", id, ok ? "true" : "false");
-  if (ok) { buf_str(out, ",\"value\":"); buf_json(out, value); }
-  else {
-    buf_str(out, ",\"error\":{\"code\":");
-    buf_json_str(out, r->code, strlen(r->code));
-    buf_str(out, ",\"message\":");
-    buf_json_str(out, r->message.s ? r->message.s : "", r->message.n);
-    buf_str(out, ",\"at\":");
-    buf_json_str(out, r->at_error.s ? r->at_error.s : "", r->at_error.n);
-    val *lines = r->program ? rec_get(r->program, "lines") : NULL, *line = lines && r->at_error.s ? rec_get(lines, r->at_error.s) : NULL;
-    buf_str(out, ",\"line\":");
-    buf_json(out, line ? line : NOTHING);
-    buf_chr(out, '}');
+// 5. The run is kept in the arena, never on the stack, so what an error left in it is read whole after the jump back.
+val *run_program(arena *a, val *program, val *input, limits l, const char **code, const char **message) {
+  run *r = arena_get(a, sizeof *r);
+  *r = (run){ .a = a, .program = program, .left = l.steps, .until = pl_now() * 1000 + l.ms, .stop = l.stop, .allow = l.allow, .allowed = l.allowed };
+  trap_t t;
+  r->trap = &t;
+  val *back = NOTHING, *volatile out = NULL;
+  if (!setjmp(t.j)) {
+    val *tool = rec_get(program, "tool"), *frame = v_rec(a);
+    buf_str(&r->at, "tool");
+    bind(r, rec_get(tool, "params"), input, 1, frame);
+    out = exec(r, rec_get(tool, "body"), frame, &back) == BACK ? back : NOTHING;
+  } else {
+    const char *line = text_or(rec_get(program, "lines"), r->at_error.s ? r->at_error.s : "", NULL);
+    buf m = { 0 };
+    if (line) buf_fmt(&m, "%s: ", line);
+    buf_add(&m, r->message.s ? r->message.s : "", r->message.n);
+    *code = v_cstr(a, r->code)->t.s;
+    *message = v_text(a, m.s, m.n)->t.s;
+    buf_free(&m);
   }
-  buf_str(out, ",\"log\":");
-  buf_json(out, r->log);
-  if (r->pictures->l.n) { buf_str(out, ",\"pictures\":"); buf_json(out, r->pictures); }
-  buf_chr(out, '}');
-  buf_free(&r->message);
-  buf_free(&r->at);
-  buf_free(&r->at_error);
-}
-
-// 5.
-void run_program(arena *a, const char *id, val *program, val *input, long long steps, double ms, volatile int *stop,
-                 const char *const *allow, int count, buf *out) {
-  run r;
-  begin(&r, a, stop, allow, count);
-  r.program = program;
-  r.left = steps;
-  r.until = pl_now() * 1000 + ms;
-  trap_t t;
-  r.trap = &t;
-  val *back = NOTHING;
-  if (!setjmp(t.j)) {
-    val *tool = program->k == V_REC ? rec_get(program, "tool") : NULL;
-    if (!tool || tool->k != V_REC) fail(&r, "type", "That isn't a Lingo program: it has no tool");
-    val *frame = v_rec(a);
-    buf_str(&r.at, "tool");
-    bind(&r, rec_get(tool, "params"), input, 1, frame);
-    int done = exec(&r, rec_get(tool, "body"), frame, &back);
-    finish(&r, id, 1, done == BACK ? back : NOTHING, out);
-  } else finish(&r, id, 0, NOTHING, out);
-}
-
-void run_phrase(arena *a, const char *id, const char *phrase_id, val *values, volatile int *stop,
-                const char *const *allow, int count, buf *out) {
-  run r;
-  begin(&r, a, stop, allow, count);
-  r.left = 1000000;
-  r.until = pl_now() * 1000 + 600000;
-  trap_t t;
-  r.trap = &t;
-  if (!setjmp(t.j)) {
-    // A call gives its values in order, so they are named here by the phrase's own params.
-    phrase *p = phrase_find(phrase_id);
-    val *args = v_rec(a);
-    if (p && values && values->k == V_LIST)
-      for (int i = 0; i < p->count && (size_t)i < values->l.n; i++) rec_set(a, args, p->params[i], values->l.v[i]);
-    finish(&r, id, 1, say(&r, phrase_id, args, NULL), out);
-  } else finish(&r, id, 0, NOTHING, out);
+  buf_free(&r->message), buf_free(&r->at), buf_free(&r->at_error);
+  return out;
 }

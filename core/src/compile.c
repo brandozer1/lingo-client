@@ -1,20 +1,13 @@
-// compile.c - Lingo code to the tree the runner runs, the same C on every device, native or as WebAssembly.
+// compile.c - Lingo code to the tree the runner runs: every lingo in the lingos folder, read, listed and compiled, and a
+// call of one of their functions linked down to native phrases. Errors are passed back up, never jumped: every parse
+// function gives NULL and the first problem is kept in the context.
 //
-// 1. lex(c, s, n, out)                      -> text to tokens
-// 2. lingo_parse(a, code, n, phrases, own, ...) -> tokens to a tree, checked against the phrases it may use. own: the
-//                                              name of the lingo it is, like openrouter, or NULL for a program
-// 3. lingo_manifest(a, text, n, message)    -> a native lingo's manifest read: its phrases, groups and shapes, each phrase
-//                                              with its inputSchema and outputSchema too
-// 4. lingo_read(a, manifest, folder, why)   -> a native or host lingo's lingo.json read to the same record, its functions'
-//                                              heads and gives from their schemas: lingo_schema and lingo_gives, the two
-//                                              ways, and lingo_line(b, phrase, group_needs)
-//    listing(a, file, code, why)            -> a lingo written in Lingo, its listing made from its code: every
-//                                              fn, the comments above each, its about, and the settings it reads
-// 5. lingo_link(a, program, stack)          -> Lingo lingos' phrases swapped for their code, until only native ones are left
-// 6. lingo_load, lingo_face, lingo_prepare  -> every lingo a device has, what Onsay is shown, and code made ready to run
-// 7. lingo_request(json, n, out)            -> the whole compiler behind one JSON call
-// It answers word for word as test/reference/code.mjs does (test/compiler.mjs checks). Errors are passed back up, never
-// jumped, so it builds for any target: every parse function gives NULL and the first problem is kept in the context.
+// 1. lex(c, s, n, out)                  -> text to tokens
+// 2. parse_with(c, code, n)             -> tokens to a tree, checked against the phrases it may use
+// 3. listing(a, file, code, why)        -> a lingo written in Lingo, its listing made from its code: every fn, the
+//                                          comments above each, its about, and the settings it reads
+// 4. lingo_call(a, inst, fn)            -> a program that calls one function, every Lingo function it reaches pulled in
+// 5. lingo_load(a, natives, stacked)    -> every lingo a computer has, each compiled against all of them
 #include "lingo.h"
 #include <stdarg.h>
 #include <stdint.h>
@@ -26,7 +19,6 @@ static const char *KEYWORDS[] = { "if", "else", "while", "for", "in", "break", "
                                   "fail", "and", "or", "not", "true", "false", "nothing", "null", NULL };
 static const char *SYMBOLS[] = { "..", "+=", "-=", "*=", "/=", "==", "!=", "<=", ">=", "??", "&&", "||", "=", "+", "-", "*", "/", "%",
                                  "<", ">", "!", "?", ":", "(", ")", "[", "]", "{", "}", ",", ".", ";", NULL };
-static const char *PERMISSIONS[] = { "none", "screen.read", "screen.act", "files.read", "files.write", "run", "net", NULL };
 
 ////////// HELPERS //////////
 
@@ -64,21 +56,9 @@ static val *mk(arena *a, const char *tag, int n, ...) {
   return out;
 }
 
-static int listed(const char **words, const char *s, size_t n) {
-  for (int i = 0; words[i]; i++) if (strlen(words[i]) == n && !memcmp(words[i], s, n)) return 1;
-  return 0;
-}
-
-static int in_list(val *list, val *text) {
-  for (size_t i = 0; i < list->l.n; i++) if (!strcmp(list->l.v[i]->t.s, text->t.s)) return 1;
-  return 0;
-}
-
-static void push_unique(arena *a, val *list, val *text) { if (!in_list(list, text)) list_push(a, list, text); }
-
-static void join_needs(buf *b, val *needs) {
-  if (!needs->l.n) { buf_str(b, "none"); return; }
-  for (size_t i = 0; i < needs->l.n; i++) buf_fmt(b, "%s%s", i ? ", " : "", needs->l.v[i]->t.s);
+static void push_unique(arena *a, val *list, val *text) {
+  for (size_t i = 0; i < list->l.n; i++) if (!strcmp(list->l.v[i]->t.s, text->t.s)) return;
+  list_push(a, list, text);
 }
 
 static val *failed(const char **message, char *m) { *message = m; return NULL; }
@@ -101,8 +81,7 @@ typedef struct { const char *name; int count, line; val *node; } site;
 typedef struct {
   arena *a;
   val *phrases;          // id -> phrase, every phrase the code may use
-  val *used;             // ids of the phrases it does use, in order
-  const char *own;       // the name of the lingo whose code it is, like openrouter, for setting(...), or NULL
+  const char *own;       // the name of the lingo whose code it is, like agent, for setting(...)
   int scan;              // only read for its listing: calls aren't checked, since what they reach isn't known yet
   val *settings;         // the names of its own settings it reads, setting("key"), in order
   val *fn_lines;         // each fn's name -> the line it starts on, for the comments above it
@@ -153,14 +132,9 @@ static cx *context(arena *a, val *phrases) {
   cx *c = arena_get(a, sizeof *c);
   c->a = a;
   c->phrases = v_rec(a);
-  c->used = v_list(a);
   c->settings = v_list(a);
   c->fn_lines = v_rec(a);
-  if (phrases && phrases->k == V_LIST)
-    for (size_t i = 0; i < phrases->l.n; i++) {
-      val *id = rec_get(phrases->l.v[i], "id");
-      if (id && id->k == V_TEXT) rec_set(a, c->phrases, id->t.s, phrases->l.v[i]);
-    }
+  for (size_t i = 0; phrases && i < phrases->l.n; i++) rec_set(a, c->phrases, rec_get(phrases->l.v[i], "id")->t.s, phrases->l.v[i]);
   return c;
 }
 
@@ -228,7 +202,9 @@ static int lex(cx *c, const char *s, size_t n, tokens *out) {
     if (alpha(ch)) {
       size_t j = i;
       while (j < n && (alpha(s[j]) || digit(s[j]))) j++;
-      add_token(a, out, (token){ .k = listed(KEYWORDS, s + i, j - i) ? KW : ID, .line = line, .v = dup(a, s + i, j - i) });
+      int kw = 0;
+      for (int k = 0; KEYWORDS[k] && !kw; k++) kw = strlen(KEYWORDS[k]) == j - i && !memcmp(KEYWORDS[k], s + i, j - i);
+      add_token(a, out, (token){ .k = kw ? KW : ID, .line = line, .v = dup(a, s + i, j - i) });
       i = j;
       continue;
     }
@@ -292,15 +268,6 @@ static int lex(cx *c, const char *s, size_t n, tokens *out) {
     }
   }
   return 1;
-}
-
-static int word_char(char c) { return alpha(c) || digit(c); }
-
-// A name a program can write before a dot: letters, digits and _, not starting with a digit, and not a word of Lingo.
-static int plain_name(const char *s) {
-  if (!s || !alpha(*s)) return 0;
-  for (const char *p = s; *p; p++) if (!alpha(*p) && !digit(*p)) return 0;
-  return !listed(KEYWORDS, s, strlen(s));
 }
 
 ////////// 2. PARSE //////////
@@ -486,11 +453,10 @@ static val *using(cx *c, val *args, int line) {
   if (address->k == V_TEXT && !address->t.len) return problem(c, line, "use(...) names what it reaches, like use(\"laptop.brandon/lingos/weather.lingo/now\", {place: \"Paris\"})");
   rec_set(a, named, "address", address);
   rec_set(a, named, "values", args->l.n > 1 ? args->l.v[1] : NOTHING);
-  push_unique(a, c->used, T(a, "lingo.use"));
   return mk(a, "say", 2, T(a, "lingo.use"), named);
 }
 
-// Values in the order the manifest lists them, checked against it, then named for the lingo. While only reading a lingo
+// Values in the order the listing gives them, checked against it, then named for the phrase. While only reading a lingo
 // for its listing, what a call reaches isn't known yet, so it is kept as it is.
 static val *phrase_node(cx *c, const char *id, val *args, int line) {
   arena *a = c->a;
@@ -548,9 +514,6 @@ static val *phrase_node(cx *c, const char *id, val *args, int line) {
     buf_free(&b);
     return problem(c, line, m);
   }
-  val *to = rec_get(ph, "to");   // one seen under a short name is said by its own
-  if (to) id = to->t.s;
-  push_unique(a, c->used, T(a, id));
   val *named = v_rec(a);
   for (size_t i = 0; i < args->l.n; i++) rec_set(a, named, rec_get(ps_->l.v[i], "name")->t.s, args->l.v[i]);
   return mk(a, "say", 2, T(a, id), named);
@@ -567,23 +530,20 @@ static val *wanted(cx *c, val *args, int line) {
   rec_set(a, named, "ask", ask);
   rec_set(a, named, "values", with ? with : mk(a, "map", 1, v_rec(a)));
   rec_set(a, named, "gives", gives ? gives : T(a, ""));
-  push_unique(a, c->used, T(a, "lingo.run"));
   return mk(a, "say", 2, T(a, "lingo.run"), named);
 }
 
-/* setting("key") is a call of lingo.setting, made as the program reaches it: the device answers with this lingo's setting
-   of that name, kept there, or its default, or nothing (6. in core.c). setting("key", "github") reads another lingo's,
-   so one token serves many lingos. A program that is no lingo always says whose. */
+/* setting("key") is a call of lingo.setting, made as the program reaches it: this computer answers with this lingo's
+   setting of that name, kept here, or its default, or nothing (6. in core.c). setting("key", "github") reads another
+   lingo's, so one token serves many lingos. */
 static val *setting(cx *c, val *args, int line) {
   arena *a = c->a;
   val *key = at(args, 0), *ref = at(args, 1), *named = v_rec(a);
   if (!key) return problem(c, line, "setting(...) names the setting first, like setting(\"key\")");
   if (args->l.n > 2) return problem(c, line, "setting(...) takes a setting's name and whose it is, and no more");
-  if (!ref && !c->own) return problem(c, line, "setting(...) outside a lingo says whose setting it is too, like setting(\"key\", \"openrouter\")");
-  if (key->k == V_TEXT && (!ref || (c->own && is_text(ref, c->own)))) push_unique(a, c->settings, key);
+  if (key->k == V_TEXT && (!ref || is_text(ref, c->own))) push_unique(a, c->settings, key);
   rec_set(a, named, "key", key);
   rec_set(a, named, "reference", ref ? ref : T(a, c->own));
-  push_unique(a, c->used, T(a, "lingo.setting"));
   return mk(a, "say", 2, T(a, "lingo.setting"), named);
 }
 
@@ -809,7 +769,6 @@ static val *program(ps *p) {
     rec_set(a, tool, "body", loose);
   }
   val *out = v_rec(a);
-  rec_set(a, out, "lingo", v_num(a, 1));
   rec_set(a, out, "tool", tool);
   rec_set(a, out, "fns", fns);
   return out;
@@ -858,6 +817,7 @@ static val *paths(cx *c, val *program) {
   return map;
 }
 
+// 2.
 static val *parse_with(cx *c, const char *code, size_t n) {
   arena *a = c->a;
   tokens ts;
@@ -905,607 +865,13 @@ static val *parse_with(cx *c, const char *code, size_t n) {
       return problem(c, s->line, fmt(a, "%s takes %d to %d values, not %d", s->name, required, len, s->count));
     }
   }
-  rec_set(a, prog, "needs", c->used);
   rec_set(a, prog, "lines", paths(c, prog));
   return prog;
 }
 
-// phrases is every phrase the program may use: [{id, params: [{name, default?}]}]. Gives the program, ready to send, or
-// NULL with the first problem's line and message, in words.
-// 2.
-val *lingo_parse(arena *a, const char *code, size_t n, val *phrases, const char *own, int *line, const char **message) {
-  cx *c = context(a, phrases);
-  c->own = own;
-  val *out = parse_with(c, code, n);
-  if (!out) { *line = c->line; *message = c->message; }
-  return out;
-}
-
-////////// 3. MANIFEST //////////
-
-/* A native lingo's manifest, as phrase.c writes it, one line each, laid out the way the phrases are called:
-     lingo windows 1.0, Lingo 1.0, uses core 0.1    its name, its version, the Lingo it speaks, and the lingos it is built on
-     file = {name,path,size,folder,changed}         a record shape, named once and used in what phrases give
-     fs: files.read                                 a group, and the permission its phrases need. , pure marks them pure
-     write(path, text) [files.write]: replaces it   a phrase: its signature, -> what it gives, a [permission] of its own,
-                                                    and : what it does. Only the signature is required
-   // starts a comment line. Blank lines are ignored. */
-
-// One phrase line's signature, read with this same parser, so a manifest is written in Lingo's own syntax. Defaults must
-// be plain values, because a manifest is data, not code.
-static val *signature(arena *a, const char *s, size_t n, const char **message) {
-  cx *c = context(a, NULL);
-  tokens ts;
-  if (!lex(c, s, n, &ts)) { *message = c->message; return NULL; }
-  ps p = { c, ts.t, ts.n, 0 };
-  val *nm = word(&p, "the name of the phrase"), *raw = nm ? params(&p) : NULL;
-  if (!raw) { *message = c->message; return NULL; }
-  val *list = v_list(a);
-  for (size_t i = 0; i < raw->l.n; i++) {
-    val *one = v_rec(a), *d = at(raw->l.v[i], 1);
-    rec_set(a, one, "name", raw->l.v[i]->l.v[0]);
-    if (d) {
-      if (tagged(d, "neg") && at(d, 1)->k == V_NUM) d = v_num(a, -at(d, 1)->n);
-      if (d->k == V_LIST) {
-        *message = fmt(a, "the default for %s must be a plain value, like 10, \"*\" or nothing", raw->l.v[i]->l.v[0]->t.s);
-        return NULL;
-      }
-      rec_set(a, one, "default", d);
-    }
-    list_push(a, list, one);
-  }
-  if (!end(&p)) { expected(&p, "nothing after the )"); *message = c->message; return NULL; }
-  val *out = v_rec(a);
-  rec_set(a, out, "name", nm);
-  rec_set(a, out, "params", list);
-  return out;
-}
-
-// Where the ( at col closes, wherever text holds one. -1 when it never does.
-static long close_paren(const char *s, size_t n, long col) {
-  int depth = 0, quoted = 0;
-  for (long j = col < 0 ? 0 : col; j < (long)n; j++) {
-    char c = s[j];
-    if (quoted) { if (c == '\\') j++; else if (c == '"') quoted = 0; }
-    else if (c == '"') quoted = 1;
-    else if (c == '(') depth++;
-    else if (c == ')' && --depth == 0) return j + 1;
-  }
-  return -1;
-}
+////////// 3. LISTING //////////
 
 typedef struct { const char *s; size_t n; } span;
-
-static int perm_at(const char *s, size_t n, size_t *len) {
-  for (int k = 0; PERMISSIONS[k]; k++) {
-    size_t m = strlen(PERMISSIONS[k]);
-    if (n >= m && !memcmp(s, PERMISSIONS[k], m)) { *len = m; return 1; }
-  }
-  return 0;
-}
-
-/* What follows a signature: -> what it gives, [permissions] and : what it does, each one optional and in that order.
-   Read the way a regular expression with lazy parts reads it, so the shortest gives wins. */
-typedef struct { const char *gives, *needs, *does; size_t gn, nn, dn; } tail;
-
-static int tail_does(const char *s, size_t n, tail *t) {
-  t->does = n > 2 && !memcmp(s, ": ", 2) ? s + 2 : NULL;
-  t->dn = t->does ? n - 2 : 0;
-  return t->does || !n;
-}
-
-static int tail_needs(const char *s, size_t n, tail *t) {
-  if (n > 2 && !memcmp(s, " [", 2)) {
-    size_t i = 2, len;
-    if (perm_at(s + i, n - i, &len)) {
-      i += len;
-      for (;;) {
-        if (i < n && s[i] == ']') {
-          if (tail_does(s + i + 1, n - i - 1, t)) { t->needs = s + 2; t->nn = i - 2; return 1; }
-          break;
-        }
-        if (i < n && s[i] == ',') {
-          size_t j = i + 1;
-          if (j < n && s[j] == ' ') j++;
-          if (!perm_at(s + j, n - j, &len)) break;
-          i = j + len;
-          continue;
-        }
-        break;
-      }
-    }
-  }
-  t->needs = NULL;
-  return tail_does(s, n, t);
-}
-
-static int tail_read(const char *s, size_t n, tail *t) {
-  memset(t, 0, sizeof *t);
-  if (n > 4 && !memcmp(s, " -> ", 4))
-    for (size_t k = 1; k + 4 <= n; k++)
-      if (tail_needs(s + 4 + k, n - 4 - k, t)) { t->gives = s + 4; t->gn = k; return 1; }
-  t->gives = NULL;
-  return tail_needs(s, n, t);
-}
-
-static val *split_needs(arena *a, const char *s, size_t n) {
-  val *out = v_list(a);
-  size_t from = 0;
-  for (size_t i = 0; i <= n; i++) {
-    if (i == n || s[i] == ',') {
-      list_push(a, out, v_text(a, s + from, i - from));
-      from = i + 1;
-      if (from < n && s[from] == ' ') from++, i++;
-    }
-  }
-  return out;
-}
-
-// The words of a group line, like none, pure: a to z and dots, between ", ". NULL when it isn't one.
-static val *group_words(arena *a, const char *w, size_t n) {
-  val *out = v_list(a);
-  size_t from = 0;
-  for (size_t m = 0; m <= n; m++) {
-    if (m == n || w[m] == ',') {
-      if (m == from) return NULL;
-      list_push(a, out, v_text(a, w + from, m - from));
-      if (m < n) { if (m + 1 >= n || w[m + 1] != ' ') return NULL; m++; }
-      from = m + 1;
-    } else if (!((w[m] >= 'a' && w[m] <= 'z') || w[m] == '.')) return NULL;
-  }
-  return out;
-}
-
-static val *input_of(arena *a, val *params);   // 4. LINGO.JSON
-
-// 3.
-val *lingo_manifest(arena *a, const char *text, size_t n, const char **message) {
-  val *out = v_rec(a), *uses = v_list(a), *shapes = v_rec(a), *groups = v_list(a), *phrases = v_list(a);
-  const char *perms = "none, screen.read, screen.act, files.read, files.write, run, net";
-  rec_set(a, out, "name", T(a, ""));
-  rec_set(a, out, "version", T(a, ""));
-  rec_set(a, out, "language", T(a, ""));
-  rec_set(a, out, "uses", uses);
-  rec_set(a, out, "shapes", shapes);
-  rec_set(a, out, "groups", groups);
-  rec_set(a, out, "phrases", phrases);
-
-  // Lines split at \n, with a \r before it dropped.
-  size_t count = 1;
-  for (size_t i = 0; i < n; i++) if (text[i] == '\n') count++;
-  span *lines = arena_get(a, count * sizeof *lines);
-  for (size_t i = 0, from = 0, l = 0; i <= n; i++)
-    if (i == n || text[i] == '\n') {
-      size_t len = i - from;
-      if (i < n && len && text[i - 1] == '\r') len--;
-      lines[l++] = (span){ text + from, len };
-      from = i + 1;
-    }
-
-  val *group = NULL;
-  int named = 0;
-  for (size_t i = 0; i < count; i++) {
-    const char *line = lines[i].s;
-    size_t ln = lines[i].n;
-    while (ln && space_at(line, 0, ln)) { size_t w = space_at(line, 0, ln); line += w; ln -= w; }
-    while (ln) {
-      size_t k = ln - 1;
-      while (k > 0 && ((unsigned char)line[k] & 0xC0) == 0x80) k--;
-      if (!space_at(line, k, ln)) break;
-      ln = k;
-    }
-    char *where = fmt(a, "line %zu", i + 1);
-    if (!ln || (ln >= 2 && line[0] == '/' && line[1] == '/')) continue;
-
-    if (!named) {
-      // lingo NAME VERSION, Lingo LANGUAGE[, uses A 1.0, B 2.0]
-      const char *bad = "the first line must be like: lingo notes 1.0, Lingo 1.0, uses windows 1.0";
-      const char *mark = NULL;
-      for (size_t k = 0; k + 8 <= ln; k++) if (!memcmp(line + k, ", Lingo ", 8)) { mark = line + k; break; }
-      if (ln < 6 || memcmp(line, "lingo ", 6) || !mark) return failed(message, fmt(a, "%s: %s", where, bad));
-      const char *head = line + 6, *sp = memchr(head, ' ', (size_t)(mark - head));
-      if (!sp || sp == head || sp + 1 == mark || memchr(sp + 1, ' ', (size_t)(mark - sp - 1)) || memchr(head, '\t', (size_t)(mark - head)))
-        return failed(message, fmt(a, "%s: %s", where, bad));
-      const char *rest = mark + 8, *stop = line + ln, *use = NULL;
-      for (const char *q = rest; q + 7 <= stop; q++) if (!memcmp(q, ", uses ", 7)) { use = q; break; }
-      const char *lang_end = use ? use : stop;
-      if (lang_end == rest || memchr(rest, ' ', (size_t)(lang_end - rest)) || (use && use + 7 == stop)) return failed(message, fmt(a, "%s: %s", where, bad));
-      rec_set(a, out, "name", v_text(a, head, (size_t)(sp - head)));
-      rec_set(a, out, "version", v_text(a, sp + 1, (size_t)(mark - sp - 1)));
-      rec_set(a, out, "language", v_text(a, rest, (size_t)(lang_end - rest)));
-      if (use) {
-        const char *q = use + 7;
-        while (q < stop) {
-          const char *comma = memchr(q, ',', (size_t)(stop - q));
-          const char *e = comma ? comma : stop, *s = q;
-          while (s < e && space_at(s, 0, (size_t)(e - s))) s++;
-          const char *f = e;
-          while (f > s && space_at(f - 1, 0, 1)) f--;
-          if (f > s) {
-            const char *gap = s;
-            while (gap < f && !space_at(gap, 0, (size_t)(f - gap))) gap++;
-            const char *v = gap;
-            while (v < f && space_at(v, 0, (size_t)(f - v))) v++;
-            if (v >= f) return failed(message, fmt(a, "%s: each lingo it uses needs a version, like uses windows 1.0", where));
-            const char *ve = v;
-            while (ve < f && !space_at(ve, 0, (size_t)(f - ve))) ve++;
-            val *u = v_rec(a);
-            rec_set(a, u, "name", v_text(a, s, (size_t)(gap - s)));
-            rec_set(a, u, "version", v_text(a, v, (size_t)(ve - v)));
-            list_push(a, uses, u);
-          }
-          q = comma ? comma + 1 : stop;
-        }
-      }
-      named = 1;
-      continue;
-    }
-
-    {
-      size_t k = 0;
-      while (k < ln && alpha(line[k])) k++;
-      // A shape: name = {...}
-      if (k && ln >= k + 5 && !memcmp(line + k, " = {", 4) && line[ln - 1] == '}') {
-        rec_set(a, shapes, dup(a, line, k), v_text(a, line + k + 3, ln - k - 3));
-        continue;
-      }
-      // A group: name: permission[, permission][, pure]. Its name may have as many levels as it needs, like office.pc.memo.
-      while (k && k + 1 < ln && line[k] == '.' && alpha(line[k + 1])) for (k++; k < ln && alpha(line[k]); k++) {}
-      val *words = k && ln > k + 2 && line[k] == ':' && line[k + 1] == ' ' ? group_words(a, line + k + 2, ln - k - 2) : NULL;
-      if (words) {
-        int pure = is_text(words->l.v[words->l.n - 1], "pure");
-        val *needs = v_list(a);
-        for (size_t m = 0; m < words->l.n - (pure ? 1 : 0); m++) list_push(a, needs, words->l.v[m]);
-        const char *wrong = NULL;
-        for (size_t m = 0; m < needs->l.n; m++) if (!listed(PERMISSIONS, needs->l.v[m]->t.s, needs->l.v[m]->t.len)) { wrong = needs->l.v[m]->t.s; break; }
-        if (wrong || !needs->l.n) return failed(message, fmt(a, "%s: %s is not a permission. They are %s", where, wrong ? wrong : "pure", perms));
-        group = v_rec(a);
-        rec_set(a, group, "name", v_text(a, line, k));
-        rec_set(a, group, "needs", needs);
-        rec_set(a, group, "pure", VBOOL(pure));
-        list_push(a, groups, group);
-        continue;
-      }
-    }
-
-    // A phrase.
-    if (!group) return failed(message, fmt(a, "%s: a phrase needs a group line above it, like files: files.read", where));
-    const char *open = memchr(line, '(', ln);
-    long close = close_paren(line, ln, open ? (long)(open - line) : -1);
-    tail t;
-    if (close <= 0 || !tail_read(line + close, ln - (size_t)close, &t))
-      return failed(message, fmt(a, "%s: a phrase is like: name(a, b=1) -> what it gives [permission]: what it does", where));
-    const char *why = NULL;
-    val *sig = signature(a, line, (size_t)close, &why);
-    if (!sig) return failed(message, fmt(a, "%s: %s", where, why));
-    const char *gname = rec_get(group, "name")->t.s;
-    val *ph = v_rec(a);
-    rec_set(a, ph, "id", T(a, fmt(a, "%s.%s", gname, rec_get(sig, "name")->t.s)));
-    rec_set(a, ph, "group", T(a, gname));
-    rec_set(a, ph, "params", rec_get(sig, "params"));
-    rec_set(a, ph, "gives", t.gives ? v_text(a, t.gives, t.gn) : T(a, "nothing"));
-    rec_set(a, ph, "needs", t.needs ? split_needs(a, t.needs, t.nn) : v_copy(a, rec_get(group, "needs")));
-    rec_set(a, ph, "pure", rec_get(group, "pure"));
-    rec_set(a, ph, "does", t.does ? v_text(a, t.does, t.dn) : T(a, ""));
-    rec_set(a, ph, "head", v_text(a, line, (size_t)close));
-    rec_set(a, ph, "inputSchema", input_of(a, rec_get(sig, "params")));
-    if (t.gives) rec_set(a, ph, "outputSchema", lingo_schema(a, t.gives, t.gn, shapes));
-    list_push(a, phrases, ph);
-  }
-  return out;
-}
-
-////////// 4. LINGO.JSON //////////
-
-/* lingo.json, a native or host lingo's manifest, read to the same record a native lingo's text is read to (see
-   docs/lingo.md). A lingo written in Lingo needs none: its listing is made from its code (listing, below), and a lingo.json
-   beside its code only says its settings, read by the core (core.c).
-     name, version   lower case letters, digits, _ and -, and a version like 1.2.0
-     runs            native: a library, its library. host: run by the program around the core
-     shapes, groups  a host lingo's records and groups, as in a listing. groups: [{name, needs: [permission]}]
-     functions       a host lingo's, each shaped like an MCP tool: name, group, description, inputSchema, outputSchema.
-                     A native's come from its library, so it lists none
-   A function's head comes from its inputSchema, its properties in order with their defaults, what it gives from its
-   outputSchema, and what it does from its description. Its needs are its group's, or in onsay.needs. */
-
-// A gives, like [{id,name}]? or window, as JSON Schema. Text, number, bool, nothing, list, record and any are its types,
-// and a shape is an object titled with its name. What doesn't read as one is any.
-typedef struct { arena *a; const char *s; size_t i, n; val *shapes; int bad; } gp;
-
-static val *gp_alt(gp *g);
-
-static int gp_at(gp *g, char c) {
-  while (g->i < g->n && g->s[g->i] == ' ') g->i++;
-  if (g->i < g->n && g->s[g->i] == c) { g->i++; return 1; }
-  return 0;
-}
-
-static val *typed(arena *a, const char *type) { val *o = v_rec(a); rec_set(a, o, "type", T(a, type)); return o; }
-static val *either(arena *a, val *list) { val *o = v_rec(a); rec_set(a, o, "anyOf", list); return o; }
-
-static val *gp_word(gp *g) {
-  while (g->i < g->n && g->s[g->i] == ' ') g->i++;
-  size_t from = g->i;
-  while (g->i < g->n && word_char(g->s[g->i])) g->i++;
-  if (g->i == from) { g->bad = 1; return NULL; }
-  return v_text(g->a, g->s + from, g->i - from);
-}
-
-static val *gp_base(gp *g) {
-  static const char *TYPES[][2] = { { "text", "string" }, { "number", "number" }, { "bool", "boolean" }, { "nothing", "null" },
-                                    { "list", "array" }, { "record", "object" } };
-  arena *a = g->a;
-  if (gp_at(g, '[')) {
-    val *o = typed(a, "array"), *items = gp_alt(g);
-    if (!items || !gp_at(g, ']')) { g->bad = 1; return NULL; }
-    rec_set(a, o, "items", items);
-    return o;
-  }
-  if (gp_at(g, '{')) {
-    val *o = typed(a, "object"), *props = v_rec(a);
-    rec_set(a, o, "properties", props);
-    if (gp_at(g, '}')) return o;
-    do {
-      val *k = gp_word(g), *v = !k ? NULL : gp_at(g, ':') ? gp_alt(g) : v_rec(a);
-      if (!v) { g->bad = 1; return NULL; }
-      rec_set(a, props, k->t.s, v);
-    } while (gp_at(g, ','));
-    if (!gp_at(g, '}')) { g->bad = 1; return NULL; }
-    return o;
-  }
-  val *w = gp_word(g);
-  if (!w) return NULL;
-  for (size_t i = 0; i < sizeof TYPES / sizeof *TYPES; i++) if (!strcmp(w->t.s, TYPES[i][0])) return typed(a, TYPES[i][1]);
-  if (!strcmp(w->t.s, "any")) return v_rec(a);
-  val *shape = g->shapes ? rec_get(g->shapes, w->t.s) : NULL, *o = shape ? typed(a, "object") : v_rec(a);
-  rec_set(a, o, "title", w);
-  val *fields = shape ? rec_get(lingo_schema(a, shape->t.s, shape->t.len, NULL), "properties") : NULL;
-  if (fields) rec_set(a, o, "properties", fields);
-  return o;
-}
-
-static val *gp_opt(gp *g) {
-  val *b = gp_base(g);
-  if (!b || !gp_at(g, '?')) return b;
-  val *both = v_list(g->a);
-  list_push(g->a, both, b);
-  list_push(g->a, both, typed(g->a, "null"));
-  return either(g->a, both);
-}
-
-static val *gp_alt(gp *g) {
-  val *x = gp_opt(g);
-  if (!x || !gp_at(g, '|')) return x;
-  val *all = v_list(g->a);
-  list_push(g->a, all, x);
-  do { val *y = gp_opt(g); if (!y) return NULL; list_push(g->a, all, y); } while (gp_at(g, '|'));
-  return either(g->a, all);
-}
-
-// 4.
-val *lingo_schema(arena *a, const char *s, size_t n, val *shapes) {
-  gp g = { a, s, 0, n, shapes, 0 };
-  val *o = gp_alt(&g);
-  while (g.i < n && s[g.i] == ' ') g.i++;
-  return !o || g.bad || g.i != n ? v_rec(a) : o;
-}
-
-// The way back, JSON Schema as a gives: an object titled with one of the lingo's shapes is that shape, and a part whose
-// type is plain is written as its name alone, {id,name}.
-static void gives_of(arena *a, buf *b, val *s, val *shapes) {
-  val *any = s && s->k == V_REC ? rec_get(s, "anyOf") : NULL;
-  if (s && s->k == V_REC && !any) any = rec_get(s, "oneOf");
-  if (any && any->k == V_LIST && any->l.n) {
-    val *last = any->l.v[any->l.n - 1];
-    int maybe = any->l.n == 2 && last->k == V_REC && is_text(rec_get(last, "type"), "null");
-    for (size_t i = 0; i < any->l.n - (size_t)maybe; i++) { if (i) buf_chr(b, '|'); gives_of(a, b, any->l.v[i], shapes); }
-    if (maybe) buf_chr(b, '?');
-    return;
-  }
-  val *type = s && s->k == V_REC ? rec_get(s, "type") : NULL, *title = s && s->k == V_REC ? rec_get(s, "title") : NULL;
-  if (type && type->k == V_LIST) {   // like ["string", "null"]
-    val *some = v_list(a);
-    int maybe = 0;
-    for (size_t i = 0; i < type->l.n; i++)
-      if (is_text(type->l.v[i], "null")) maybe = 1;
-      else list_push(a, some, typed(a, type->l.v[i]->k == V_TEXT ? type->l.v[i]->t.s : ""));
-    if (maybe) list_push(a, some, typed(a, "null"));
-    gives_of(a, b, some->l.n > 1 ? either(a, some) : some->l.n ? some->l.v[0] : NULL, shapes);
-    return;
-  }
-  const char *t = type && type->k == V_TEXT ? type->t.s : "";
-  if (title && title->k == V_TEXT && (!*t || (shapes && rec_get(shapes, title->t.s)))) { buf_str(b, title->t.s); return; }
-  val *items = s && s->k == V_REC ? rec_get(s, "items") : NULL, *props = s && s->k == V_REC ? rec_get(s, "properties") : NULL;
-  if (!strcmp(t, "string")) buf_str(b, "text");
-  else if (!strcmp(t, "number") || !strcmp(t, "integer")) buf_str(b, "number");
-  else if (!strcmp(t, "boolean")) buf_str(b, "bool");
-  else if (!strcmp(t, "null")) buf_str(b, "nothing");
-  else if (!strcmp(t, "array") && items && items->k == V_REC) { buf_chr(b, '['); gives_of(a, b, items, shapes); buf_chr(b, ']'); }
-  else if (!strcmp(t, "array")) buf_str(b, "list");
-  else if (!strcmp(t, "object") && props && props->k == V_REC) {
-    buf_chr(b, '{');
-    for (size_t i = 0; i < props->r.n; i++) {
-      buf part = { 0 };
-      gives_of(a, &part, props->r.v[i], shapes);
-      int plain = !strcmp(part.s, "text") || !strcmp(part.s, "number") || !strcmp(part.s, "bool") || !strcmp(part.s, "any") || !strcmp(part.s, "nothing");
-      buf_fmt(b, "%s%s%s%s", i ? "," : "", props->r.key[i], plain ? "" : ":", plain ? "" : part.s);
-      buf_free(&part);
-    }
-    buf_chr(b, '}');
-  } else if (!strcmp(t, "object")) buf_str(b, "record");
-  else buf_str(b, "any");
-}
-
-// 4. An outputSchema as a gives: nothing when there is none.
-val *lingo_gives(arena *a, val *schema, val *shapes) {
-  if (!schema) return T(a, "nothing");
-  buf b = { 0 };
-  gives_of(a, &b, schema, shapes);
-  val *out = T(a, b.s);
-  buf_free(&b);
-  return out;
-}
-
-// A function's values, [{name, default?}], as an inputSchema: those with no default required.
-static val *input_of(arena *a, val *params) {
-  val *o = typed(a, "object"), *props = v_rec(a), *required = v_list(a);
-  for (size_t i = 0; i < params->l.n; i++) {
-    val *one = v_rec(a), *d = rec_get(params->l.v[i], "default"), *n = rec_get(params->l.v[i], "name");
-    if (d) rec_set(a, one, "default", d); else list_push(a, required, n);
-    rec_set(a, props, n->t.s, one);
-  }
-  rec_set(a, o, "properties", props);
-  rec_set(a, o, "required", required);
-  return o;
-}
-
-// The way back: an inputSchema's properties in order as a function's values, and its head, like now(place=nothing). A
-// value with a default isn't required, and one without is.
-static val *params_of(arena *a, const char *fname, val *schema, buf *head, const char **why) {
-  val *params = v_list(a), *props = schema && schema->k == V_REC ? rec_get(schema, "properties") : NULL;
-  val *required = schema && schema->k == V_REC ? rec_get(schema, "required") : NULL;
-  buf_fmt(head, "%s(", fname);
-  if (schema && (schema->k != V_REC || !is_text(rec_get(schema, "type"), "object") || (props && props->k != V_REC)))
-    return failed(why, "its inputSchema must be like {\"type\": \"object\", \"properties\": {...}, \"required\": [...]}");
-  if (required && required->k != V_LIST) return failed(why, "its inputSchema's required must be a list of names");
-  for (size_t i = 0; props && i < props->r.n; i++) {
-    const char *n = props->r.key[i];
-    val *p = props->r.v[i], *d = p->k == V_REC ? rec_get(p, "default") : NULL, *one = v_rec(a);
-    int needed = 0;
-    for (size_t k = 0; required && k < required->l.n; k++) needed |= is_text(required->l.v[k], n);
-    if (!plain_name(n)) return failed(why, fmt(a, "%s isn't a name a value can have: letters, digits and _", n));
-    if (p->k != V_REC) return failed(why, fmt(a, "its value %s must be described as JSON Schema, like {\"type\": \"string\"}", n));
-    if (d && (d->k == V_LIST || d->k == V_REC)) return failed(why, fmt(a, "the default for %s must be a plain value, like 10, \"*\" or null", n));
-    if (!d && !needed) return failed(why, fmt(a, "%s has no default, so its inputSchema must list it in required", n));
-    if (d && needed) return failed(why, fmt(a, "%s has a default, so it can't be required", n));
-    rec_set(a, one, "name", T(a, n));
-    if (d) rec_set(a, one, "default", d);
-    list_push(a, params, one);
-    buf_fmt(head, "%s%s", i ? ", " : "", n);
-    if (d) { buf_chr(head, '='); if (d->k == V_NOTHING) buf_str(head, "nothing"); else buf_json(head, d); }
-  }
-  for (size_t k = 0; required && k < required->l.n; k++)
-    if (required->l.v[k]->k != V_TEXT || !props || !rec_get(props, required->l.v[k]->t.s)) return failed(why, "everything its inputSchema requires must be one of its properties");
-  buf_chr(head, ')');
-  return params;
-}
-
-// A version's numbers, like 1.2.0 or 0.1, as many as it has, up to three. -1 when it isn't one.
-static int numbers(const char *s, long out[3]) {
-  int n = 0;
-  out[0] = out[1] = out[2] = 0;
-  while (n < 3 && digit(*s)) {
-    for (out[n] = 0; digit(*s); s++) out[n] = out[n] * 10 + (*s - '0');
-    n++;
-    if (*s != '.' || !digit(s[1])) break;
-    s++;
-  }
-  return n && (!*s || *s == '-' || *s == '+') ? n : -1;
-}
-
-// Lower case letters, digits, _ and -, neither of those two first or last.
-static int lingo_name(val *n) {
-  if (!n || n->k != V_TEXT || !n->t.len || n->t.len > 64) return 0;
-  for (size_t i = 0; i < n->t.len; i++) {
-    char c = n->t.s[i];
-    if (!((c >= 'a' && c <= 'z') || digit(c) || ((c == '_' || c == '-') && i && i + 1 < n->t.len))) return 0;
-  }
-  return 1;
-}
-
-static int file_name(val *f) { return f && f->k == V_TEXT && f->t.len && !strpbrk(f->t.s, "/\\") && strcmp(f->t.s, "..") && strcmp(f->t.s, "."); }
-
-// Permissions as a list, each one of PERMISSIONS, or NULL.
-static val *permissions(val *v) {
-  if (!v || v->k != V_LIST || !v->l.n) return NULL;
-  for (size_t i = 0; i < v->l.n; i++) if (v->l.v[i]->k != V_TEXT || !listed(PERMISSIONS, v->l.v[i]->t.s, v->l.v[i]->t.len)) return NULL;
-  return v;
-}
-
-// One host function, shaped like an MCP tool, as the phrase record a listing's line is read to.
-static val *function_of(arena *a, val *l, val *f, const char **why) {
-  val *fname = f->k == V_REC ? rec_get(f, "name") : NULL;
-  if (!fname || fname->k != V_TEXT || !plain_name(fname->t.s)) return failed(why, "each of its functions needs a name of letters, digits and _, like forecast");
-  val *groups = rec_get(l, "groups"), *group = rec_get(f, "group"), *g = NULL, *onsay = rec_get(f, "onsay"), *does = rec_get(f, "description");
-  for (size_t i = 0; i < groups->l.n && !g; i++) if (group && group->k == V_TEXT && is_text(rec_get(groups->l.v[i], "name"), group->t.s)) g = groups->l.v[i];
-  if (!g) return failed(why, fmt(a, "function %s needs a group, one of its groups", fname->t.s));
-  val *needs = onsay && onsay->k == V_REC && rec_get(onsay, "needs") ? permissions(rec_get(onsay, "needs")) : rec_get(g, "needs");
-  if (!needs) return failed(why, fmt(a, "function %s: onsay.needs must list permissions. They are %s", fname->t.s, "none, screen.read, screen.act, files.read, files.write, run and net"));
-  buf head = { 0 };
-  const char *problem = NULL;
-  val *params = params_of(a, fname->t.s, rec_get(f, "inputSchema"), &head, &problem), *ph = v_rec(a);
-  if (!params) { buf_free(&head); return failed(why, fmt(a, "function %s: %s", fname->t.s, problem)); }
-  const char *gname = rec_get(g, "name")->t.s;
-  rec_set(a, ph, "id", T(a, fmt(a, "%s.%s", gname, fname->t.s)));
-  rec_set(a, ph, "group", T(a, gname));
-  rec_set(a, ph, "params", params);
-  rec_set(a, ph, "gives", lingo_gives(a, rec_get(f, "outputSchema"), rec_get(l, "shapes")));
-  rec_set(a, ph, "needs", needs);
-  rec_set(a, ph, "pure", VBOOL(0));
-  rec_set(a, ph, "does", does && does->k == V_TEXT ? does : T(a, ""));
-  rec_set(a, ph, "head", T(a, buf_dup(a, &head)));
-  if (rec_get(f, "inputSchema")) rec_set(a, ph, "inputSchema", rec_get(f, "inputSchema"));
-  buf_free(&head);
-  return ph;
-}
-
-// 4. folder is where it was found, or NULL. Gives the record, or NULL with the problem in words.
-val *lingo_read(arena *a, val *m, const char *folder, const char **why) {
-  if (!m || m->k != V_REC) return failed(why, "lingo.json is missing, or isn't a JSON record");
-  val *name = rec_get(m, "name"), *version = rec_get(m, "version"), *runs = rec_get(m, "runs"), *about = rec_get(m, "about");
-  long n[3];
-  if (!is_text(runs, "native") && !is_text(runs, "host"))
-    return failed(why, fmt(a, "its runs is native or host, or it is a lingo written in Lingo, with its code beside it in %s.lingo",
-                           lingo_name(name) ? name->t.s : folder ? folder : "its_name"));
-  if (!lingo_name(name)) return failed(why, "its name must be lower case letters, digits, _ and -, like notes");
-  if (folder && strcmp(name->t.s, folder)) return failed(why, fmt(a, "its name is %s, so its folder must be called %s too", name->t.s, name->t.s));
-  if (!version || version->k != V_TEXT || numbers(version->t.s, n) != 3) return failed(why, "its version must be like 1.0.0");
-  int host = is_text(runs, "host");
-  if (is_text(name, "lingo") && !host) return failed(why, "lingo is the language's own name, for lingo(...)");
-  val *out = v_rec(a), *shapes = v_rec(a), *groups = v_list(a), *phrases = v_list(a);
-  rec_set(a, out, "name", name);
-  rec_set(a, out, "version", version);
-  rec_set(a, out, "language", T(a, "1.0"));
-  if (about && about->k == V_TEXT) rec_set(a, out, "about", about);
-  rec_set(a, out, "runs", runs);
-  val *library = rec_get(m, "library");
-  if (!host && !file_name(library)) return failed(why, "library must name its library, in its folder, like windows.dll");
-  if (library) rec_set(a, out, "main", library);
-  val *s = rec_get(m, "shapes");
-  for (size_t i = 0; s && s->k == V_REC && i < s->r.n; i++) {
-    val *fields = s->r.v[i];
-    if (fields->k != V_TEXT || !fields->t.len || fields->t.s[0] != '{' || fields->t.s[fields->t.len - 1] != '}')
-      return failed(why, "each shape's fields are text, like \"tab\": \"{id,title}\"");
-    rec_set(a, shapes, s->r.key[i], fields);
-  }
-  rec_set(a, out, "shapes", shapes);
-  rec_set(a, out, "groups", groups);
-  rec_set(a, out, "phrases", phrases);
-  if (!host) return out;   // its library adds its groups and functions
-
-  val *gs = rec_get(m, "groups");
-  for (size_t i = 0; gs && gs->k == V_LIST && i < gs->l.n; i++) {
-    val *g = gs->l.v[i], *gn = g->k == V_REC ? rec_get(g, "name") : NULL, *needs = g->k == V_REC ? permissions(rec_get(g, "needs")) : NULL, *one = v_rec(a);
-    int ok = gn && gn->k == V_TEXT && gn->t.len;
-    for (size_t k = 0; ok && k < gn->t.len; k++) ok = word_char(gn->t.s[k]) || (gn->t.s[k] == '.' && k && k + 1 < gn->t.len);
-    if (!ok || !needs) return failed(why, "each group needs a name and what it needs, like {\"name\": \"tabs\", \"needs\": [\"screen.read\"]}");
-    rec_set(a, one, "name", gn);
-    rec_set(a, one, "needs", needs);
-    rec_set(a, one, "pure", VBOOL(0));
-    list_push(a, groups, one);
-  }
-  // A host lingo may have none yet, like a device with no lingos of its own.
-  val *fs = rec_get(m, "functions");
-  if (fs && fs->k != V_LIST) return failed(why, "functions must list what it shares");
-  for (size_t i = 0; fs && i < fs->l.n; i++) {
-    val *ph = function_of(a, out, fs->l.v[i], why);
-    if (!ph) return NULL;
-    for (size_t k = 0; k < phrases->l.n; k++)
-      if (is_text(rec_get(phrases->l.v[k], "id"), rec_get(ph, "id")->t.s)) return failed(why, fmt(a, "it lists the function %s twice", rec_get(ph, "id")->t.s));
-    list_push(a, phrases, ph);
-  }
-  return out;
-}
 
 // One line of code without the spaces around it.
 static span trimmed(span l) {
@@ -1538,27 +904,21 @@ static val *words_of(arena *a, span *lines, size_t first, size_t last) {
   return out;
 }
 
-// A plain default as a tree has it, -2 for ["neg", 2], or NULL when it isn't one.
-static val *plain(arena *a, val *d) {
-  if (tagged(d, "neg") && at(d, 1)->k == V_NUM) return v_num(a, -at(d, 1)->n);
-  return d && d->k != V_LIST && d->k != V_REC ? d : NULL;
-}
-
-/* 4. A lingo written in Lingo is its code, <name>.lingo, and its listing is made from it, never written by hand:
-     each fn        a function it shares, called at its address, like laptop.brandon/lingos/memo.lingo/recall, its values
-                    and their defaults its fn's own
+/* 3. A lingo written in Lingo is its code, <name>.lingo, and its listing is made from it, never written by hand:
+     each fn        a function it shares, called at its route, like /memo/recall, its values and their defaults its fn's own
      the comments   right above a fn, what it does. The first lines of the file, when they are comments, up to a blank
                     line or an empty //, are what the lingo is, its about, "memo - " or "memo.lingo - " at their start
                     left off, and never a fn's too
      settings       the names of its own settings it reads with setting("key")
-   Its group is its name, and what each function needs is worked out as it loads (lingo_load). Gives the record lingo_read
-   gives, with its settings, or NULL with the problem, starting with the file. */
+   Gives {name, about, phrases: [{id, params, does, inputSchema}], settings}, or NULL with the problem, starting with
+   the file. */
 static val *listing(arena *a, const char *file, val *code, const char **why) {
-  size_t fl = strlen(file);
-  val *name = fl > 6 && !strcmp(file + fl - 6, ".lingo") ? v_text(a, file, fl - 6) : NULL;
-  if (!lingo_name(name)) return failed(why, fmt(a, "%s: a lingo is a file named for it, like notes.lingo, its name lower case letters, digits, _ and -", file));
+  size_t fl = strlen(file), n = fl > 6 && !strcmp(file + fl - 6, ".lingo") ? fl - 6 : 0;
+  int good = n && n <= 64;   // lower case letters, digits, _ and -, neither of those two first or last
+  for (size_t i = 0; good && i < n; i++) good = (file[i] >= 'a' && file[i] <= 'z') || digit(file[i]) || ((file[i] == '_' || file[i] == '-') && i && i + 1 < n);
+  if (!good) return failed(why, fmt(a, "%s: a lingo is a file named for it, like notes.lingo, its name lower case letters, digits, _ and -", file));
+  val *name = v_text(a, file, n);
   if (is_text(name, "lingo")) return failed(why, fmt(a, "%s: lingo is the language's own name, for lingo(...)", file));
-  if (!code || code->k != V_TEXT) return failed(why, fmt(a, "%s: its code couldn't be read", file));
   cx *c = context(a, NULL);
   c->own = name->t.s;
   c->scan = 1;
@@ -1576,47 +936,30 @@ static val *listing(arena *a, const char *file, val *code, const char **why) {
   size_t top = 0, end;
   while (top < count && !trimmed(lines[top]).n) top++;
   for (end = top; end < count && comment(lines[end], &w);) end++;
-  val *out = v_rec(a), *groups = v_list(a), *phrases = v_list(a), *group = v_rec(a), *none = v_list(a);
+  val *out = v_rec(a), *phrases = v_list(a);
   rec_set(a, out, "name", name);
-  rec_set(a, out, "language", T(a, "1.0"));
   if (end > top) {
     const char *s = words_of(a, lines, top, end - 1)->t.s, *lead[] = { fmt(a, "%s - ", file), fmt(a, "%s - ", name->t.s) };
     for (int k = 0; k < 2; k++) if (!strncmp(s, lead[k], strlen(lead[k]))) s += strlen(lead[k]);
     rec_set(a, out, "about", T(a, s));
   }
-  rec_set(a, out, "runs", T(a, "lingo"));
-  rec_set(a, out, "shapes", v_rec(a));
-  list_push(a, none, T(a, "none"));
-  rec_set(a, group, "name", name);
-  rec_set(a, group, "needs", none);
-  rec_set(a, group, "pure", VBOOL(0));
-  list_push(a, groups, group);
-  rec_set(a, out, "groups", groups);
   for (size_t i = 0; i < fns->r.n; i++) {
     const char *fname = fns->r.key[i];
     size_t here = (size_t)rec_get(c->fn_lines, fname)->n - 1, first = here;
     while (first > 0 && comment(lines[first - 1], &w)) first--;
     val *given = rec_get(fns->r.v[i], "params"), *params = v_list(a), *ph = v_rec(a);
-    buf head = { 0 };
-    buf_fmt(&head, "%s(", fname);
     for (size_t k = 0; k < given->l.n; k++) {
-      val *p = v_rec(a), *d = at(given->l.v[k], 1) ? plain(a, at(given->l.v[k], 1)) : NULL;
-      if (at(given->l.v[k], 1) && !d) d = NOTHING;   // worked out as it runs, like o={a: 1}: nothing in its listing
+      // A default worked out as it runs, like o={a: 1}, is nothing in its listing, and -2 is its number.
+      val *p = v_rec(a), *d = at(given->l.v[k], 1);
+      if (tagged(d, "neg") && at(d, 1)->k == V_NUM) d = v_num(a, -at(d, 1)->n);
+      else if (d && d->k == V_LIST) d = NOTHING;
       rec_set(a, p, "name", given->l.v[k]->l.v[0]);
-      buf_fmt(&head, "%s%s", k ? ", " : "", given->l.v[k]->l.v[0]->t.s);
-      if (d) { rec_set(a, p, "default", d); buf_chr(&head, '='); if (d->k == V_NOTHING) buf_str(&head, "nothing"); else buf_json(&head, d); }
+      if (d) rec_set(a, p, "default", d);
       list_push(a, params, p);
     }
-    buf_chr(&head, ')');
     rec_set(a, ph, "id", T(a, fmt(a, "%s.%s", name->t.s, fname)));
-    rec_set(a, ph, "group", name);
     rec_set(a, ph, "params", params);
-    rec_set(a, ph, "needs", v_copy(a, none));
-    rec_set(a, ph, "pure", VBOOL(0));
     rec_set(a, ph, "does", first < here && first != top ? words_of(a, lines, first, here - 1) : T(a, ""));
-    rec_set(a, ph, "head", T(a, buf_dup(a, &head)));
-    rec_set(a, ph, "inputSchema", input_of(a, params));
-    buf_free(&head);
     list_push(a, phrases, ph);
   }
   rec_set(a, out, "phrases", phrases);
@@ -1624,20 +967,7 @@ static val *listing(arena *a, const char *file, val *code, const char **why) {
   return out;
 }
 
-// 4. A phrase as a listing's line: its head, -> what it gives, [what it needs] when that isn't its group's, : what it does.
-// A Lingo lingo's function says what it gives in its comments, so it has no gives.
-void lingo_line(buf *b, val *p, const char *group_needs) {
-  buf needs = { 0 };
-  join_needs(&needs, rec_get(p, "needs"));
-  const char *gives = rec_get(p, "gives") ? rec_get(p, "gives")->t.s : "nothing", *does = rec_get(p, "does")->t.s;
-  buf_str(b, rec_get(p, "head")->t.s);
-  if (strcmp(gives, "nothing")) buf_fmt(b, " -> %s", gives);
-  if (strcmp(needs.s, group_needs)) buf_fmt(b, " [%s]", needs.s);
-  if (*does) buf_fmt(b, ": %s", does);
-  buf_free(&needs);
-}
-
-////////// 5. LINK //////////
+////////// 4. LINK //////////
 
 // Rewrites every expression by its node's shape, so a value that reads "call" is never taken for one. A hook gives a
 // node to use instead, or NULL to keep it.
@@ -1748,11 +1078,12 @@ static val *named(arena *a, val *read, val *names, const char *file) {
 // A Lingo lingo's code compiled against what it may call, every fn under its lasting name, like memo.recall, with its
 // lines as places in its file, for errors at run time.
 static val *compile_code(arena *a, val *lingo, val *visible, const char **message) {
-  const char *file = rec_get(lingo, "file")->t.s, *lname = rec_get(lingo, "name")->t.s, *why = NULL;
+  const char *file = rec_get(lingo, "file")->t.s, *lname = rec_get(lingo, "name")->t.s;
   val *code = rec_get(lingo, "code");
-  int bad = 0;
-  val *read = lingo_parse(a, code->t.s, code->t.len, visible, lname, &bad, &why);
-  if (!read) { *message = fmt(a, "%s line %d: %s", file, bad, why); return NULL; }
+  cx *c = context(a, visible);
+  c->own = lname;
+  val *read = parse_with(c, code->t.s, code->t.len);
+  if (!read) { *message = fmt(a, "%s line %d: %s", file, c->line, c->message); return NULL; }
   val *fns = rec_get(read, "fns"), *names = v_rec(a);
   for (size_t i = 0; i < fns->r.n; i++) rec_set(a, names, fns->r.key[i], T(a, fmt(a, "%s.%s", lname, fns->r.key[i])));
   return named(a, read, names, file);
@@ -1782,18 +1113,29 @@ static val *link_call(rw *r, val *name, val *args) {
   return NULL;
 }
 
-static val *collect(rw *r, val *id, val *args) { (void)args; push_unique(r->a, r->data, id); return NULL; }
-
-// 5.
-val *lingo_link(arena *a, val *program, val *stack) {
+// 4. A tool of one step, giving what fn gives for the tool's values, a0, a1 and on, in fn's order, with every function
+// written in Lingo it reaches pulled in, so only native phrases are left to call.
+val *lingo_call(arena *a, val *inst, const char *fn) {
+  val *lingos = rec_get(inst, "lingos"), *stack = rec_get(inst, "stack"), *own = NULL;
+  for (size_t i = 0; i < lingos->r.n && !own; i++) {
+    val *ps = rec_get(lingos->r.v[i], "phrases");
+    for (size_t k = 0; k < ps->l.n && !own; k++) if (is_text(rec_get(ps->l.v[k], "id"), fn)) own = ps->l.v[k];
+  }
+  if (!own) return NULL;
+  val *given = rec_get(own, "params"), *params = v_list(a), *args = v_rec(a), *step = v_list(a), *tool = v_rec(a);
+  for (size_t i = 0; i < given->l.n; i++) {
+    val *name = T(a, fmt(a, "a%zu", i)), *p = v_list(a);
+    list_push(a, p, name);
+    list_push(a, params, p);
+    rec_set(a, args, rec_get(given->l.v[i], "name")->t.s, mk(a, "var", 1, name));
+  }
   linking l = { stack, v_list(a) };
   rw r = { a, link_say, link_call, &l };
-  val *fns = v_rec(a), *lines = v_copy(a, rec_get(program, "lines")), *pfns = rec_get(program, "fns");
-  val *tool = v_copy(a, rec_get(program, "tool")), *done = rw_fn(&r, tool);
-  rec_set(a, tool, "params", rec_get(done, "params"));
-  rec_set(a, tool, "body", rec_get(done, "body"));
-  for (size_t i = 0; i < pfns->r.n; i++) rec_set(a, fns, pfns->r.key[i], rw_fn(&r, pfns->r.v[i]));
-  val *sfns = rec_get(stack, "fns"), *slines = rec_get(stack, "lines");
+  list_push(a, step, mk(a, "return", 1, mk(a, "say", 2, T(a, fn), args)));
+  rec_set(a, tool, "name", T(a, "call"));
+  rec_set(a, tool, "params", params);
+  rec_set(a, tool, "body", rw_body(&r, step));
+  val *fns = v_rec(a), *lines = v_rec(a), *sfns = rec_get(stack, "fns"), *slines = rec_get(stack, "lines"), *out = v_rec(a);
   while (l.want->l.n) {
     const char *k = l.want->l.v[--l.want->l.n]->t.s;
     if (rec_get(fns, k)) continue;
@@ -1808,31 +1150,22 @@ val *lingo_link(arena *a, val *program, val *stack) {
       if (!strncmp(path, "fn:", 3) && !strncmp(path + 3, k, kn) && path[3 + kn] == '/') rec_set(a, lines, path, slines->r.v[i]);
     }
   }
-  val *needs = v_list(a);
-  rw find = { a, collect, NULL, needs };
-  rw_fn(&find, tool);
-  for (size_t i = 0; i < fns->r.n; i++) rw_fn(&find, fns->r.v[i]);
-  val *out = v_rec(a);
-  for (size_t i = 0; i < program->r.n; i++) rec_set(a, out, program->r.key[i], program->r.v[i]);
   rec_set(a, out, "tool", tool);
   rec_set(a, out, "fns", fns);
-  rec_set(a, out, "needs", needs);
   rec_set(a, out, "lines", lines);
   return out;
 }
 
-////////// 6. INSTANCE //////////
+////////// 5. LOADING //////////
 
-typedef struct { val *native_needs, *fns, *seen, *found; double lingos; } reaching;   // lingos: its lingo(...) calls
+typedef struct { val *fns, *seen; double lingos; } reaching;   // lingos: its lingo(...) calls
 
 static void reach(arena *a, reaching *g, const char *key);
 
 static val *reach_say(rw *r, val *id, val *args) {
   reaching *g = r->data;
   (void)args;
-  val *needs = rec_get(g->native_needs, id->t.s);
   if (!strcmp(id->t.s, "lingo.run")) g->lingos++;
-  if (needs) for (size_t i = 0; i < needs->l.n; i++) push_unique(r->a, g->found, needs->l.v[i]);
   else if (rec_get(g->fns, id->t.s)) reach(r->a, g, id->t.s);
   return NULL;
 }
@@ -1844,8 +1177,7 @@ static val *reach_call(rw *r, val *name, val *args) {
   return NULL;
 }
 
-// What a stacked phrase really needs: every native phrase down every path, through helpers and other stacked phrases,
-// and how many lingo(...) calls it makes on the way, each one written counted once.
+// How many lingo(...) calls a stacked function makes, through every function it reaches, each one written counted once.
 static void reach(arena *a, reaching *g, const char *key) {
   if (rec_get(g->seen, key)) return;
   rec_set(a, g->seen, key, VBOOL(1));
@@ -1853,49 +1185,56 @@ static void reach(arena *a, reaching *g, const char *key) {
   rw_fn(&r, rec_get(g->fns, key));
 }
 
-static int text_order(const void *x, const void *y) { return strcmp((*(val *const *)x)->t.s, (*(val *const *)y)->t.s); }
-
-// natives: native manifests as text. stacked: [{file, code}] Lingo lingos, each compiled as it loads. Gives
-// the instance, or NULL with a message that starts with the file at fault.
-// 6.
+// 5.
 val *lingo_load(arena *a, val *natives, val *stacked, const char **message) {
-  val *lingos = v_rec(a), *native_list = v_list(a), *stacked_list = v_list(a);
-  for (size_t i = 0; natives && i < natives->l.n; i++) {
-    const char *why = NULL;
-    val *l = lingo_manifest(a, natives->l.v[i]->t.s, natives->l.v[i]->t.len, &why);
-    if (!l) { *message = fmt(a, "the device's own lingo: %s", why); return NULL; }
+  val *lingos = v_rec(a), *stacked_list = v_list(a);
+  for (size_t i = 0; i < natives->l.n; i++) {
+    val *l = natives->l.v[i];
     rec_set(a, l, "native", VBOOL(1));
-    list_push(a, native_list, l);
     rec_set(a, lingos, rec_get(l, "name")->t.s, l);
   }
-  for (size_t i = 0; stacked && i < stacked->l.n; i++) {
+  for (size_t i = 0; i < stacked->l.n; i++) {
     val *file = rec_get(stacked->l.v[i], "file");
-    if (!file || file->k != V_TEXT) { *message = "each Lingo lingo is given as {file, code}, like {file: \"memo.lingo\", code}"; return NULL; }
     val *l = listing(a, file->t.s, rec_get(stacked->l.v[i], "code"), message), *name = l ? rec_get(l, "name") : NULL;
     if (!l) return NULL;
-    // Never over one of the device's own lingos or their groups, like windows' input, which it would hide.
-    for (size_t k = 0; k < native_list->l.n; k++) {
-      val *n = native_list->l.v[k], *gs = rec_get(n, "groups");
-      int taken = !strcmp(rec_get(n, "name")->t.s, name->t.s);
-      for (size_t m = 0; m < gs->l.n && !taken; m++) taken = !strcmp(rec_get(gs->l.v[m], "name")->t.s, name->t.s);
-      if (taken) { *message = fmt(a, "%s: %s is already a part of %s, this device's own lingo", file->t.s, name->t.s, rec_get(n, "name")->t.s); return NULL; }
+    // Never over one of the computer's native lingos or their groups, like windows' input, which it would hide.
+    for (size_t k = 0; k < natives->l.n; k++) {
+      val *n = natives->l.v[k], *ps = rec_get(n, "phrases");
+      int taken = is_text(rec_get(n, "name"), name->t.s);
+      for (size_t m = 0; m < ps->l.n && !taken; m++) {
+        const char *id = rec_get(ps->l.v[m], "id")->t.s;
+        taken = strlen(id) > name->t.len && !strncmp(id, name->t.s, name->t.len) && id[name->t.len] == '.';
+      }
+      if (taken) { *message = fmt(a, "%s: %s is already a part of %s, this computer's own lingo", file->t.s, name->t.s, rec_get(n, "name")->t.s); return NULL; }
     }
     rec_set(a, l, "file", file);
     rec_set(a, l, "code", rec_get(stacked->l.v[i], "code"));
     list_push(a, stacked_list, l);
-    rec_set(a, lingos, rec_get(l, "name")->t.s, l);
+    rec_set(a, lingos, name->t.s, l);
   }
 
   // Each is compiled against every phrase here: the native lingos', core's among them, and every Lingo lingo's in this
-  // lingos folder, so one is called by its dotted name, like text.slug(title). Its lingo(...) calls are lingo.run, and its
-  // use(...) calls lingo.use, made as it runs.
+  // lingos folder, so one is called by its dotted name, like text.slug(title).
   val *stack = v_rec(a), *sphrases = v_rec(a), *sfns = v_rec(a), *slines = v_rec(a), *visible = v_list(a);
   rec_set(a, stack, "phrases", sphrases);
   rec_set(a, stack, "fns", sfns);
   rec_set(a, stack, "lines", slines);
   for (size_t i = 0; i < lingos->r.n; i++) {
     val *theirs = rec_get(lingos->r.v[i], "phrases");
-    for (size_t k = 0; k < theirs->l.n; k++) list_push(a, visible, theirs->l.v[k]);
+    for (size_t k = 0; k < theirs->l.n; k++) {
+      // Its values as an inputSchema, those with no default required.
+      val *p = theirs->l.v[k], *params = rec_get(p, "params"), *schema = v_rec(a), *props = v_rec(a), *required = v_list(a);
+      for (size_t m = 0; m < params->l.n; m++) {
+        val *one = v_rec(a), *d = rec_get(params->l.v[m], "default"), *pn = rec_get(params->l.v[m], "name");
+        if (d) rec_set(a, one, "default", d); else list_push(a, required, pn);
+        rec_set(a, props, pn->t.s, one);
+      }
+      rec_set(a, schema, "type", T(a, "object"));
+      rec_set(a, schema, "properties", props);
+      rec_set(a, schema, "required", required);
+      rec_set(a, p, "inputSchema", schema);
+      list_push(a, visible, p);
+    }
   }
   for (size_t i = 0; i < stacked_list->l.n; i++) {
     val *l = stacked_list->l.v[i], *own = rec_get(l, "phrases");
@@ -1906,22 +1245,11 @@ val *lingo_load(arena *a, val *natives, val *stacked, const char **message) {
     for (size_t k = 0; k < lines->r.n; k++) rec_set(a, slines, lines->r.key[k], lines->r.v[k]);
     for (size_t k = 0; k < own->l.n; k++) rec_set(a, sphrases, rec_get(own->l.v[k], "id")->t.s, rec_get(own->l.v[k], "params"));
   }
-
-  // A stacked phrase needs exactly what it reaches. Its file can't claim less, so these are what it shows and asks for.
-  val *native_needs = v_rec(a);
-  for (size_t i = 0; i < native_list->l.n; i++) {
-    val *phrases = rec_get(native_list->l.v[i], "phrases");
-    for (size_t k = 0; k < phrases->l.n; k++) rec_set(a, native_needs, rec_get(phrases->l.v[k], "id")->t.s, rec_get(phrases->l.v[k], "needs"));
-  }
   for (size_t i = 0; i < stacked_list->l.n; i++) {
     val *phrases = rec_get(stacked_list->l.v[i], "phrases");
     for (size_t k = 0; k < phrases->l.n; k++) {
-      reaching g = { native_needs, sfns, v_rec(a), v_list(a), 0 };
+      reaching g = { sfns, v_rec(a), 0 };
       reach(a, &g, rec_get(phrases->l.v[k], "id")->t.s);
-      val *needs = v_list(a);
-      for (size_t m = 0; m < g.found->l.n; m++) if (!is_text(g.found->l.v[m], "none")) list_push(a, needs, g.found->l.v[m]);
-      if (needs->l.n > 1) qsort(needs->l.v, needs->l.n, sizeof(val *), text_order);
-      rec_set(a, phrases->l.v[k], "needs", needs);
       rec_set(a, phrases->l.v[k], "lingos", v_num(a, g.lingos));
     }
   }
@@ -1929,186 +1257,6 @@ val *lingo_load(arena *a, val *natives, val *stacked, const char **message) {
   val *inst = v_rec(a);
   rec_set(a, inst, "lingos", lingos);
   rec_set(a, inst, "stack", stack);
-  rec_set(a, inst, "natives", native_list);
   return inst;
 }
 
-// Names are lingos, like notes, or groups of a native lingo, like std or fs. Groups chosen from the same lingo share
-// one entry, so a face names each lingo once. Gives [{lingo, groups}], or NULL.
-static val *chosen(arena *a, val *inst, val *names, const char **message) {
-  val *out = v_list(a), *lingos = rec_get(inst, "lingos"), *natives = rec_get(inst, "natives");
-  for (size_t i = 0; names && i < names->l.n; i++) {
-    const char *n = names->l.v[i]->t.s;
-    val *l = rec_get(lingos, n), *groups = v_list(a);
-    if (l) { val *gs = rec_get(l, "groups"); for (size_t k = 0; k < gs->l.n; k++) list_push(a, groups, rec_get(gs->l.v[k], "name")); }
-    else {
-      for (size_t k = 0; k < natives->l.n && !l; k++) {
-        val *gs = rec_get(natives->l.v[k], "groups");
-        for (size_t m = 0; m < gs->l.n; m++) if (is_text(rec_get(gs->l.v[m], "name"), n)) { l = natives->l.v[k]; list_push(a, groups, T(a, n)); break; }
-      }
-      if (!l) {
-        buf b = { 0 };
-        buf_fmt(&b, "There's no lingo or group called %s. There are: ", n);
-        for (size_t k = 0; k < lingos->r.n; k++) buf_fmt(&b, "%s%s", k ? ", " : "", lingos->r.key[k]);
-        for (size_t k = 0; k < natives->l.n; k++) {
-          val *gs = rec_get(natives->l.v[k], "groups");
-          for (size_t m = 0; m < gs->l.n; m++) if (!rec_get(lingos, rec_get(gs->l.v[m], "name")->t.s)) buf_fmt(&b, ", %s", rec_get(gs->l.v[m], "name")->t.s);
-        }
-        *message = buf_dup(a, &b);
-        buf_free(&b);
-        return NULL;
-      }
-    }
-    val *had = NULL;
-    for (size_t k = 0; k < out->l.n; k++) if (rec_get(out->l.v[k], "lingo") == l) had = out->l.v[k];
-    if (had) { val *hg = rec_get(had, "groups"); for (size_t k = 0; k < groups->l.n; k++) push_unique(a, hg, groups->l.v[k]); }
-    else {
-      val *e = v_rec(a), *gs = v_list(a);
-      for (size_t k = 0; k < groups->l.n; k++) list_push(a, gs, groups->l.v[k]);
-      rec_set(a, e, "lingo", l);
-      rec_set(a, e, "groups", gs);
-      list_push(a, out, e);
-    }
-  }
-  return out;
-}
-
-// Whether word stands alone in s, as a regular expression's \bword\b finds it. Shape names are all word characters.
-static int has_word(const char *s, const char *word) {
-  size_t n = strlen(word);
-  for (const char *q = strstr(s, word); q; q = strstr(q + 1, word))
-    if ((q == s || !word_char(q[-1])) && !word_char(q[n])) return 1;
-  return 0;
-}
-
-// What Onsay is shown for a task: only those lingos, without their code, with only the shapes they mention, and
-// every stacked phrase's real permissions.
-val *lingo_face(arena *a, val *inst, val *names, const char **message) {
-  val *picked = chosen(a, inst, names, message);
-  if (!picked) return NULL;
-  buf b = { 0 };
-  for (size_t i = 0; i < picked->l.n; i++) {
-    val *l = rec_get(picked->l.v[i], "lingo"), *groups = rec_get(picked->l.v[i], "groups");
-    val *all = rec_get(l, "phrases"), *shapes = rec_get(l, "shapes"), *lgroups = rec_get(l, "groups");
-    int native = rec_get(l, "native") != NULL;
-    if (i) buf_str(&b, "\n\n");
-    buf_fmt(&b, "lingo %s", rec_get(l, "name")->t.s);
-    if (rec_get(l, "version")) buf_fmt(&b, " %s", rec_get(l, "version")->t.s);
-    // A Lingo lingo's about is how its maker wants it used, so Onsay reads it with its phrases.
-    if (rec_get(l, "about")) buf_fmt(&b, "\n// %s", rec_get(l, "about")->t.s);
-    for (size_t s = 0; s < shapes->r.n; s++) {
-      int mentioned = 0;
-      for (size_t k = 0; k < all->l.n && !mentioned; k++) {
-        val *p = all->l.v[k];
-        if (!in_list(groups, rec_get(p, "group"))) continue;
-        mentioned = has_word(fmt(a, "%s %s", rec_get(p, "gives")->t.s, rec_get(p, "does")->t.s), shapes->r.key[s]);
-      }
-      if (mentioned) buf_fmt(&b, "\n%s = %s", shapes->r.key[s], shapes->r.v[s]->t.s);
-    }
-    for (size_t g = 0; g < lgroups->l.n; g++) {
-      val *grp = lgroups->l.v[g], *gname = rec_get(grp, "name");
-      if (!in_list(groups, gname)) continue;
-      // A native group keeps its own line, as written. A stacked group's line carries what most of its phrases really
-      // need, and only a phrase that differs shows its own.
-      buf gneeds = { 0 };
-      if (native) join_needs(&gneeds, rec_get(grp, "needs"));
-      else {
-        val *keys = v_list(a);
-        int counts[256] = { 0 };
-        for (size_t k = 0; k < all->l.n; k++) {
-          val *p = all->l.v[k];
-          if (!is_text(rec_get(p, "group"), gname->t.s)) continue;
-          buf one = { 0 };
-          join_needs(&one, rec_get(p, "needs"));
-          size_t m = 0;
-          while (m < keys->l.n && strcmp(keys->l.v[m]->t.s, one.s)) m++;
-          if (m == keys->l.n && m < 256) list_push(a, keys, T(a, one.s));
-          if (m < 256) counts[m]++;
-          buf_free(&one);
-        }
-        size_t best = 0;
-        for (size_t m = 1; m < keys->l.n; m++) if (counts[m] > counts[best]) best = m;
-        buf_str(&gneeds, keys->l.n ? keys->l.v[best]->t.s : "none");
-      }
-      buf_fmt(&b, "\n%s: %s%s", gname->t.s, gneeds.s, truthy(rec_get(grp, "pure")) ? ", pure" : "");
-      for (size_t k = 0; k < all->l.n; k++) {
-        val *p = all->l.v[k];
-        if (!is_text(rec_get(p, "group"), gname->t.s)) continue;
-        buf_chr(&b, '\n');
-        lingo_line(&b, p, gneeds.s);
-      }
-      buf_free(&gneeds);
-    }
-  }
-  val *out = v_text(a, b.s ? b.s : "", b.n);
-  buf_free(&b);
-  return out;
-}
-
-// Code may only call what was in its face, then is linked down to native phrases.
-val *lingo_prepare(arena *a, val *inst, const char *code, size_t n, val *names, int *line, const char **message) {
-  *line = 0;
-  val *picked = chosen(a, inst, names, message);
-  if (!picked) return NULL;
-  val *allowed = v_list(a);
-  for (size_t i = 0; i < picked->l.n; i++) {
-    val *all = rec_get(rec_get(picked->l.v[i], "lingo"), "phrases"), *groups = rec_get(picked->l.v[i], "groups");
-    for (size_t k = 0; k < all->l.n; k++) if (in_list(groups, rec_get(all->l.v[k], "group"))) list_push(a, allowed, all->l.v[k]);
-  }
-  cx *c = context(a, allowed);
-  val *program = parse_with(c, code, n);
-  if (!program) { *line = c->line; *message = c->message; return NULL; }
-  return lingo_link(a, program, rec_get(inst, "stack"));
-}
-
-////////// 7. REQUESTS //////////
-
-/* The whole compiler as one call, JSON in and JSON out:
-     {op:"manifest", text}                          -> {manifest} or {error:{message}}
-     {op:"parse", code, phrases}                    -> {program} or {error:{line, message}}
-     {op:"face", natives, stacked, names}           -> {face} or {error:{message}}
-     {op:"prepare", natives, stacked, names, code}  -> {program} or {error:{line?, message}}
-     {op:"read", manifest}                          -> {lingo} or {error:{message}}: a native or host lingo's lingo.json
-     {op:"read", file, code}                           read as the compiler holds it, or a Lingo lingo's listing made
-                                                       from its code */
-static void answer_error(buf *out, int line, const char *message) {
-  buf_str(out, "{\"error\":{");
-  if (line) buf_fmt(out, "\"line\":%d,", line);
-  buf_str(out, "\"message\":");
-  buf_json_str(out, message, strlen(message));
-  buf_str(out, "}}");
-}
-
-static void answer(buf *out, const char *key, val *v) {
-  buf_fmt(out, "{\"%s\":", key);
-  buf_json(out, v);
-  buf_chr(out, '}');
-}
-
-// 7.
-void lingo_request(const char *json, size_t n, buf *out) {
-  arena *a = arena_new();
-  const char *why = NULL;
-  int line = 0;
-  val *q = json_parse(a, json, n, &why);
-  if (why || q->k != V_REC) { answer_error(out, 0, fmt(a, "the request isn't JSON: %s", why ? why : "not a record")); arena_free(a); return; }
-  val *op = rec_get(q, "op"), *text = rec_get(q, "text"), *code = rec_get(q, "code");
-  if (is_text(op, "manifest") && text && text->k == V_TEXT) {
-    val *m = lingo_manifest(a, text->t.s, text->t.len, &why);
-    if (m) answer(out, "manifest", m); else answer_error(out, 0, why);
-  } else if (is_text(op, "parse") && code && code->k == V_TEXT) {
-    val *p = lingo_parse(a, code->t.s, code->t.len, rec_get(q, "phrases"), NULL, &line, &why);
-    if (p) answer(out, "program", p); else answer_error(out, line, why);
-  } else if (is_text(op, "face") || (is_text(op, "prepare") && code && code->k == V_TEXT)) {
-    val *inst = lingo_load(a, rec_get(q, "natives"), rec_get(q, "stacked"), &why), *done = NULL;
-    if (inst && is_text(op, "face")) done = lingo_face(a, inst, rec_get(q, "names"), &why);
-    if (inst && !is_text(op, "face")) done = lingo_prepare(a, inst, code->t.s, code->t.len, rec_get(q, "names"), &line, &why);
-    if (done) answer(out, is_text(op, "face") ? "face" : "program", done);
-    else answer_error(out, line, why);
-  } else if (is_text(op, "read")) {
-    val *file = rec_get(q, "file");
-    val *l = file && file->k == V_TEXT ? listing(a, file->t.s, code, &why) : lingo_read(a, rec_get(q, "manifest"), NULL, &why);
-    if (l) answer(out, "lingo", l); else answer_error(out, 0, why);
-  } else answer_error(out, 0, "the request needs an op: manifest, parse, face, prepare or read, with what that op takes");
-  arena_free(a);
-}

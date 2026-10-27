@@ -1,15 +1,18 @@
-// windows.c - the Windows lingo, a native DLL (windows.dll) the core loads: windows, controls, screen, mouse, keyboard and files.
+// windows.c - the Windows lingo, a native DLL (windows.dll) the core loads: windows, controls, files, the clipboard,
+// commands, notifications, Onsay's panel, input (the mouse and keyboard as a person uses them) and look (the screen read).
 // OCR and notifications have no C API, so they go through Windows PowerShell. Positions are physical desktop pixels.
+// What the app draws, Onsay's pointer, its rings and his panel, goes out as a line of JSON on stdout (show), which
+// onsay-desktop's Overlay.cs reads.
 //
 // 1. helpers                  text, records, boxes, paths, waiting, PowerShell
 // 2. window                   list, current, open, wait_for, focus, close, resize, move
 // 3. controls                 find, list, read, press, fill, toggle, pick, scroll, wait_for
-// 4. screen                   screenshot, see, read_text
-// 5. mouse/keyboard/pointer   Onsay's pointer (virtual or real), typing, rings, and his panel, a window showing a page
+// 4. screen                   a picture of it, and its words by OCR
+// 5. pointer and keys         Onsay's pointer (virtual or real), clicks, drags, the wheel, rings, his panel, and typing
 // 6. files                    read, write, add_to, exists, list, find, copy, move, delete, make_folder
 // 7. clipboard/commands/notify
-// 8. input                    mouse and keyboard the way a person uses them: words on screen, controls by name, places in a window
-// 9. look                     Onsay's eyes: a picture to see, and the screen read as text
+// 8. input                    the mouse and keyboard the way a person uses them: words on screen, controls by name, places in a window
+// 9. look                     the screen read as text, and a picture of it
 // 10. lingo_phrases()         -> every phrase joined to its function, called by the core on load
 #define COBJMACROS
 #include <initguid.h>
@@ -719,53 +722,12 @@ static val *ui_wait(run *r, val **a) {
 
 ////////// 4. SCREEN //////////
 
-/* grab(): a picture of a window, or the main screen when win is nothing, saved in ~/Onsay/shots.
-     box    nothing, or {x,y,w,h} in the window's pixels: only that part is kept
-     most   0, or the longest side allowed: shrunk to fit
-     jpeg   JPEG for a model to look at, otherwise lossless PNG
-     marks  nothing, or numbered boxes to draw first (draw_marks)
-   shot: the file, the part's place on screen, the window's corner, and the shrink factor k. */
-typedef struct { val *path; int x, y, w, h, wx, wy; double k; } shot;
+/* grab(): a picture of a window, or the main screen when win is nothing, saved as a PNG in ~/Onsay/shots. box is
+   nothing, or {x,y,w,h} in the window's pixels: only that part is kept. Gives the file, and the part's place on screen. */
+typedef struct { val *path; int x, y, w, h; } shot;
 
-// Numbered boxes {id,x,y,w,h} in the unshrunk picture's pixels, so a model can name a thing by number. Labels are sized
-// to stay readable after shrinking by k.
-static void draw_marks(HDC dc, val *marks, double k) {
-  static const COLORREF colours[] = { RGB(230, 25, 75), RGB(0, 130, 200), RGB(60, 180, 75), RGB(245, 130, 48), RGB(145, 30, 180), RGB(0, 128, 128) };
-  int px = (int)(11 / k + 0.5), thick = (int)(1.5 / k + 0.5);
-  HFONT font = CreateFontW(-px, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
-  HGDIOBJ was_font = SelectObject(dc, font), was_brush = SelectObject(dc, GetStockObject(NULL_BRUSH));
-  SetBkMode(dc, TRANSPARENT);
-  SetTextColor(dc, RGB(255, 255, 255));
-  for (size_t i = 0; i < marks->l.n; i++) {
-    val *m = marks->l.v[i], *v[5] = { rec_get(m, "id"), rec_get(m, "x"), rec_get(m, "y"), rec_get(m, "w"), rec_get(m, "h") };
-    int ok = m->k == V_REC;
-    for (int j = 0; ok && j < 5; j++) ok = v[j] && v[j]->k == V_NUM;
-    if (!ok) continue;
-    int x = (int)v[1]->n, y = (int)v[2]->n, w = (int)v[3]->n, h = (int)v[4]->n;
-    COLORREF c = colours[(size_t)v[0]->n % (sizeof colours / sizeof *colours)];
-    HPEN pen = CreatePen(PS_SOLID, thick < 1 ? 1 : thick, c);
-    HGDIOBJ was_pen = SelectObject(dc, pen);
-    Rectangle(dc, x, y, x + w, y + h);
-    wchar_t label[16];
-    int n = swprintf(label, 16, L"%d", (int)v[0]->n);
-    SIZE size;
-    GetTextExtentPoint32W(dc, label, n, &size);
-    RECT tag = { x, y - size.cy - 2, x + size.cx + 6, y };
-    if (tag.top < 0) OffsetRect(&tag, 0, size.cy + 2);   // no room above: inside its top
-    HBRUSH fill = CreateSolidBrush(c);
-    FillRect(dc, &tag, fill);
-    DeleteObject(fill);
-    TextOutW(dc, tag.left + 3, tag.top + 1, label, n);
-    SelectObject(dc, was_pen);
-    DeleteObject(pen);
-  }
-  SelectObject(dc, was_brush);
-  SelectObject(dc, was_font);
-  DeleteObject(font);
-}
-
-static shot grab(run *r, val *win, val *box, double most, int jpeg, val *marks) {
-  HWND hwnd = win->k == V_NOTHING ? NULL : hwnd_of(r, win, "win");
+static shot grab(run *r, val *win, val *box) {
+  HWND hwnd = win->k == V_NOTHING ? NULL : hwnd_of(r, win, "window");
   RECT rc = { 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN) };
   if (hwnd) GetWindowRect(hwnd, &rc);
   int ww = rc.right - rc.left, wh = rc.bottom - rc.top;
@@ -781,16 +743,11 @@ static shot grab(run *r, val *win, val *box, double most, int jpeg, val *marks) 
     if (by + bh > wh) bh = wh - by;
     if (bw <= 0 || bh <= 0) fail(r, "phrase", "that box isn't inside the window");
   }
-  double k = most > 0 && (bw > most || bh > most) ? most / (bw > bh ? bw : bh) : 1;
-  UINT ow = (UINT)(bw * k + 0.5), oh = (UINT)(bh * k + 0.5);
-  if (!ow) ow = 1;
-  if (!oh) oh = 1;
 
   HDC screen = GetDC(NULL), mem = CreateCompatibleDC(screen);
   HBITMAP bmp = CreateCompatibleBitmap(screen, ww, wh);
   HGDIOBJ old = SelectObject(mem, bmp);
   if (!hwnd || !PrintWindow(hwnd, mem, 2)) BitBlt(mem, 0, 0, ww, wh, screen, rc.left, rc.top, SRCCOPY | CAPTUREBLT);   // 2 PW_RENDERFULLCONTENT
-  if (marks->k == V_LIST && marks->l.n) draw_marks(mem, marks, k);
   SelectObject(mem, old);
 
   wchar_t *home = NULL, folder[MAX_PATH], file[MAX_PATH];
@@ -800,15 +757,13 @@ static shot grab(run *r, val *win, val *box, double most, int jpeg, val *marks) 
   SHCreateDirectoryExW(NULL, folder, NULL);
   SYSTEMTIME t;
   GetLocalTime(&t);
-  _snwprintf(file, MAX_PATH, L"%ls\\%04d%02d%02d-%02d%02d%02d-%03d.%ls", folder, t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond,
-             t.wMilliseconds, jpeg ? L"jpg" : L"png");
+  _snwprintf(file, MAX_PATH, L"%ls\\%04d%02d%02d-%02d%02d%02d-%03d.png", folder, t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond, t.wMilliseconds);
 
-  // Window bitmap, clipped to box, scaled, encoded to file.
+  // Window bitmap, clipped to box, encoded to file.
   CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
   IWICImagingFactory *wic = NULL;
   IWICBitmap *pic = NULL;
   IWICBitmapClipper *clip = NULL;
-  IWICBitmapScaler *scale = NULL;
   IWICStream *stream = NULL;
   IWICBitmapEncoder *enc = NULL;
   IWICBitmapFrameEncode *frame = NULL;
@@ -819,24 +774,21 @@ static shot grab(run *r, val *win, val *box, double most, int jpeg, val *marks) 
   if (SUCCEEDED(ok)) ok = IWICImagingFactory_CreateBitmapFromHBITMAP(wic, bmp, NULL, WICBitmapIgnoreAlpha, &pic);
   if (SUCCEEDED(ok)) ok = IWICImagingFactory_CreateBitmapClipper(wic, &clip);
   if (SUCCEEDED(ok)) ok = IWICBitmapClipper_Initialize(clip, (IWICBitmapSource *)pic, &part);
-  if (SUCCEEDED(ok)) ok = IWICImagingFactory_CreateBitmapScaler(wic, &scale);
-  if (SUCCEEDED(ok)) ok = IWICBitmapScaler_Initialize(scale, (IWICBitmapSource *)clip, ow, oh, WICBitmapInterpolationModeFant);
   if (SUCCEEDED(ok)) ok = IWICImagingFactory_CreateStream(wic, &stream);
   if (SUCCEEDED(ok)) ok = IWICStream_InitializeFromFilename(stream, file, GENERIC_WRITE);
-  if (SUCCEEDED(ok)) ok = IWICImagingFactory_CreateEncoder(wic, jpeg ? &GUID_ContainerFormatJpeg : &GUID_ContainerFormatPng, NULL, &enc);
+  if (SUCCEEDED(ok)) ok = IWICImagingFactory_CreateEncoder(wic, &GUID_ContainerFormatPng, NULL, &enc);
   if (SUCCEEDED(ok)) ok = IWICBitmapEncoder_Initialize(enc, (IStream *)stream, WICBitmapEncoderNoCache);
   if (SUCCEEDED(ok)) ok = IWICBitmapEncoder_CreateNewFrame(enc, &frame, &props);
   if (SUCCEEDED(ok)) ok = IWICBitmapFrameEncode_Initialize(frame, props);
-  if (SUCCEEDED(ok)) ok = IWICBitmapFrameEncode_SetSize(frame, ow, oh);
+  if (SUCCEEDED(ok)) ok = IWICBitmapFrameEncode_SetSize(frame, (UINT)bw, (UINT)bh);
   if (SUCCEEDED(ok)) ok = IWICBitmapFrameEncode_SetPixelFormat(frame, &format);
-  if (SUCCEEDED(ok)) ok = IWICBitmapFrameEncode_WriteSource(frame, (IWICBitmapSource *)scale, NULL);
+  if (SUCCEEDED(ok)) ok = IWICBitmapFrameEncode_WriteSource(frame, (IWICBitmapSource *)clip, NULL);
   if (SUCCEEDED(ok)) ok = IWICBitmapFrameEncode_Commit(frame);
   if (SUCCEEDED(ok)) ok = IWICBitmapEncoder_Commit(enc);
   if (props) IPropertyBag2_Release(props);
   if (frame) IWICBitmapFrameEncode_Release(frame);
   if (enc) IWICBitmapEncoder_Release(enc);
   if (stream) IWICStream_Release(stream);
-  if (scale) IWICBitmapScaler_Release(scale);
   if (clip) IWICBitmapClipper_Release(clip);
   if (pic) IWICBitmap_Release(pic);
   if (wic) IWICImagingFactory_Release(wic);
@@ -844,11 +796,11 @@ static shot grab(run *r, val *win, val *box, double most, int jpeg, val *marks) 
   DeleteDC(mem);
   ReleaseDC(NULL, screen);
   if (FAILED(ok)) fail(r, "phrase", "the picture couldn't be saved");
-  return (shot){ wtext(r, file, -1), rc.left + bx, rc.top + by, bw, bh, rc.left, rc.top, k };
+  return (shot){ wtext(r, file, -1), rc.left + bx, rc.top + by, bw, bh };
 }
 
-static val *screen_shot(run *r, val **a) {
-  shot s = grab(r, a[0], a[1], 0, 0, NOTHING);
+static val *look_screenshot(run *r, val **a) {
+  shot s = grab(r, a[0], a[1]);
   val *out = v_rec(r->a);
   put(r, out, "path", s.path);
   put_num(r, out, "x", s.x);
@@ -858,53 +810,9 @@ static val *screen_shot(run *r, val **a) {
   return out;
 }
 
-static void base64(buf *out, const unsigned char *p, size_t n) {
-  static const char abc[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  for (size_t i = 0; i < n; i += 3) {
-    unsigned v = (unsigned)p[i] << 16 | (i + 1 < n ? (unsigned)p[i + 1] << 8 : 0) | (i + 2 < n ? p[i + 2] : 0);
-    char c[4] = { abc[v >> 18 & 63], abc[v >> 12 & 63], i + 1 < n ? abc[v >> 6 & 63] : '=', i + 2 < n ? abc[v & 63] : '=' };
-    buf_add(out, c, 4);
-  }
-}
-
-// A picture that goes back with the program's result, for the caller to look at. at/w/h are in the window's pixels when a window
-// is given (as input.click_in takes them), screen pixels otherwise.
-static val *screen_see(run *r, val **a) {
-  shot s = grab(r, a[0], a[2], a[3]->k == V_NUM ? a[3]->n : 1280, 1, a[4]);
-  buf bytes = { 0 }, data = { 0 };
-  int read = pl_read(s.path->t.s, &bytes);
-  wchar_t *w = win_wide(s.path->t.s);
-  DeleteFileW(w);
-  free(w);
-  if (!read) fail(r, "phrase", "the picture couldn't be read back");
-  base64(&data, (unsigned char *)bytes.s, bytes.n);
-  buf_free(&bytes);
-  int inside = a[0]->k != V_NOTHING;
-  val *p = v_rec(r->a), *at = v_list(r->a), *title = inside && a[0]->k == V_REC ? rec_get(a[0], "title") : NULL;
-  put(r, p, "data", v_text(r->a, data.s, data.n));
-  buf_free(&data);
-  put(r, p, "mime", v_cstr(r->a, "image/jpeg"));
-  put(r, p, "ask", a[1]->k == V_NOTHING ? v_cstr(r->a, "") : v_cstr(r->a, str(r, a[1])));
-  put(r, p, "of", title ? title : v_cstr(r->a, inside ? "a window" : "the whole screen"));
-  list_push(r->a, at, v_num(r->a, s.x - (inside ? s.wx : 0)));
-  list_push(r->a, at, v_num(r->a, s.y - (inside ? s.wy : 0)));
-  put(r, p, "at", at);
-  put_num(r, p, "w", s.w);
-  put_num(r, p, "h", s.h);
-  put(r, p, "inside", VBOOL(inside));
-  if (a[4]->k == V_LIST) put(r, p, "marks", a[4]);   // what is numbered on it, for him to read beside it
-  val *out = v_rec(r->a);
-  put_num(r, out, "picture", picture(r, p));
-  put_num(r, out, "x", s.x);
-  put_num(r, out, "y", s.y);
-  put_num(r, out, "w", s.w);
-  put_num(r, out, "h", s.h);
-  return out;
-}
-
-// Windows' own OCR, one entry per line, placed on the screen.
-static val *screen_read(run *r, val **a) {
-  shot taken = grab(r, a[0], NOTHING, 0, 0, NOTHING);
+// Windows' own OCR of a window, or the main screen, one entry per line, placed on the screen.
+static val *screen_read(run *r, val *window) {
+  shot taken = grab(r, window, NOTHING);
   val *file = taken.path;
   int x = taken.x, y = taken.y;
   buf s = { 0 }, out = { 0 };
@@ -948,7 +856,7 @@ static val *screen_read(run *r, val **a) {
   return lines->k == V_LIST ? lines : NOTHING;
 }
 
-////////// 5. MOUSE, KEYBOARD, POINTER //////////
+////////// 5. POINTER AND KEYS //////////
 
 static void send_input(INPUT *in, int n) { SendInput((UINT)n, in, sizeof *in); }
 
@@ -1080,12 +988,6 @@ static void click(run *r, int x, int y, int right, int times) {
 }
 
 static int at(run *r, val *v) { return (int)num_of(r, v, NULL); }
-static val *mouse_click(run *r, val **a) { click(r, at(r, a[0]), at(r, a[1]), 0, 1); return NOTHING; }
-static val *mouse_double(run *r, val **a) { click(r, at(r, a[0]), at(r, a[1]), 0, 2); return NOTHING; }
-static val *mouse_right(run *r, val **a) { click(r, at(r, a[0]), at(r, a[1]), 1, 1); return NOTHING; }
-
-static void move_to(run *r, int x, int y, double seconds) { glide(r, x, y, seconds > 60 ? 60 : seconds); }
-static val *mouse_move(run *r, val **a) { move_to(r, at(r, a[0]), at(r, a[1]), num_or(a[2], 0)); return NOTHING; }
 
 // Held down at the start, carried to the end and let go. Virtually, the window under the start gets it all as messages.
 static void drag(run *r, int x1, int y1, int x2, int y2) {
@@ -1111,7 +1013,6 @@ static void drag(run *r, int x1, int y1, int x2, int y2) {
   PostMessageW(h, WM_LBUTTONUP, 0, MAKELPARAM(end.x, end.y));
 }
 
-static val *mouse_drag(run *r, val **a) { drag(r, at(r, a[0]), at(r, a[1]), at(r, a[2]), at(r, a[3])); return NOTHING; }
 
 static void wheel(run *r, int x, int y, int amount) {
   glide(r, x, y, 0);
@@ -1121,7 +1022,6 @@ static void wheel(run *r, int x, int y, int amount) {
   PostMessageW(h, WM_MOUSEWHEEL, MAKEWPARAM(0, (short)(amount * WHEEL_DELTA)), MAKELPARAM(x, y));   // a wheel's point is on the screen
 }
 
-static val *mouse_wheel(run *r, val **a) { wheel(r, at(r, a[0]), at(r, a[1]), at(r, a[2])); return NOTHING; }
 
 static val *mouse_mode(run *r, val **a) {
   if (a[0]->k != V_NOTHING) {
@@ -1142,7 +1042,7 @@ static void ring(run *r, box where, val *say, double seconds) {
   show(&b);
 }
 
-static val *show_point(run *r, val **a) {
+static val *input_point_at(run *r, val **a) {
   ring(r, (box){ at(r, a[0]), at(r, a[1]), at(r, a[2]), at(r, a[3]), NOTHING }, a[4], num_or(a[5], 10));
   return NOTHING;
 }
@@ -1225,8 +1125,6 @@ static void press_keys(run *r, const char *combo) {
   for (int i = n; i-- > 0;) key(keys[i], 1);
 }
 
-static val *keys_type(run *r, val **a) { type_text(r, str(r, a[0])); return NOTHING; }
-static val *keys_press(run *r, val **a) { press_keys(r, str(r, a[0])); return NOTHING; }
 
 ////////// 6. FILES //////////
 
@@ -1478,8 +1376,8 @@ static val *note_toast(run *r, val **a) {
 
 ////////// 8. INPUT //////////
 
-// window is one from window.list or window.wait_for, or nothing for the whole screen. Onsay's own pointer does the clicking, and
-// mouse.cursor says whether the real mouse is used.
+// window is one from window.list or window.wait_for, or nothing for the whole screen. Onsay's own pointer does the clicking,
+// and input.cursor says whether the real mouse is used.
 
 // The window given, or the front one that isn't Onsay's own chat.
 static val *front(run *r, val *window) {
@@ -1500,7 +1398,7 @@ static long words_at(run *r, val *text, const wchar_t *want, size_t *n) {
 // The box of the nth place the words show on screen, by OCR. OCR gives whole lines, so the box is cut from its line by
 // how much of the line comes before the words. 0 when they aren't there, or with must a failure.
 static int spot(run *r, val *words, val *window, double nth, int must, box *out) {
-  val *lines = screen_read(r, &window);
+  val *lines = screen_read(r, window);
   wchar_t *want = lowered(r, words);
   size_t wn = wcslen(want), n;
   int seen = 0;
@@ -1579,7 +1477,10 @@ static val *input_type_lines(run *r, val **a) {
   return NOTHING;
 }
 
-static val *input_glide_click(run *r, val **a) { mouse_move(r, a); return mouse_click(r, a); }
+static val *input_type(run *r, val **a) {
+  type_text(r, str(r, a[0]));
+  return NOTHING;
+}
 
 static val *input_scroll_to_text(run *r, val **a) {
   box b;
@@ -1622,15 +1523,23 @@ static val *input_point_on(run *r, val **a) {
   return c;
 }
 
-// The window as it is now, looked up again each time so a place in it stays put. window may be a match like {app}.
+// The window as it is now, looked up again each time so a place in it stays put. window may be a match like {app}, or
+// nothing for the main screen.
 static val *now(run *r, val *window) {
+  if (window->k == V_NOTHING) {
+    val *screen = v_rec(r->a);
+    put_num(r, screen, "x", 0), put_num(r, screen, "y", 0);
+    put_num(r, screen, "w", GetSystemMetrics(SM_CXSCREEN)), put_num(r, screen, "h", GetSystemMetrics(SM_CYSCREEN));
+    return screen;
+  }
   if ((window->k == V_REC ? part(window, "id") : window)->k == V_NOTHING) return win_wait(r, (val *[]){ window, v_num(r->a, 5) });
   return window_rec(r, hwnd_of(r, window, "window"));
 }
 
-// The window as it is now, restored and in front, ready to be pressed.
+// The window as it is now, restored and in front, ready to be pressed. The screen as it is.
 static val *ready(run *r, val *window) {
   val *w = now(r, window);
+  if (window->k == V_NOTHING) return w;
   HWND h = hwnd_of(r, w, "window");
   if (IsIconic(h)) { ShowWindow(h, SW_RESTORE); nap(r, 0.25); w = window_rec(r, h); }
   if (h != GetForegroundWindow()) { win_focus(r, &w); nap(r, 0.15); }
@@ -1668,7 +1577,7 @@ static val *input_click_in(run *r, val **a) {
 
 static val *input_move_in(run *r, val **a) {
   POINT p = place(r, ready(r, a[0]), a[1], a[2]);
-  move_to(r, p.x, p.y, num_or(a[3], 0));
+  glide(r, p.x, p.y, num_or(a[3], 0));
   return point_val(r, p);
 }
 
@@ -1689,7 +1598,7 @@ static val *input_where_in(run *r, val **a) { return point_val(r, place(r, now(r
 
 ////////// 9. LOOK //////////
 
-// Given no window, controls are the front window's, and words and pictures the whole screen's.
+// Given no window, controls are the front window's, and words the whole screen's.
 
 static const char *const UNMARKED[] = { "pane", "group", "window", "document", "table", "list", "menu", "text", "tree", "tool bar",
                                         "status bar", "menu bar", "title bar", "scroll bar", NULL };
@@ -1788,7 +1697,7 @@ static void by_order(mark *m, size_t n) {
 
 static val *marked(run *r, val *window, val *area) {
   int whole = window->k == V_NOTHING;
-  val *w = front(r, window), *controls = find(r, hwnd_of(r, w, "window"), NULL, 400), *lines = screen_read(r, &window);
+  val *w = front(r, window), *controls = find(r, hwnd_of(r, w, "window"), NULL, 400), *lines = screen_read(r, window);
   box wb = box_of(r, w);
   double ox = whole ? 0 : wb.x, oy = whole ? 0 : wb.y;
   size_t n = 0, count = lines->k == V_LIST ? lines->l.n : 0;
@@ -1842,12 +1751,6 @@ static val *marked(run *r, val *window, val *area) {
   return out;
 }
 
-// Marks are drawn on a whole window, where they help to click, but not on a box, which is for reading, unless marks says.
-static val *look_see(run *r, val **a) {
-  int draw = a[3]->k != V_NOTHING ? truthy(a[3]) : a[2]->k == V_NOTHING;
-  return screen_see(r, (val *[]){ a[0], a[1], a[2], v_num(r->a, 1280), draw ? marked(r, a[0], a[2]) : NOTHING });
-}
-
 static val *look_elements(run *r, val **a) { return marked(r, a[0], a[1]); }
 
 static val *look_overview(run *r, val **a) {
@@ -1869,7 +1772,7 @@ static val *look_overview(run *r, val **a) {
 static val *look_focused(run *r, val **a) { return focus_in(controls_of(r, a[0])); }
 
 static val *look_lines(run *r, val **a) {
-  val *lines = screen_read(r, a), *out = v_list(r->a);
+  val *lines = screen_read(r, a[0]), *out = v_list(r->a);
   for (size_t i = 0; lines->k == V_LIST && i < lines->l.n; i++) list_push(r->a, out, part(lines->l.v[i], "text"));
   return out;
 }
@@ -1891,7 +1794,7 @@ static val *look_fields(run *r, val **a) { return able(r, controls_of(r, a[0]), 
 
 // The other lines within distance of the first with the words in it, closest first, the first seen first where two tie.
 static val *look_near(run *r, val **a) {
-  val *all = screen_read(r, &a[1]), *with = lines_with(r, a[0], all), *out = v_list(r->a);
+  val *all = screen_read(r, a[1]), *with = lines_with(r, a[0], all), *out = v_list(r->a);
   if (!with->l.n) return out;
   double most = num_of(r, a[2], "distance");
   box here = box_of(r, with->l.v[0]);
@@ -1908,7 +1811,7 @@ static val *look_near(run *r, val **a) {
   return out;
 }
 
-static val *look_locate(run *r, val **a) { return lines_with(r, a[0], screen_read(r, &a[1])); }
+static val *look_locate(run *r, val **a) { return lines_with(r, a[0], screen_read(r, a[1])); }
 
 static val *look_open_windows(run *r, val **a) {
   val *all = win_list(r, a), *out = v_list(r->a);
@@ -1924,149 +1827,112 @@ static val *look_open_windows(run *r, val **a) {
 
 ////////// 10. LINGO_PHRASES //////////
 
+// What windows, controls and files are, written out where a phrase gives one.
+#define WINDOW "{id,app,title,x,y,w,h,focused,minimized}"
+#define CONTROL "{id,role,name,value,x,y,w,h,enabled,focused,can}"
+#define FILE_ "{name,path,size,folder,changed}"
+
 LINGO_ENTRY void lingo_phrases(void) {
   // Every position is a real pixel, on every monitor, whatever its scale.
   typedef BOOL(WINAPI * aware_fn)(HANDLE);
   aware_fn aware = (aware_fn)(void *)GetProcAddress(GetModuleHandleW(L"user32.dll"), "SetProcessDpiAwarenessContext");
   if (aware) aware((HANDLE)-4);   // per monitor aware, version 2
 
-  shape_add("window", "{id,app,title,x,y,w,h,focused,minimized}");
-  shape_add("control", "{id,role,name,value,x,y,w,h,enabled,focused,can}");
-  shape_add("file", "{name,path,size,folder,changed}");
+  phrase_add("window", "screen.read", "list() -> [" WINDOW "]: front to back", win_list);
+  phrase_add("window", "screen.read", "current() -> " WINDOW ": the one in front, never Onsay's own chat", win_front);
+  phrase_add("window", "screen.act", "open(target) -> " WINDOW "?: an app, file, folder or web address", win_open);
+  phrase_add("window", "screen.read", "wait_for(match, seconds=10) -> " WINDOW ": match {app} or {title}, part of the text is enough", win_wait);
+  phrase_add("window", "screen.act", "focus(id)", win_focus);
+  phrase_add("window", "screen.act", "close(id)", win_close);
+  phrase_add("window", "screen.act", "resize(id, how): how is min, max or normal", win_size);
+  phrase_add("window", "screen.act", "move(id, x=nothing, y=nothing, w=nothing, h=nothing)", win_move);
 
-  group_add("window", "screen.read");
-  phrase_add("window", "screen.read", "list() -> [window]: front to back", win_list);
-  phrase_add("window", "screen.read", "current() -> window: the one in front, never Onsay's own chat", win_front);
-  phrase_add("window", "screen.act", "open(target) -> window? [screen.act]: an app, file, folder or web address", win_open);
-  phrase_add("window", "screen.read", "wait_for(match, seconds=10) -> window: match {app} or {title}, part of the text is enough", win_wait);
-  phrase_add("window", "screen.act", "focus(id) [screen.act]", win_focus);
-  phrase_add("window", "screen.act", "close(id) [screen.act]", win_close);
-  phrase_add("window", "screen.act", "resize(id, how) [screen.act]: how is min, max or normal", win_size);
-  phrase_add("window", "screen.act", "move(id, x=nothing, y=nothing, w=nothing, h=nothing) [screen.act]", win_move);
-
-  group_add("controls", "screen.read");
-  phrase_add("controls", "screen.read", "find(win, match) -> [control]: match {name,role,value}, part of the text is enough", ui_find);
-  phrase_add("controls", "screen.read", "list(win, max=80) -> [control]", ui_all);
+  phrase_add("controls", "screen.read", "find(win, match) -> [" CONTROL "]: match {name,role,value}, part of the text is enough", ui_find);
+  phrase_add("controls", "screen.read", "list(win, max=80) -> [" CONTROL "]", ui_all);
   phrase_add("controls", "screen.read", "read(win) -> text: every word of a page or document", ui_text);
-  phrase_add("controls", "screen.act", "press(control) [screen.act]", ui_press);
-  phrase_add("controls", "screen.act", "fill(control, text) [screen.act]: replaces its text", ui_fill);
-  phrase_add("controls", "screen.act", "toggle(control) [screen.act]", ui_toggle);
-  phrase_add("controls", "screen.act", "pick(control, option) [screen.act]: a dropdown or list option, by name", ui_choose);
-  phrase_add("controls", "screen.act", "scroll(control, amount) [screen.act]: positive is up", ui_scroll);
-  phrase_add("controls", "screen.read", "wait_for(win, match, seconds=10) -> control", ui_wait);
+  phrase_add("controls", "screen.act", "press(control)", ui_press);
+  phrase_add("controls", "screen.act", "fill(control, text): replaces its text", ui_fill);
+  phrase_add("controls", "screen.act", "toggle(control)", ui_toggle);
+  phrase_add("controls", "screen.act", "pick(control, option): a dropdown or list option, by name", ui_choose);
+  phrase_add("controls", "screen.act", "scroll(control, amount): positive is up", ui_scroll);
+  phrase_add("controls", "screen.read", "wait_for(win, match, seconds=10) -> " CONTROL, ui_wait);
 
-  group_add("screen", "screen.read");
-  phrase_add("screen", "screen.read", "screenshot(win=nothing, box=nothing) -> {path,x,y,w,h}: a picture of a window, or the main screen, "
-             "saved as a file. box {x,y,w,h} in the window's pixels keeps only that part", screen_shot);
-  phrase_add("screen", "screen.read", "see(win=nothing, ask=\"\", box=nothing, most=1280, marks=nothing) -> {picture,x,y,w,h}: shows you "
-             "a picture of a window, or the main screen, or box {x,y,w,h} in it. You see it yourself with your program's result, with ask "
-             "beside it to remind you what to look for, and how its places turn into the window's pixels for input.click_in. marks "
-             "[{id,x,y,w,h}] are drawn on it as numbered boxes, in the window's pixels", screen_see);
-  phrase_add("screen", "screen.read", "read_text(win=nothing) -> [{text,x,y,w,h}]: words on screen, by OCR", screen_read);
-
-  group_add("mouse", "screen.act");
-  phrase_add("mouse", "screen.act", "move(x, y, seconds=0): Onsay's own pointer glides there, at a hand's pace, or over seconds", mouse_move);
-  phrase_add("mouse", "screen.act", "click(x, y)", mouse_click);
-  phrase_add("mouse", "screen.act", "double_click(x, y)", mouse_double);
-  phrase_add("mouse", "screen.act", "right_click(x, y)", mouse_right);
-  phrase_add("mouse", "screen.act", "drag(x1, y1, x2, y2)", mouse_drag);
-  phrase_add("mouse", "screen.act", "scroll(x, y, amount): positive is up", mouse_wheel);
-  phrase_add("mouse", "none", "cursor(how=nothing) -> text [none]: virtual, the default, never touches the user's mouse: clicks press what is "
-             "there through Windows' accessibility, or are sent to its window, which browsers, games and some apps ignore. real "
-             "moves and clicks the real mouse, which works everywhere. Given how, it changes", mouse_mode);
-
-  group_add("keyboard", "screen.act");
-  phrase_add("keyboard", "screen.act", "type(text)", keys_type);
-  phrase_add("keyboard", "screen.act", "press(combo): like \"ctrl+s\"", keys_press);
-
-  group_add("files", "files.read");
   phrase_add("files", "files.read", "read(path) -> text", fs_read);
-  phrase_add("files", "files.write", "write(path, text) [files.write]: replaces it", fs_write);
-  phrase_add("files", "files.write", "add_to(path, text) [files.write]", fs_append);
+  phrase_add("files", "files.write", "write(path, text): replaces it", fs_write);
+  phrase_add("files", "files.write", "add_to(path, text)", fs_append);
   phrase_add("files", "files.read", "exists(path) -> bool", fs_exists);
-  phrase_add("files", "files.read", "list(folder, pattern=\"*\") -> [file]", fs_list);
-  phrase_add("files", "files.read", "find(folder, pattern=\"*\") -> [file]: every folder inside too", fs_find);
-  phrase_add("files", "files.write", "copy(from, to) [files.write]: into to if it is a folder", fs_copy);
-  phrase_add("files", "files.write", "move(from, to) [files.write]: into to if it is a folder", fs_move);
-  phrase_add("files", "files.write", "delete(path) [files.write]: to the Recycle Bin", fs_delete);
-  phrase_add("files", "files.write", "make_folder(path) [files.write]: makes it", fs_folder);
+  phrase_add("files", "files.read", "list(folder, pattern=\"*\") -> [" FILE_ "]", fs_list);
+  phrase_add("files", "files.read", "find(folder, pattern=\"*\") -> [" FILE_ "]: every folder inside too", fs_find);
+  phrase_add("files", "files.write", "copy(from, to): into to if it is a folder", fs_copy);
+  phrase_add("files", "files.write", "move(from, to): into to if it is a folder", fs_move);
+  phrase_add("files", "files.write", "delete(path): to the Recycle Bin", fs_delete);
+  phrase_add("files", "files.write", "make_folder(path): makes it", fs_folder);
 
-  group_add("clipboard", "screen.read");
   phrase_add("clipboard", "screen.read", "read() -> text", clip_get);
-  phrase_add("clipboard", "screen.act", "write(text) [screen.act]", clip_set);
+  phrase_add("clipboard", "screen.act", "write(text)", clip_set);
 
-  group_add("commands", "run");
   phrase_add("commands", "run", "run(command) -> {code,out}: Windows PowerShell", shell_run);
-  phrase_add("commands", "none", "running() -> [{pid,name,memory}] [none]: memory in MB", shell_processes);
+  phrase_add("commands", "none", "running() -> [{pid,name,memory}]: memory in MB", shell_processes);
   phrase_add("commands", "run", "stop(pid)", shell_stop);
 
-
-  group_add("notify", "none");
   phrase_add("notify", "none", "show(title, text)", note_toast);
 
-  group_add("pointer", "none");
-  phrase_add("pointer", "none", "show(x, y, w, h, say=\"\", seconds=10): a ring around that box, with Onsay beside it saying say", show_point);
-  phrase_add("pointer", "none", "hide(): takes the ring away", show_clear);
-
-  group_add("panel", "none");
   phrase_add("panel", "none", "show(html, title=\"\", width=480, height=360): draws a small rounded window of Onsay's own on screen, beside him, "
              "showing html: a page, a table, a chart, a picture or an answer laid out. It stays until hidden or the person closes it, and "
              "showing again replaces it. Scripts in it run, with no reach to this computer", panel_show);
   phrase_add("panel", "none", "hide(): takes the window away", panel_hide);
 
-  group_add("input", "screen.act, screen.read");
-  phrase_add("input", "none", "cursor(how=nothing) -> text [none]: how the pointer acts: virtual, the default, never touches the user's mouse, "
+  // input: the mouse and keyboard the way a person uses them. A window, where one is taken, may be nothing for the main
+  // screen.
+  phrase_add("input", "none", "cursor(how=nothing) -> text: how the pointer acts: virtual, the default, never touches the user's mouse, "
              "and its clicks may be ignored by browsers, games and some apps. real moves and clicks the real mouse and works everywhere. "
              "Given how, it changes until changed again", mouse_mode);
   phrase_add("input", "screen.act, screen.read", "click_text(words, window=nothing, nth=0) -> {x,y,text}: rings and clicks those words where "
              "they are on screen, read by OCR. nth picks a later one when they show more than once. Fails when they aren't there", input_click_text);
-  phrase_add("input", "screen.act, screen.read", "click_on(window, match) -> control: rings and clicks the first control in the window matching "
-             "{name,role,value}", input_click_on);
+  phrase_add("input", "screen.act, screen.read", "click_on(window, match) -> " CONTROL ": rings and clicks the first control in the window "
+             "matching {name,role,value}", input_click_on);
   phrase_add("input", "screen.act, screen.read", "type_into(window, match, text): clicks the control matching {name,role,value}, clears it and "
              "types text", input_type_into);
+  phrase_add("input", "screen.act", "type(text): types it where the cursor is, a new line as enter", input_type);
   phrase_add("input", "screen.act, screen.read", "paste(text): puts text where the cursor is through the clipboard, fast for long text, then "
              "gives the clipboard back what it had", input_paste);
-  phrase_add("input", "screen.act", "shortcut(combo, times=1, gap=0.1) [screen.act]: presses a combo like \"ctrl+s\", times over, gap seconds apart", input_shortcut);
-  phrase_add("input", "screen.act", "type_lines(lines) [screen.act]: types each line of a list, pressing enter after each", input_type_lines);
-  phrase_add("input", "screen.act", "move_and_click(x, y, seconds=0.3) [screen.act]: glides the pointer there over seconds, then clicks", input_glide_click);
+  phrase_add("input", "screen.act", "shortcut(combo, times=1, gap=0.1): presses a combo like \"ctrl+s\", times over, gap seconds apart", input_shortcut);
+  phrase_add("input", "screen.act", "type_lines(lines): types each line of a list, pressing enter after each", input_type_lines);
   phrase_add("input", "screen.act, screen.read", "scroll_to_text(words, window=nothing, tries=10) -> {x,y,text}?: scrolls down until those "
              "words are on screen and gives where they are, or nothing", input_scroll_to_text);
-  phrase_add("input", "screen.read", "wait_for_text(words, window=nothing, seconds=10) -> {x,y,text}? [screen.read]: waits until those words "
-             "show on screen and gives where they are, or nothing when time runs out", input_wait_for_text);
+  phrase_add("input", "screen.read", "wait_for_text(words, window=nothing, seconds=10) -> {x,y,text}?: waits until those words show on screen "
+             "and gives where they are, or nothing when time runs out", input_wait_for_text);
   phrase_add("input", "screen.act, screen.read", "copy_all(window) -> text: brings the window to the front, selects everything in it and copies "
              "it, and gives the text", input_copy_all);
-  phrase_add("input", "screen.read", "point_text(words, say=\"\", window=nothing, seconds=10) -> {x,y,w,h,text} [screen.read]: rings those words "
-             "on screen and has Onsay beside them say say, to show the user something. Clicks nothing", input_point_text);
-  phrase_add("input", "screen.read", "point_on(window, match, say=\"\", seconds=10) -> control [screen.read]: rings the control matching "
+  phrase_add("input", "screen.read", "point_text(words, say=\"\", window=nothing, seconds=10) -> {x,y,w,h,text}: rings those words on screen "
+             "and has Onsay beside them say say, to show the user something. Clicks nothing", input_point_text);
+  phrase_add("input", "screen.read", "point_on(window, match, say=\"\", seconds=10) -> " CONTROL ": rings the control matching "
              "{name,role,value} and has Onsay beside it say say. Clicks nothing", input_point_on);
-  phrase_add("input", "none", "stop_pointing() [none]: takes the ring away", show_clear);
+  phrase_add("input", "none", "point_at(x, y, w, h, say=\"\", seconds=10): rings that box on screen, in pixels, with Onsay beside it saying say",
+             input_point_at);
+  phrase_add("input", "none", "stop_pointing(): takes the ring away", show_clear);
   phrase_add("input", "screen.act, screen.read", "click_in(window, x, y, how=\"left\") -> {x,y}: clicks a place in a window, wherever the window "
              "is now: x, y from its top left in pixels, or between -1 and 1 a share of its size, 0.5 the middle, and below 0 back from its "
-             "right or bottom. how is left, double or right. window may be a match like {app}. It is brought to the front first", input_click_in);
-  phrase_add("input", "screen.act, screen.read", "move_in(window, x, y, seconds=0) -> {x,y}: moves the pointer to a place in a window, the same "
-             "way as click_in", input_move_in);
+             "right or bottom. how is left, double or right. window may be a match like {app}, brought to the front first", input_click_in);
+  phrase_add("input", "screen.act, screen.read", "move_in(window, x, y, seconds=0) -> {x,y}: glides the pointer to a place in a window, the "
+             "same way as click_in, at a hand's pace or over seconds", input_move_in);
   phrase_add("input", "screen.act, screen.read", "drag_in(window, x1, y1, x2, y2): drags from one place in a window to another, the same way as "
              "click_in", input_drag_in);
   phrase_add("input", "screen.act, screen.read", "scroll_in(window, amount, x=0.5, y=0.5) -> {x,y}: scrolls at a place in a window, the middle "
              "unless given, positive up", input_scroll_in);
-  phrase_add("input", "screen.read", "position_in(window, x, y) -> {x,y} [screen.read]: the place on screen of a place in a window, without "
-             "touching anything", input_where_in);
+  phrase_add("input", "screen.read", "position_in(window, x, y) -> {x,y}: the place on screen of a place in a window, without touching "
+             "anything", input_where_in);
 
-  group_add("look", "screen.read");
-  phrase_add("look", "screen.read", "see(window=nothing, ask=\"\", box=nothing, marks=nothing) -> {picture,x,y,w,h}: shows you a picture of a "
-             "window, or the whole screen, or box {x,y,w,h} in the window for a closer look. You see it yourself right after your program, "
-             "with ask beside it to remind you what you were looking for, and how a place in it turns into the window's pixels for "
-             "input.click_in. For what text and controls can't show: images, icons, games, boards, charts, layouts. marks: everything "
-             "elements finds drawn on it as numbered boxes and listed beside it with its place, so you can name a thing by its number. On for "
-             "a whole window, off for a box unless marks is true, so what you zoom in to read is clear. Look once, as wide as you need, and "
-             "write down what you see", look_see);
+  // look: the screen read as text, and a picture of it. With no window, controls are the front window's, and words the
+  // whole screen's.
+  phrase_add("look", "screen.read", "screenshot(window=nothing, box=nothing) -> {path,x,y,w,h}: a picture of a window, or the main screen, "
+             "saved as a PNG file. box {x,y,w,h} in the window's pixels keeps only that part", look_screenshot);
   phrase_add("look", "screen.read", "elements(window=nothing, box=nothing) -> [{id,kind,name,x,y,w,h}]: everything on screen that can be told "
-             "apart, numbered, without a picture: the controls Windows knows, buttons, links, boxes, tabs, checkboxes and icons, with their "
-             "names, and every line of text OCR reads. Places in the window's pixels for input.click_in, or the screen's when no window is "
-             "given. Faster and cheaper than see when you only need where things are", look_elements);
+             "apart, numbered: the controls Windows knows, buttons, links, boxes, tabs, checkboxes and icons, with their names, and every "
+             "line of text OCR reads. Places in the window's pixels for input.click_in, or the screen's when no window is given", look_elements);
   phrase_add("look", "screen.read", "overview(window=nothing) -> {app,title,focused,pressable,fields}: a window in brief: what it is, what has "
              "the keyboard, and the names of what can be pressed and typed in. The front window when none is given", look_overview);
-  phrase_add("look", "screen.read", "focused(window=nothing) -> control?: the control that has the keyboard now", look_focused);
+  phrase_add("look", "screen.read", "focused(window=nothing) -> " CONTROL "?: the control that has the keyboard now", look_focused);
   phrase_add("look", "screen.read", "page(window=nothing) -> text: every word of a window, from its own text, or read off the screen when it "
              "gives none", look_page);
   phrase_add("look", "screen.read", "lines(window=nothing) -> [text]: the lines of text on screen, top to bottom, read by OCR. The whole screen "

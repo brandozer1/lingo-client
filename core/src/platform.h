@@ -1,10 +1,10 @@
 // platform.h - everything the core needs from a device: porting the core is writing these for it, in UTF-8 throughout.
 //
-// 1. Time      the clock, sleeping, and a stop asked from outside
+// 1. Time      the clock and sleeping
 // 2. Threads   starting one, and a gate: a lock that can also wait to be woken
 // 3. Links     a WebSocket to Onsay
 // 4. Files     read, write, delete and list, for the core's own storage
-// 5. Device    what is around it, a native lingo's library, the host's phrases, and web requests
+// 5. Device    what is around it, a native lingo's library, and web requests going out
 // 6. Port      web requests coming in: a port to listen on, and each connection to it
 // The engine (core.c) only uses time, the gate, files and the device. Threads, links and the port are for host.c alone.
 // Native lingos may use all of it.
@@ -22,8 +22,6 @@ LINGO_SHARED
 
 double pl_now(void);               // seconds since 1970, with fractions
 void pl_sleep(double seconds);
-// 1 when a host that can't reach the core mid-job (a worker) was asked to stop it. Polled every 1024 steps.
-int pl_stopped(void);
 
 ////////// 2. THREADS //////////
 
@@ -64,15 +62,10 @@ void pl_context(buf *out);
 // A native lingo's library, like windows.dll, loaded and kept: its lingo_phrases, or NULL with why in error.
 lingo_entry pl_library(const char *path, buf *error);
 
-// The host: the program around the core, which runs a host lingo's phrases in its own language. pl_hosts is 1 when
-// there is one. pl_call runs a phrase by id with its values as a JSON list, putting {"value"} or {"error", "code"} in out.
-int pl_hosts(void);
-int pl_call(const char *id, const char *values, size_t n, buf *out);
-
-// http.send, answered as pl_call answers: its values [method, url, headers, body, timeout] as JSON, and {"value":
-// {status, headers, text}} or {"error"} in out. Redirects followed, and an answer over 4 MB, or not text, is an error.
-// A device makes the request itself (platform_win.c, platform_linux.c).
-int pl_http(const char *values, size_t n, buf *out);
+// One web request, for http.send: method a word in capitals, url whole with no #, headers a record of text, each a whole
+// line. Its answer, {status, headers, text}, headers a record by lower case name, redirects followed, or NULL with why in
+// error, in words. An answer over 4 MB, or not text, is an error too.
+val *pl_http(arena *a, const char *method, const char *url, val *headers, const char *body, size_t n, double seconds, buf *error);
 
 ////////// 6. PORT //////////
 

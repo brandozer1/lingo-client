@@ -41,8 +41,6 @@ void pl_sleep(double seconds) {
   while (nanosleep(&t, &t) && errno == EINTR) {}
 }
 
-int pl_stopped(void) { return 0; }   // host.c stops a job directly, from its receiver thread
-
 typedef struct { void (*fn)(void *); void *arg; } start;
 
 static void *begin(void *p) {
@@ -452,10 +450,6 @@ void pl_context(buf *out) {
   buf_chr(out, '}');
 }
 
-// The core runs as its own program here too, so its lingos are native libraries and it has no host lingos.
-int pl_hosts(void) { return 0; }
-int pl_call(const char *id, const char *values, size_t n, buf *out) { (void)id, (void)values, (void)n, (void)out; return 0; }
-
 // Never closed: its phrases are in the table from now on. The core is built with -rdynamic, so a library finds its words.
 lingo_entry pl_library(const char *path, buf *error) {
   void *m = dlopen(path, RTLD_NOW | RTLD_LOCAL);
@@ -469,26 +463,6 @@ lingo_entry pl_library(const char *path, buf *error) {
 ////////// 5. WEB //////////
 
 #define ROOM (4u << 20)   // the most an answer may be
-
-// The answer's headers, "Name: value" lines, as a record by lower case name. A name said twice has both, joined by ", ".
-static val *header_record(arena *a, const char *s) {
-  val *out = v_rec(a);
-  for (const char *end; *s; s = *end ? end + 2 : end) {
-    if (!(end = strstr(s, "\r\n"))) end = s + strlen(s);
-    const char *colon = memchr(s, ':', (size_t)(end - s)), *v = colon;
-    if (!colon || colon == s) continue;
-    while (++v < end && *v == ' ') {}
-    buf name = { 0 }, both = { 0 };
-    for (const char *c = s; c < colon; c++) buf_chr(&name, (char)(*c >= 'A' && *c <= 'Z' ? *c + 32 : *c));
-    val *had = rec_get(out, name.s);
-    if (had) { buf_add(&both, had->t.s, had->t.len); buf_str(&both, ", "); }
-    buf_add(&both, v, (size_t)(end - v));
-    rec_set(a, out, name.s, v_text(a, both.s, both.n));
-    buf_free(&name);
-    buf_free(&both);
-  }
-  return out;
-}
 
 // What curl hands over as it reads. The headers start again at each answer's status line, so only the last one's stay.
 static size_t got_text(char *s, size_t size, size_t n, void *to) {
@@ -504,39 +478,28 @@ static size_t got_header(char *s, size_t size, size_t n, void *to) {
   return size * n;
 }
 
-int pl_http(const char *values, size_t n, buf *out) {
+val *pl_http(arena *a, const char *method, const char *url, val *headers, const char *body, size_t n, double seconds, buf *error) {
   pthread_once(&curl_once, curl_load);
-  arena *a = arena_new();
-  const char *problem = NULL;
-  val *v = json_parse(a, values, n, &problem);
-  if (problem || v->k != V_LIST || v->l.n != 5) { arena_free(a); buf_str(out, "{\"error\":\"its values weren't the five it takes\"}"); return 1; }
-  val **x = v->l.v, *headers = x[2];
-  buf method = { 0 }, url = { 0 }, body = { 0 }, error = { 0 }, text = { 0 }, raw = { 0 };
-  buf_text(&method, x[0]), buf_text(&url, x[1]), buf_text(&body, x[3]);
-  buf_chr(&url, 0), buf_chr(&method, 0);   // so neither is ever empty of bytes
-  for (size_t i = 0; method.s[i]; i++) if (method.s[i] >= 'a' && method.s[i] <= 'z') method.s[i] -= 32;
-  if (strchr(url.s, '#')) *strchr(url.s, '#') = 0;   // the part after # is the page's own, never sent
-  long ms = x[4]->k == V_NUM && x[4]->n > 0 && x[4]->n < 3600 ? (long)(x[4]->n * 1000) : 30000, status = 0, yes = 1, most = 10;
+  buf text = { 0 }, raw = { 0 };
+  long status = 0, yes = 1, most = 10;
+  val *out = NULL;
+  if (!curl.ok) { buf_str(error, NO_CURL); return NULL; }
   // Expect: left empty, so curl never waits a second for a go ahead before sending a body.
-  struct curl_slist *head = curl.ok ? curl.slist_append(NULL, "Expect:") : NULL;
-  if (!curl.ok) buf_str(&error, NO_CURL);
-  else if (!*method.s || strspn(method.s, "ABCDEFGHIJKLMNOPQRSTUVWXYZ") != strlen(method.s)) buf_str(&error, "the method is a word, like GET or POST");
-  for (size_t i = 0; headers->k == V_REC && i < headers->r.n && !error.n; i++) {
-    buf one = { 0 }, line = { 0 };
-    buf_text(&one, headers->r.v[i]);
-    if (strpbrk(headers->r.key[i], "\r\n:") || strpbrk(one.s ? one.s : "", "\r\n")) buf_fmt(&error, "the header %s has a line break or a colon in it", headers->r.key[i]);
-    else { buf_fmt(&line, "%s: %s", headers->r.key[i], one.s ? one.s : ""); head = curl.slist_append(head, line.s); }
-    buf_free(&one);
+  struct curl_slist *head = curl.slist_append(NULL, "Expect:");
+  for (size_t i = 0; i < headers->r.n; i++) {
+    buf line = { 0 };
+    buf_fmt(&line, "%s: %s", headers->r.key[i], headers->r.v[i]->t.s);
+    head = curl.slist_append(head, line.s);
     buf_free(&line);
   }
-  CURL *c = error.n ? NULL : curl.init();
-  if (!error.n && !c) buf_str(&error, "curl couldn't start");
-  if (c) {
-    curl.setopt(c, CURLOPT_URL, url.s);
+  CURL *c = curl.init();
+  if (!c) buf_str(error, "curl couldn't start");
+  else {
+    curl.setopt(c, CURLOPT_URL, url);
     curl.setopt(c, CURLOPT_NOSIGNAL, yes);
     curl.setopt(c, CURLOPT_FOLLOWLOCATION, yes);
     curl.setopt(c, CURLOPT_MAXREDIRS, most);
-    curl.setopt(c, CURLOPT_TIMEOUT_MS, ms);
+    curl.setopt(c, CURLOPT_TIMEOUT_MS, (long)(seconds * 1000));
     curl.setopt(c, CURLOPT_USERAGENT, "onsay-core");
     curl.setopt(c, CURLOPT_HTTPHEADER, head);
     curl.setopt(c, CURLOPT_WRITEFUNCTION, got_text);
@@ -544,37 +507,32 @@ int pl_http(const char *values, size_t n, buf *out) {
     curl.setopt(c, CURLOPT_HEADERFUNCTION, got_header);
     curl.setopt(c, CURLOPT_HEADERDATA, &raw);
     // GET without a body is curl's own. HEAD reads no body. Anything else sends its body, even an empty one.
-    if (!strcmp(method.s, "HEAD")) curl.setopt(c, CURLOPT_NOBODY, yes);
-    else if (strcmp(method.s, "GET") || body.n) {
-      curl.setopt(c, CURLOPT_POSTFIELDSIZE, (long)body.n);
-      curl.setopt(c, CURLOPT_POSTFIELDS, body.s ? body.s : "");
-      if (strcmp(method.s, "POST")) curl.setopt(c, CURLOPT_CUSTOMREQUEST, method.s);
+    if (!strcmp(method, "HEAD")) curl.setopt(c, CURLOPT_NOBODY, yes);
+    else if (strcmp(method, "GET") || n) {
+      curl.setopt(c, CURLOPT_POSTFIELDSIZE, (long)n);
+      curl.setopt(c, CURLOPT_POSTFIELDS, body);
+      if (strcmp(method, "POST")) curl.setopt(c, CURLOPT_CUSTOMREQUEST, method);
     }
     int e = curl.perform(c);
     curl.getinfo(c, CURLINFO_RESPONSE_CODE, &status);
-    if (text.n > ROOM) buf_fmt(&error, "%s answered with more than 4 MB", url.s);
+    if (text.n > ROOM) buf_fmt(error, "%s answered with more than 4 MB", url);
     else if (e) {
       buf where = { 0 };
-      buf_fmt(&where, "%s couldn't be reached", url.s);
-      why(&error, where.s, e);
+      buf_fmt(&where, "%s couldn't be reached", url);
+      why(error, where.s, e);
       buf_free(&where);
-    } else if (!utf8_ok(text.s ? text.s : "", text.n)) buf_fmt(&error, "%s answered with something that isn't text, like a picture or a file", url.s);
+    } else if (!utf8_ok(text.s ? text.s : "", text.n)) buf_fmt(error, "%s answered with something that isn't text, like a picture or a file", url);
+    else {
+      out = v_rec(a);
+      rec_set(a, out, "status", v_num(a, (double)status));
+      rec_set(a, out, "headers", header_lines(a, raw.s ? raw.s : ""));
+      rec_set(a, out, "text", v_text(a, text.s ? text.s : "", text.n));
+    }
     curl.cleanup(c);
   }
-  if (error.n) { buf_str(out, "{\"error\":"); buf_json_str(out, error.s, error.n); }
-  else {
-    buf_fmt(out, "{\"value\":{\"status\":%ld,\"headers\":", status);
-    buf_chr(&raw, 0);
-    buf_json(out, header_record(a, raw.s));
-    buf_str(out, ",\"text\":");
-    buf_json_str(out, text.s ? text.s : "", text.n);
-    buf_chr(out, '}');
-  }
-  buf_chr(out, '}');
-  if (head) curl.slist_free_all(head);
-  buf_free(&method), buf_free(&url), buf_free(&body), buf_free(&error), buf_free(&text), buf_free(&raw);
-  arena_free(a);
-  return 1;
+  curl.slist_free_all(head);
+  buf_free(&text), buf_free(&raw);
+  return out;
 }
 
 ////////// 6. PORT //////////

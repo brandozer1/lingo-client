@@ -45,8 +45,6 @@ double pl_now(void) {
 
 void pl_sleep(double seconds) { Sleep(seconds > 0 ? (DWORD)(seconds * 1000) : 0); }
 
-int pl_stopped(void) { return 0; }   // host.c stops a job directly, from its receiver thread
-
 typedef struct { void (*fn)(void *); void *arg; } start;
 
 static DWORD WINAPI begin(LPVOID p) {
@@ -296,10 +294,6 @@ void pl_context(buf *out) {
   buf_chr(out, '}');
 }
 
-// The Windows app runs the core as its own program, so its lingos are native libraries and it has no host lingos.
-int pl_hosts(void) { return 0; }
-int pl_call(const char *id, const char *values, size_t n, buf *out) { (void)id, (void)values, (void)n, (void)out; return 0; }
-
 // Its own folder is searched first for anything it needs in turn. Never freed: its phrases are in the table from now on.
 lingo_entry pl_library(const char *path, buf *error) {
   wchar_t *w = win_wide(path);
@@ -333,58 +327,22 @@ static void CALLBACK too_long(PVOID arg, BOOLEAN fired) {
   if (!InterlockedExchange(&w->closed, 1)) WinHttpCloseHandle(w->q);
 }
 
-// The answer's headers, "Name: value" lines, as a record by lower case name. A name said twice has both, joined by ", ".
-static val *header_record(arena *a, const char *s) {
-  val *out = v_rec(a);
-  for (const char *end; *s; s = *end ? end + 2 : end) {
-    if (!(end = strstr(s, "\r\n"))) end = s + strlen(s);
-    const char *colon = memchr(s, ':', (size_t)(end - s)), *v = colon;
-    if (!colon || colon == s) continue;
-    while (++v < end && *v == ' ') {}
-    buf name = { 0 }, both = { 0 };
-    for (const char *c = s; c < colon; c++) buf_chr(&name, (char)(*c >= 'A' && *c <= 'Z' ? *c + 32 : *c));
-    val *had = rec_get(out, name.s);
-    if (had) { buf_add(&both, had->t.s, had->t.len); buf_str(&both, ", "); }
-    buf_add(&both, v, (size_t)(end - v));
-    rec_set(a, out, name.s, v_text(a, both.s, both.n));
-    buf_free(&name);
-    buf_free(&both);
-  }
-  return out;
-}
-
-int pl_http(const char *values, size_t n, buf *out) {
-  arena *a = arena_new();
-  const char *problem = NULL;
-  val *v = json_parse(a, values, n, &problem);
-  if (problem || v->k != V_LIST || v->l.n != 5) { arena_free(a); buf_str(out, "{\"error\":\"its values weren't the five it takes\"}"); return 1; }
-  val **x = v->l.v, *headers = x[2];
-  buf method = { 0 }, url = { 0 }, body = { 0 }, head = { 0 }, error = { 0 }, text = { 0 }, raw = { 0 };
-  buf_text(&method, x[0]), buf_text(&url, x[1]), buf_text(&body, x[3]);
-  buf_chr(&url, 0), buf_chr(&method, 0);   // so neither is ever empty of bytes
-  for (size_t i = 0; method.s[i]; i++) if (method.s[i] >= 'a' && method.s[i] <= 'z') method.s[i] -= 32;
-  if (strchr(url.s, '#')) *strchr(url.s, '#') = 0;   // the part after # is the page's own, never sent
-  DWORD ms = x[4]->k == V_NUM && x[4]->n > 0 && x[4]->n < 3600 ? (DWORD)(x[4]->n * 1000) : 30000, status = 0, size = sizeof status, failed = 0;
-  if (!*method.s || strspn(method.s, "ABCDEFGHIJKLMNOPQRSTUVWXYZ") != strlen(method.s)) buf_str(&error, "the method is a word, like GET or POST");
-  for (size_t i = 0; headers->k == V_REC && i < headers->r.n && !error.n; i++) {
-    buf one = { 0 };
-    buf_text(&one, headers->r.v[i]);
-    if (strpbrk(headers->r.key[i], "\r\n:") || strpbrk(one.s ? one.s : "", "\r\n")) buf_fmt(&error, "the header %s has a line break or a colon in it", headers->r.key[i]);
-    else buf_fmt(&head, "%s: %s\r\n", headers->r.key[i], one.s ? one.s : "");
-    buf_free(&one);
-  }
-  wchar_t *w = win_wide(url.s), *mw = win_wide(method.s), *hw = head.n ? win_wide(head.s) : NULL;
+val *pl_http(arena *a, const char *method, const char *url, val *headers, const char *body, size_t n, double seconds, buf *error) {
+  buf head = { 0 }, text = { 0 }, raw = { 0 };
+  for (size_t i = 0; i < headers->r.n; i++) buf_fmt(&head, "%s: %s\r\n", headers->r.key[i], headers->r.v[i]->t.s);
+  DWORD ms = (DWORD)(seconds * 1000), status = 0, size = sizeof status, failed = 0;
+  wchar_t *w = win_wide(url), *mw = win_wide(method), *hw = head.n ? win_wide(head.s) : NULL;
   URL_COMPONENTS parts;
   HINTERNET s = NULL, c = NULL, q = NULL;
   HANDLE timer = NULL;
   watch late = { NULL, 0 };
   const char *step = "";
-  if (!error.n && !(failed = open_url(w, &parts, &s, &c, &step))) {
+  if (!(failed = open_url(w, &parts, &s, &c, &step))) {
     q = late.q = WinHttpOpenRequest(c, mw, parts.dwUrlPathLength ? parts.lpszUrlPath : L"/", NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
                                     parts.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0);
     if (q) CreateTimerQueueTimer(&timer, NULL, too_long, &late, ms, 0, WT_EXECUTEONLYONCE);
     if (!q || !WinHttpSetTimeouts(q, (int)ms, (int)ms, (int)ms, (int)ms) || !WinHttpSetOption(q, WINHTTP_OPTION_RECEIVE_RESPONSE_TIMEOUT, &ms, sizeof ms) ||
-        !WinHttpSendRequest(q, hw ? hw : WINHTTP_NO_ADDITIONAL_HEADERS, (DWORD)-1L, body.s, (DWORD)body.n, (DWORD)body.n, 0) || !WinHttpReceiveResponse(q, NULL)) failed = GetLastError();
+        !WinHttpSendRequest(q, hw ? hw : WINHTTP_NO_ADDITIONAL_HEADERS, (DWORD)-1L, (LPVOID)body, (DWORD)n, (DWORD)n, 0) || !WinHttpReceiveResponse(q, NULL)) failed = GetLastError();
   }
   if (q && !failed) {
     WinHttpQueryHeaders(q, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &status, &size, WINHTTP_NO_HEADER_INDEX);
@@ -402,30 +360,26 @@ int pl_http(const char *values, size_t n, buf *out) {
   if (timer) DeleteTimerQueueTimer(NULL, timer, INVALID_HANDLE_VALUE);   // waits for it, if it is closing the request now
   if (late.closed) failed = ERROR_WINHTTP_TIMEOUT;
   else if (q) WinHttpCloseHandle(q);
+  val *out = NULL;
   if (failed) {
     buf where = { 0 };
-    buf_fmt(&where, "%s couldn't be reached", url.s);
-    why(&error, where.s, failed);
+    buf_fmt(&where, "%s couldn't be reached", url);
+    why(error, where.s, failed);
     buf_free(&where);
-  } else if (!error.n && text.n > ROOM) buf_fmt(&error, "%s answered with more than 4 MB", url.s);
-  else if (!error.n && !utf8_ok(text.s ? text.s : "", text.n)) buf_fmt(&error, "%s answered with something that isn't text, like a picture or a file", url.s);
-  if (error.n) { buf_str(out, "{\"error\":"); buf_json_str(out, error.s, error.n); }
+  } else if (text.n > ROOM) buf_fmt(error, "%s answered with more than 4 MB", url);
+  else if (!utf8_ok(text.s ? text.s : "", text.n)) buf_fmt(error, "%s answered with something that isn't text, like a picture or a file", url);
   else {
-    buf_fmt(out, "{\"value\":{\"status\":%lu,\"headers\":", (unsigned long)status);
-    buf_json(out, header_record(a, raw.s ? raw.s : ""));
-    buf_str(out, ",\"text\":");
-    buf_json_str(out, text.s ? text.s : "", text.n);
-    buf_chr(out, '}');
+    out = v_rec(a);
+    rec_set(a, out, "status", v_num(a, status));
+    rec_set(a, out, "headers", header_lines(a, raw.s ? raw.s : ""));
+    rec_set(a, out, "text", v_text(a, text.s ? text.s : "", text.n));
   }
-  buf_chr(out, '}');
   if (c) WinHttpCloseHandle(c);
   if (s) WinHttpCloseHandle(s);
   free(w), free(mw), free(hw);
-  buf_free(&method), buf_free(&url), buf_free(&body), buf_free(&head), buf_free(&error), buf_free(&text), buf_free(&raw);
-  arena_free(a);
-  return 1;
+  buf_free(&head), buf_free(&text), buf_free(&raw);
+  return out;
 }
-
 
 ////////// 6. PORT //////////
 

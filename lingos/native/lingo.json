@@ -1,7 +1,7 @@
 {
   "name": "native",
   "version": "1.0.0",
-  "about": "Calls a function in the operating system or any shared library directly, by its name and the shape of what it takes and returns. This lets any function of the OS, on Windows or Linux, be run without code written for it by hand: given the layout, it makes the call and gives back the answer. Needs the run permission, since a call can do anything the device can.",
+  "about": "Calls a function in Windows or any DLL directly, by its name and the shape of what it takes and gives back, so any of them can be run without code written for it. Windows only. Needs the run permission, since a call can do anything the computer can.",
   "runs": "native",
   "library": "native.dll"
 }

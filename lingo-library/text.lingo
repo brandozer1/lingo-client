@@ -1,6 +1,6 @@
 // text.lingo - Text work for a program: splitting and joining, replacing, trimming, lower and upper case, padding,
 // cutting short, slugs, cases like title, camel and snake, templates like "Hi {name}", words and lines, repeating, and
-// starts with, ends with and contains.
+// starts with and ends with. Whether text holds a part is the operator in: part in text.
 //
 // 1. split(text, sep=",")                        -> [text]: parted at every sep, into characters when sep is ""
 // 2. join(list, sep="")                          -> text: each item as text, sep between
@@ -18,7 +18,6 @@
 // 14. repeat(text, times, sep="")                -> text
 // 15. starts_with(text, part, ignore_case=false) -> bool
 // 16. ends_with(text, part, ignore_case=false)   -> bool
-// 17. contains(text, part, ignore_case=false)    -> bool: part in text says the same when case matters
 
 ////////// 1-6. PARTS AND CASES //////////
 
@@ -170,7 +169,7 @@ fn repeat(text, times, sep="") {
   return join(out, sep)
 }
 
-////////// 15-17. CHECKS //////////
+////////// 15-16. CHECKS //////////
 
 // 15. Whether text starts with part. part is what it may start with. ignore_case is whether case doesn't matter.
 fn starts_with(text, part, ignore_case=false) {
@@ -183,10 +182,6 @@ fn ends_with(text, part, ignore_case=false) {
   p = same(part, ignore_case)
   return p == "" or std.slice(same(text, ignore_case), -std.length(p)) == p
 }
-
-// 17. Whether part is somewhere in text. part is what to look for. ignore_case is whether case doesn't matter. When it
-// matters, part in text says the same.
-fn contains(text, part, ignore_case=false) {return same(part, ignore_case) in same(text, ignore_case)}
 
 ////////// HELPERS //////////
 

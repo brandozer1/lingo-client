@@ -1,8 +1,7 @@
-// native.c - the native lingo: call a function in the operating system or any shared library directly, by its name and
-// the shape of what it takes and returns. This lets any OS function (Windows, Linux) be run
-// without hand written code for each one: given a layout, it makes the call and gives back the answer. Built per
-// platform like windows (core/build.ps1), using a small vendored part of libffi (libffi/, MIT) to arrange the call the
-// way each chip wants. Needs the run permission, since a call can do anything the device can.
+// native.c - the native lingo, for Windows: call a function in Windows or any DLL directly, by its name and the shape of
+// what it takes and returns, so any of them can be run without code written for each one. Built for Windows x64 by
+// core/build.ps1, with a small vendored part of libffi (libffi/, MIT) to arrange the call. Needs the run permission,
+// since a call can do anything the computer can.
 //
 // 1. type(name)              -> the libffi type for a layout name, or NULL
 //    call(r, a)              -> native.call(library, function, returns, args): loads library, finds function, calls it
@@ -12,12 +11,8 @@
 #include <ffi.h>
 #include <stdint.h>
 #include <string.h>
-#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#else
-#include <dlfcn.h>
-#endif
 
 ////////// 1. CALLING //////////
 
@@ -56,17 +51,6 @@ static void put(run *r, slot *s, const char *t, val *v) {
   else if (!strcmp(t, "f32")) s->f32 = (float)n; else if (!strcmp(t, "f64")) s->f64 = n;
 }
 
-// A library loaded and a symbol found in it, each the platform's own way. An empty library is this program itself.
-static void *symbol(const char *library, const char *function) {
-#ifdef _WIN32
-  HMODULE m = library[0] ? LoadLibraryA(library) : GetModuleHandleA(NULL);
-  return m ? (void *)(void (*)(void))GetProcAddress(m, function) : NULL;
-#else
-  void *m = library[0] ? dlopen(library, RTLD_NOW | RTLD_GLOBAL) : RTLD_DEFAULT;
-  return m ? dlsym(m, function) : NULL;
-#endif
-}
-
 // 1.
 static val *call(run *r, val **a) {
   const char *library = str(r, a[0]), *function = str(r, a[1]), *ret = str(r, a[2]);
@@ -74,7 +58,9 @@ static val *call(run *r, val **a) {
   size_t n = args ? args->l.n : 0;
   ffi_type *rtype = type(ret);
   if (!rtype) fail(r, "phrase", "native.call doesn't know the return type %s", ret);
-  void *sym = symbol(library, function);
+  // An empty library is this program itself.
+  HMODULE m = library[0] ? LoadLibraryA(library) : GetModuleHandleA(NULL);
+  void *sym = m ? (void *)(void (*)(void))GetProcAddress(m, function) : NULL;
   if (!sym) fail(r, "phrase", "%s was not found%s%s", function, library[0] ? " in " : "", library);
   ffi_type **atypes = arena_get(r->a, (n ? n : 1) * sizeof *atypes);
   void **avalues = arena_get(r->a, (n ? n : 1) * sizeof *avalues);
@@ -108,9 +94,8 @@ static val *call(run *r, val **a) {
 ////////// 2. THE PHRASE //////////
 
 LINGO_ENTRY void lingo_phrases(void) {
-  group_add("native", "run");
-  phrase_add("native", "run", "call(library, function, returns, args=nothing) -> value: calls a function in the operating "
-             "system or a shared library by name. library is its file, like \"kernel32.dll\" or \"libc.so.6\", or \"\" for this "
-             "program. returns and each argument's type is one of i8 u8 i16 u16 i32 u32 i64 u64 (whole numbers), f32 f64 "
-             "(decimals), pointer, text, cstring, or none. args is a list of {type, value}", call);
+  phrase_add("native", "run", "call(library, function, returns, args=nothing) -> value: calls a function in Windows or a DLL "
+             "by name. library is its file, like \"kernel32.dll\", or \"\" for this program. returns and each argument's type is "
+             "one of i8 u8 i16 u16 i32 u32 i64 u64 (whole numbers), f32 f64 (decimals), pointer, text, cstring, or none. args is "
+             "a list of {type, value}", call);
 }

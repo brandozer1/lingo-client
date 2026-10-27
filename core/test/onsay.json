@@ -1,11 +1,10 @@
 {
   "token": "test-token",
-  "name": "test core",
   "home": "test/data",
-  "lingos": "test/lingos",
+  "lingos": "test/data/lingos",
   "port": 6970,
   "inbound": "onsay",
   "allow": ["none", "screen.read", "files.read", "files.write", "run", "net"],
-  "steps": 1000000000,
+  "steps": 100000000,
   "ms": 600000
 }

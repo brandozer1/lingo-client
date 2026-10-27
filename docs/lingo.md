@@ -6,34 +6,33 @@ names, operators and control flow. The three calls are references: `lingo(...)` 
 the language.
 
 Lingo is an orchestration language, made for AI to read and write as easily as possible. On its own it does little but
-run code written in C. It is Turing complete, so any program can be written in it, and lingos
-stack on lingos, so any computation, anywhere, is some number of layers of lingos or steps away. Every function a
-program can call is a **phrase**, supplied by a **lingo**: Lingo code, a file or a folder, or the set of phrases one platform
-offers, listed in its **manifest**. Even what every computer has is a lingo, the core's own (section 15), never the
-language. The language never changes from device to device, and only the lingos do.
+run code written in C. It is Turing complete, so any program can be written in it, and lingos stack on lingos, so any
+computation, anywhere, is some number of layers of lingos or steps away. Every function a program can call is a
+**phrase**, supplied by a **lingo**: Lingo code, a file or a folder, or a native library for the computer. Even what
+every computer has is a lingo, the core's own (section 15), never the language. The language never changes from
+computer to computer, and only the lingos do.
 
-This document describes the language exactly as the core in `core/` runs it: `compile.c` reads programs and links them
-through the lingos they use, the same C on every device, and `run.c` runs them.
-`core/test/reference/` keeps the first implementation, in JavaScript, which the tests hold the C to.
+This document describes the language exactly as the lingo client in `core/` runs it: `compile.c` reads lingos and
+links them through the lingos they use, the same C on every computer, and `run.c` runs them.
 
 ## Contents
 
 1. Words and layout
-2. Programs, tools and functions
+2. Functions
 3. Values
 4. Statements
 5. Expressions
 6. Calls: functions and phrases
 7. lingo(...): asking in words
-8. How a program runs
+8. How a function runs
 9. Errors
 10. Lingos and permissions
 11. A lingo written in Lingo
-12. Where programs run
+12. Where lingos run
 13. The tree: what the compiler gives
 14. Laid out and dense
 15. The core: what every computer has
-16. The Windows lingo
+16. The Windows lingos
 
 ## 1. Words and layout
 
@@ -73,23 +72,19 @@ three.
 - `{expression}` puts a value inside the text: `"Hi {name}, you have {n+1} new"`. The expression inside can't contain
   quotes: put such a value in a name first.
 
-## 2. Programs, tools and functions
+## 2. Functions
 
-A program is a list of top level items, in any order:
+A lingo's code is a list of functions, in any order, each name once, and nothing else (section 11):
 
 ```
-tool name(param, param=default, ...){ ...steps... }    // at most one: what gets run
-fn name(param, param=default, ...){ ...steps... }      // any number, each name once
+fn name(param, param=default, ...){ ...steps... }
 ```
 
-- **The tool** is the entry point. Its params are its inputs, given by name when the program is run. An input that is
-  missing or `nothing` takes its default, or `nothing` when it has none.
-- **Functions** are called by name, before or after where they are written. Their params are given in order.
-- **Defaults** are expressions, worked out when the value is missing, left to right, so a default can use an earlier
-  param: `fn f(a, b=a*2)`.
-- **A program with no tool** is just steps. It runs as a tool named `steps` that takes nothing. That's what a single
-  quick instruction is: `notify.show("Hi","there")`.
-- **When there is a tool,** every step must be inside it or inside a function.
+- **Functions** are called by name, before or after where they are written. Their params are given in order. Called
+  at the lingo's route, from outside it, they are given by name or in order (section 11).
+- **Defaults** are expressions, worked out when the value is missing or `nothing`, left to right, so a default can use
+  an earlier param: `fn f(a, b=a*2)`. A value with no default that is missing is `nothing`.
+- `tool` is a keyword with no use in a lingo, whose file holds `fn` blocks only.
 
 Functions are not values. They can't be stored in a name, passed, returned or built while running. That is what keeps
 every program fully known before it runs.
@@ -244,7 +239,7 @@ saved = use("https://api.example.com/v1/items", {name: "milk"})
   name it doesn't take fails (`... takes place, not city`), a required one left out fails (`... needs where`), and an
   optional one left out takes its default. A query and a record are merged, the record winning, and a query with a
   non-empty list fails.
-- **Errors in writing it:** no address, an empty one, or more than two values. A program's own `fn` can't be called
+- **Errors in writing it:** no address, an empty one, or more than two values. A lingo's own `fn` can't be called
   `use`: `use(...)` always means this.
 
 **`setting(key)`** reads one of this lingo's settings, like a key or a token, kept on the person's own computer, also
@@ -256,17 +251,16 @@ units = setting("units") ?? "metric"
 token = setting("token", "github")
 ```
 
-- Inside a lingo, `setting("key")` is that lingo's own: the compiler fills in its name, like `openrouter`.
-  `setting("key", "github")` reads another lingo's, so one token serves many lingos. A program that isn't a lingo always
-  says whose.
+- `setting("key")` is the lingo's own: the compiler fills in its name, like `agent`. `setting("key", "github")` reads
+  another lingo's, so one token serves many lingos.
 - It compiles to the phrase `lingo.setting(key, reference)`, every core's own, answered by the core on the computer when
   the line runs, never asked of Onsay: the value kept for that lingo on this computer, else the default its `lingo.json`
   gives, else `nothing`. Settings are never kept on Onsay's servers.
 - A lingo's settings are those its `lingo.json` lists, with what each one is (section 11), then any other its code reads
-  with `setting("...")`. The Onsay app builds a form from them. See *Lingo settings* in `core/README.md`.
-- **Errors in writing it:** no key, more than two values, or no lingo named outside a lingo:
-  `setting(...) outside a lingo says whose setting it is too, like setting("key", "openrouter")`. A program's own
-  `fn` can't be called `setting`: `setting(...)` always means this.
+  with `setting("...")`. The Onsay app builds a form from them, and the lingo client's `--set` changes one
+  (`core/README.md`).
+- **Errors in writing it:** no key, or more than two values. A lingo's own `fn` can't be called `setting`:
+  `setting(...)` always means this.
 
 `name(a, b)` is settled once every function of the program is known, in this order:
 1. **A function of the program** with that name, if there is one. Its own functions always come first.
@@ -320,107 +314,71 @@ words with `lingo(...)` when you don't know which.
 
 A lingo's own code may call `lingo(...)` too.
 
-## 8. How a program runs
+## 8. How a function runs
 
-1. The tool's inputs are given by name, and defaults fill the rest.
+1. A function is called at its lingo's route (section 11), its values given by name or in order, and defaults fill the
+   rest.
 2. Steps run in order. Every statement and every expression worked out is one **step**.
-3. The tool's `return` value is the result. With no `return`, the result is `nothing`.
+3. Its `return` value is the answer. With no `return`, the answer is `nothing`.
 
 **Calling a function** gives it its own names, starting from its params. Its `return` is the call's value, or `nothing`.
 A function may call itself, up to 1000 deep.
 
-**Calling a phrase** works out its values in order, checks its permission (section 10), runs it, and gives back what it
-returned, or `nothing`. Values in a list or record are worked out left to right, so phrases always run in the order they
-are written.
+**Calling a phrase** works out its values in order, a value left out or `nothing` taking its default, checks its
+permission (section 10), runs it, and gives back what it returned, or `nothing`. Values in a list or record are worked
+out left to right, so phrases always run in the order they are written.
 
-**Limits:** a program stops with a `limit` error after too many steps (the reference default is 5,000,000) or too long
-(10 minutes). Stopping it from outside, like Ctrl+C or Alt+Shift+O, ends it between two steps with `stopped`.
+**Limits:** a call stops with a `limit` error after too many steps or too long, the lingo client's settings `steps` and
+`ms` (5,000,000 steps and 10 minutes when left out). Stopping it from outside, like Onsay's stop key, ends it between
+two steps with `stopped`.
 
 ## 9. Errors
 
-An error stops the program, unless a `try` catches it. Every error has a code, a message, and the place it happened:
+An error stops the function, unless a `try` catches it. Every error has a code and a message, the message starting
+with the lingo's file and line when it happened in Lingo code: `memo.lingo line 4: files.read: no such file`. A request
+that fails is answered with its message, and a status by its code (`core/README.md`, *Requests*).
 
-```json
-{ "code": "phrase", "message": "files.read: no such file", "at": "tool/2/0/1", "line": 4 }
-```
+| Code      | Means                                                    | `try` catches it | Status |
+|-----------|----------------------------------------------------------|------------------|--------|
+| `fail`    | The code said `fail`                                     | yes              | 500    |
+| `phrase`  | A phrase failed. Its message starts with the phrase's id | yes              | 500    |
+| `type`    | A value was the wrong kind, like `"a" < 3`, or division by zero | yes       | 500    |
+| `unknown` | The computer doesn't have a phrase the code uses         | yes              | 404    |
+| `denied`  | A phrase needed a permission that wasn't given           | no               | 403    |
+| `limit`   | Too many steps, too long, or calls 1000 deep             | no               | 500    |
+| `stopped` | Stopped from outside                                     | no               | 500    |
 
-| Code      | Means                                                    | `try` catches it |
-|-----------|----------------------------------------------------------|------------------|
-| `fail`    | The program said `fail`                                  | yes              |
-| `phrase`  | A phrase failed. Its message starts with the phrase's id | yes              |
-| `type`    | A value was the wrong kind, like `"a" < 3`, or division by zero | yes       |
-| `unknown` | The core doesn't have a phrase the program uses          | yes              |
-| `denied`  | A phrase needed a permission that wasn't given           | no               |
-| `limit`   | Too many steps, too long, or calls 1000 deep             | no               |
-| `stopped` | Stopped from outside                                     | no               |
-
-Errors in reading the program, like a missing `}` or an unknown phrase, are found before anything runs, and give the
-line and what was expected. A core asked to run code it couldn't compile answers with the code `compile`, and the line.
+Errors in reading a lingo, like a missing `}` or an unknown phrase, are found when it loads, before anything runs, and
+give its file, the line and what was expected. The lingo is set aside with them until it is fixed.
 
 ## 10. Lingos and permissions
 
-A **lingo** is a set of phrases, and its listing, or for a native lingo its **manifest**, lists every one: a program
-can call nothing else. A lingo's
-phrases come from one of three places, and a program can't tell them apart:
+A **lingo** is a set of phrases, and nothing else can be called. A lingo's phrases come from one of two places, and the
+code calling them can't tell them apart:
 
 - **Lingo:** written in Lingo, a file or a folder, on top of other lingos, its listing made from its code. See section 11.
-- **Native:** a library built for the device, like `windows.dll`.
-- **Host:** run by the program around the core, in its own language, where the core can't load a library.
-  Its folder holds only its `lingo.json`.
+- **Native:** a library built for the computer, like `windows.dll`, its phrases added as it loads (`core/README.md`).
 
-How native and host lingos are built is in `core/README.md`.
+**What a model reads.** The lingo client tells Onsay what every lingo shares, its catalog: each function's id, like
+`files.read`, what it does, and its values as JSON Schema. A native phrase says what it gives in its `does`, the way
+the Windows lingo writes it: `-> [{name,path,size,folder,changed}]` is a list of those records, `x?` is x or nothing,
+`a|b` is either, and `bool` is true or false.
 
-**The listing a model reads.** A native lingo's phrases are also written out as plain text, the way they are called. A
-core says hello with this text for each native lingo it has, and it is what a model reads to write programs, so it is
-laid out for the fewest tokens that still read clearly:
-
-```
-lingo windows 1.0, Lingo 1.0
-file = {name,path,size,folder,changed}
-
-files: files.read
-read(path) -> text
-list(folder, pattern="*") -> [file]
-write(path, text) [files.write]: replaces it
-delete(path) [files.write]: to the Recycle Bin
-```
-
-| Line | Means |
-|------|-------|
-| `lingo <name> <version>, Lingo <version>, uses <lingo> <version>, ...` | The first line: the lingo, its version, the version of Lingo it speaks, and the lingos it is built on, if any |
-| `name = {a,b,c}` | A record shape, named once, so phrases can say they give `file` or `[file]` |
-| `group: permission, ...` | Starts a group. Its phrases are called `group.name` and need those permissions. A group's name may have levels, like `media.player`. `, pure` last marks every phrase in the group pure |
-| `name(params) -> gives [permission]: does` | A phrase. Only the signature is required |
-| `// ...` | A comment line. Blank lines are ignored |
-
-A phrase line, part by part:
-- **The signature** is written exactly like a Lingo `fn` header, and read by the same parser: its values in order, with
-  `name=default` for one that may be left out. A default must be a plain value: a number, text, `true`, `false` or
-  `nothing`.
-- **`-> gives`** is what it gives back, left out when it gives nothing. `[x]` is a list of x, `x?` is x or nothing,
-  `a|b` is either, `bool` is true or false, and a shape's name stands for that record.
-- **`[permission]`** is only written when it differs from the group's. It may list several, like
-  `[screen.act, screen.read]`, and then the phrase needs every one.
-- **`: does`** is one short line on what it does, left out when the signature already says it.
-
-A host lingo lists the same phrases in its `lingo.json`, as JSON (section 11).
-
-**Pure** means same values in, same result out, and no effect on the world, so it can be cached or run ahead of time.
-
-**Permissions** come from one shared list: `none`, `screen.read`, `screen.act`, `files.read`, `files.write`, `run`
-and `net`. The person gives them to the device, never to the program, so no program can do more than was allowed.
-A phrase that needs any permission that wasn't given stops the program with `denied`, and `try` can't hide that.
+**Permissions** come from one shared list: `screen.read`, `screen.act`, `files.read`, `files.write`, `run` and `net`.
+The person gives them to the computer, never to the lingo, so no lingo can do more than was allowed. A native phrase
+says which it needs, and one that needs any that wasn't given stops the call with `denied`, and `try` can't hide that.
+A lingo written in Lingo never says what it needs: each native phrase it reaches checks its own as it runs.
 
 ## 11. A lingo written in Lingo
 
 A lingo written in Lingo is its code, `<name>.lingo`, in a computer's lingos folder: one file on its own, or a folder of
 its name holding the file and its manifest, `lingos/<name>/<name>.lingo` beside `lingos/<name>/lingo.json`, when it has
-settings, a route or `open` to say. The person writes only the code, and the manifest when it has any. Its listing, what it shares,
-is made from the code by the compiler (`listing` in `core/src/compile.c`):
+settings, a route or `open` to say. The person writes only the code, and the manifest when it has any. Its listing,
+what it shares, is made from the code by the compiler (`listing` in `core/src/compile.c`):
 
-- **Every `fn`** is a function it shares, called at its address, like `laptop.brandon/lingos/memo.lingo/recall`, or by
-  its dotted name, `memo.recall(k)`, from a lingo in the same folder. Its values and their plain defaults are its `fn`'s
-  own. A default worked out as it runs, like `o={a: 1}`, shows as `nothing`.
+- **Every `fn`** is a function it shares, called at its route, like `/memo/recall`, or by its dotted name,
+  `memo.recall(k)`, from a lingo in the same folder. Its values and their plain defaults are its `fn`'s own. A default
+  worked out as it runs, like `o={a: 1}`, shows as `nothing`.
 - **The comment lines right above a `fn`** say what it does: what it gives, when to use it and when not to, in the
   words a person would ask with. A number at their start, like `1.`, a legend's, is left off.
 - **The first comment lines of the file,** up to a blank line or an empty `//`, are what the lingo is, its about, with
@@ -453,30 +411,33 @@ fn all(prefix="") {
 fn key(k) {return "memo/" + k}
 ```
 
-and the listing made from it, as the core sends Onsay in its catalog (7. CONNECTION in `core/src/core.c`):
+and what the lingo client tells Onsay of it in its catalog, never its code:
 
 ```json
 {
-  "name": "memo", "file": "memo.lingo", "status": "ok",
+  "name": "memo", "status": "ok",
   "about": "things to remember, kept in Onsay's own storage on this device.",
   "settings": [],
   "phrases": [
-    { "id": "memo.recall", "head": "recall(k)", "does": "What was kept under that name.", "lingos": 0,
-      "inputSchema": { "type": "object", "properties": { "k": {} }, "required": ["k"] } },
-    { "id": "memo.all", "head": "all(prefix=\"\")", "does": "Every name kept, only those that start with prefix when it is given.", "lingos": 0,
-      "inputSchema": { "type": "object", "properties": { "prefix": { "default": "" } }, "required": [] } },
-    { "id": "memo.key", "head": "key(k)", "does": "Where a name is kept in Onsay's own storage.", "lingos": 0,
-      "inputSchema": { "type": "object", "properties": { "k": {} }, "required": ["k"] } }
+    { "id": "memo.recall", "does": "What was kept under that name.",
+      "inputSchema": { "type": "object", "properties": { "k": {} }, "required": ["k"] }, "lingos": 0 },
+    { "id": "memo.all", "does": "Every name kept, only those that start with prefix when it is given.",
+      "inputSchema": { "type": "object", "properties": { "prefix": { "default": "" } }, "required": [] }, "lingos": 0 },
+    { "id": "memo.key", "does": "Where a name is kept in Onsay's own storage.",
+      "inputSchema": { "type": "object", "properties": { "k": {} }, "required": ["k"] }, "lingos": 0 }
   ]
 }
 ```
 
+`lingos` is how many `lingo(...)` calls a function makes, counted from the code through every function it reaches.
+
 A file holds only `fn` blocks: no `tool`, and no steps outside them. Its code may call its own functions, the phrases of
-the core and the device's native lingos, the functions of every lingo in the same folder by their dotted names,
+the core and the computer's native lingos, the functions of every lingo in the same folder by their dotted names,
 `lingo(...)`, `use(...)` and `setting(...)`, and nothing else.
 
-**Its manifest.** A lingo written in Lingo with settings is a folder, its `lingo.json` saying what they are, so a form
-can be made of them (the `agent` of `lingo-library/`, shortened, with a `keep` it hasn't got added to show one):
+**Its manifest**, `lingo.json`, says what its settings are, so a form can be made of them, and where and to whom it
+answers (the `agent` of `lingo-library/`, shortened, with a `keep`, a `route` and `open` it hasn't got added to show
+them):
 
 ```json
 {
@@ -485,7 +446,9 @@ can be made of them (the `agent` of `lingo-library/`, shortened, with a `keep` i
     { "name": "model", "title": "Model", "about": "The model to use." },
     "service"
   ],
-  "keep": { "read": "read", "write": "write" }
+  "keep": { "read": "read", "write": "write" },
+  "route": "/ai",
+  "open": true
 }
 ```
 
@@ -494,19 +457,18 @@ can be made of them (the `agent` of `lingo-library/`, shortened, with a `keep` i
   can't work without it, and `secret`, true for a key or a password, which a form hides.
 - **`keep`**, which most lingos leave out, names two of the lingo's own functions that keep its settings wherever its
   maker wants them: `read(key)` gives one's value and `write(key, value)` keeps one. Inside them, `setting(...)` of
-  that lingo reads the core's own file. Without it, the core keeps them in its own folder, `home/settings/<name>.json`.
-- **`route`** is where it answers web requests on its computer, like `"/onsay"`. Without it, it answers at `/<name>`.
-- **`open`**, true, lets requests from other computers and through Onsay reach it. Without it, only programs on its own
-  computer can, and to anyone else it isn't there.
-- **Its runs** is left out, since it isn't native or host. A folder whose `lingo.json` lists its settings wrongly is
-  set aside with the reason.
+  that lingo reads the lingo client's own file. Without it, the lingo client keeps them in its own folder,
+  `home/settings/<name>.json`.
+- **`route`** is where it answers on its computer, like `"/onsay"`. Without it, it answers at `/<name>`.
+- **`open`**, true, lets requests from other computers, and from anyone through Onsay, reach it. Without it, only
+  programs on its own computer and Onsay for the computer's own account can, and to anyone else it isn't there.
 
-The core answers `setting(...)` from them, `settings.get(lingo)` gives every one with what its manifest says and its
-value now, and `settings.set(lingo, key, value)` changes one wherever it is kept (section 15). A lingo's settings are
-never sent to Onsay: its catalog names them only.
+A folder whose `lingo.json` lists its settings wrongly is set aside with the reason. The lingo client answers
+`setting(...)` from them, `settings.get(lingo)` gives every one with what its manifest says and its value now, and
+`settings.set(lingo, key, value)` changes one wherever it is kept (section 15). A lingo's settings are never sent to
+Onsay: its catalog names them only.
 
-**Web requests.** A computer's lingo client answers web requests on its port, 6969, each lingo at its route
-(`core/README.md`, *Routes*). A lingo with a function `serve(request)` answers every request to its route itself:
+**`serve(request)`.** A lingo with a function `serve` answers every request to its route itself, like a page:
 
 ```
 // hello - a page that says hello, open to anyone.
@@ -523,68 +485,55 @@ fn serve(request) {
 JSON, else nothing. What serve gives is the answer: a record with a number `status` is `{status, headers, body}`, its
 body text, or written as JSON when it isn't text, and anything else is the body of a 200, as text when it is text and
 as JSON when it isn't. A lingo without `serve` is called function by function, `POST /memo/recall` with its values as a
-JSON record by name, `{"k": "milk"}`, or `GET /memo/recall?k=milk`, answered with the function's value as JSON.
+JSON record by name, `{"k": "milk"}`, or a list in order, or `GET /memo/recall?k=milk`, answered with the function's
+value as JSON (`core/README.md`, *Requests*).
 
-**What Onsay is told.** A core tells Onsay what each lingo shares, never its code: each function's head and what it
-does, its `inputSchema`, and how many `lingo(...)` calls it makes, counted from the code through every function it
-reaches. The dashboard shows the same.
+**A native lingo** is a folder with a `lingo.json`, `{name, about, runs: "native", library}`: its name its folder's,
+and its library a file in it, like `windows.dll`, which adds its phrases as it loads (`core/README.md`). It may list
+`settings`, `route` and `open` too, the same way. A folder without a `lingo.json` isn't a lingo and is left alone, and
+one whose `lingo.json` isn't a native lingo's is a lingo written in Lingo, set aside when its code isn't beside it.
 
-**Native and host lingos** are a folder with a `lingo.json`, their manifest: `name`, `version` (three numbers, like
-`1.0.0`, a label only), `about`, and `runs`, `native` with its `library`, like `windows.dll`, or `host`. A native one
-lists no functions: the library adds them, and the text listing in section 10 is what a core says hello with. A host one
-lists its `shapes`, its `groups` with what each needs, like `{"name": "tabs", "needs": ["screen.read"]}`, and its
-`functions`, each shaped like an MCP tool: a `name`, its `group`, a `description`, and an `inputSchema` and
-`outputSchema` in JSON Schema, its permissions in `onsay.needs` when they aren't its group's. A folder without a
-`lingo.json` isn't a lingo and is left alone, and one whose `lingo.json` runs neither native nor host is a lingo
-written in Lingo, set aside when its code isn't beside it. A native or host one may list `settings` too, the same way.
+**Loading.** The lingo client compiles every lingo in its folder when it loads it, so a broken one is set aside with
+the reason then, never in the middle of a task. A dotted call to a lingo that isn't in the folder is one such reason.
+A lingo whose name is that of a native lingo or one of its groups is set aside too, like an old `input.lingo` on
+Windows: `input is already a part of windows, this computer's own lingo`.
 
-**Loading.** A core compiles every lingo in its folder when it loads it, so a broken one is set aside with the reason
-then, never in the middle of a task. A dotted call to a lingo that isn't in the folder is one such reason. A lingo whose
-name is that of a native lingo or one of its groups is set aside too, like an old `input.lingo` on Windows:
-`input is already a part of windows, this device's own lingo`.
+**Linking.** When a function is called, it is linked against the lingos here: every function written in Lingo it
+reaches becomes a call to its `fn`, with any value left out taking its default, and only the functions it actually
+reaches are kept. What is left calls nothing but native phrases. An error inside a lingo names its own file and line:
+`memo.lingo line 7: files.add_to needs permission for files.write`.
 
-**Real permissions.** A phrase written in Lingo needs exactly what it reaches: every native phrase down every path,
-through other functions and other lingos. These are worked out, never written down, so a lingo can't claim to need less
-than it does. `memo.recall` above needs no permission, and a phrase that calls `files.write` needs `files.write`.
+## 12. Where lingos run
 
-**Linking.** A program is compiled against the lingos it may use, and is refused before anything runs if a call to
-one of them is wrong (section 6). Then every phrase written in Lingo becomes a call to its `fn`, with any value left out
-taking its default, and only the functions something actually reaches are kept. What is left calls nothing but native
-and host phrases, and runs like any program. An error inside a lingo names its own file and line: `memo.lingo line 7:
-files.add_to needs permission for files.write`.
+Code runs where it lives. A lingo in a computer's lingos folder runs in that computer's lingo client, when a request
+reaches its route (section 11), from that computer, from another, or from Onsay, and only the answer goes back. Its
+code may call `lingo(...)` and `use(...)`, which ask Onsay and wait, or `setting(...)`, answered by that computer's
+lingo client itself. Anything at any other address runs there, its own way, reached by a plain web request. Onsay runs
+no Lingo: it passes requests and answers. An answer sent to a computer after an `@` is a request too, the answer the
+function's first value.
 
-## 12. Where programs run
-
-Code runs where it lives. A lingo in a computer's lingos folder runs in that computer's core, when Onsay relays a call to
-it, `{type:"call", lingo:"test.lingo/find", values}`, or when a web request reaches its route (section 11), and only
-the answer goes back. Its code may call `lingo(...)`,
-`use(...)`, which asks Onsay and waits, or `setting(...)`, answered by that computer's core itself. Anything at any other address runs there, its own way, reached
-by a plain web request. Onsay runs no Lingo: it relays calls and answers. An answer sent to a computer after an `@` is a
-plain call too, the answer the function's first value.
-
-The person gives the permissions on each device, in the Onsay app. The core refuses any phrase that needs one not given,
-and stops any program the moment Onsay or the person says stop. `core/README.md` lists the messages between a core and
-Onsay, and `core/test/server.mjs` runs real programs on a real core.
+The person gives the permissions on each computer, in the Onsay app or the lingo client's settings. The lingo client
+refuses any phrase that needs one not given, and stops any call the moment Onsay or the person says stop.
+`core/README.md` lists the messages between a lingo client and Onsay, and `core/test/server.mjs` runs real lingos on a
+real lingo client.
 
 ## 13. The tree: what the compiler gives
 
-The compiler reads a program into a JSON tree, and the runner only ever runs trees, never text:
+The compiler reads a lingo into a JSON tree, and the runner only ever runs trees, never text. A call of a function is
+a tree too: a tool of one step that gives back what the function gives, with every function it reaches linked in:
 
 ```json
 {
-  "lingo": 1,
-  "tool": { "name": "big_spenders", "params": [["limit", 50]], "body": [ ... ] },
-  "fns": { "fact": { "params": [["n"]], "body": [ ... ] } },
-  "needs": ["web.open", "web.table"],
-  "lines": { "tool/0": 2, "tool/1": 3 }
+  "tool": { "name": "call", "params": [["a0"]], "body": [ ["return", ["call", "memo.recall", [["var", "a0"]]]] ] },
+  "fns": { "memo.recall": { "params": [["k"]], "body": [ ... ] }, "memo.key": { "params": [["k"]], "body": [ ... ] } },
+  "lines": { "fn:memo.recall/0": "memo.lingo line 16" }
 }
 ```
 
 - **`params`:** each is `[name]` or `[name, default]`, where the default is an expression.
-- **`needs`:** every phrase the program can call, so every permission is known before it starts.
-- **`lines`:** maps each statement's path to its line, for errors. A path is `tool` or `fn:name`, then the statement's
-  position in each block on the way down. An `if` has one block per branch then the else, and a `try` has its body
-  then its catch.
+- **`lines`:** maps each statement's path to its file and line, for errors. A path is `tool` or `fn:name`, then the
+  statement's position in each block on the way down. An `if` has one block per branch then the else, and a `try` has
+  its body then its catch.
 
 **Expressions.** A JSON `null`, `true`, `false`, number or text is itself. Every other expression is an array:
 
@@ -600,7 +549,7 @@ The compiler reads a program into a JSON tree, and the runner only ever runs tre
 | `["pick", c, a, b]`        | `c ? a : b`                          |
 | `["else", a, b]`           | `a ?? b`                             |
 | `["range", a, b]`          | `a..b`                               |
-| `["call", name, [e...]]`   | A function of the program            |
+| `["call", name, [e...]]`   | A function                           |
 | `["say", id, {param: e}]`  | A phrase, its values named by its params |
 
 Text with `{}` inside arrives as `+` nodes, starting from `""`, so it always joins as text.
@@ -622,16 +571,16 @@ Text with `{}` inside arrives as `+` nodes, starting from `""`, so it always joi
 
 Compound assignment arrives as a plain `set` or `put` with an `op`: `x+=1` is `["set","x",["op","+",["var","x"],1]]`.
 
-A core may run the tree any way it likes, an interpreter, a compiler or anything else, as long as the result is the
-same.
+A lingo client may run the tree any way it likes, an interpreter, a compiler or anything else, as long as the result
+is the same.
 
 ## 14. Laid out and dense
 
-Whitespace carries no meaning, so every program has two standard ways of being written, and both read back into the
-same tree:
+Whitespace carries no meaning, so all code has two standard ways of being written, and both read back into the same
+tree:
 
 ```
-tool big_programs(limit=500) {
+fn big_programs(limit=500) {
   big = []
   for p in commands.running() {
     if p.memory > limit {
@@ -642,22 +591,22 @@ tool big_programs(limit=500) {
 }
 ```
 ```
-tool big_programs(limit=500){big=[]for p in commands.running(){if p.memory>limit{big+=[{name:p.name,mb:math.round(p.memory)}]}}return list.reverse(list.sort(big,"mb"))}
+fn big_programs(limit=500){big=[]for p in commands.running(){if p.memory>limit{big+=[{name:p.name,mb:math.round(p.memory)}]}}return list.reverse(list.sort(big,"mb"))}
 ```
 
 - **Laid out** is for people: two space indents, spaces around operators, one statement a line.
 - **Dense** is for the fewest tokens: no space or new line that isn't needed, and a `;` only where two names would
-  otherwise run together, like `a=b;c=1`. Measured on realistic programs, dense takes about a quarter fewer tokens.
+  otherwise run together, like `a=b;c=1`. Measured on realistic code, dense takes about a quarter fewer tokens.
 
-Dense suits a model writing a program, since what a model writes costs far more than what it reads, and nothing a person sees has to be
-dense: since whitespace carries no meaning, the same program can always be laid out again for reading. Keyword
-spellings are not worth shortening: words like `return` and `continue` are already a single token each.
+Dense suits a model writing code, since what a model writes costs far more than what it reads, and nothing a person
+sees has to be dense: since whitespace carries no meaning, the same code can always be laid out again for reading.
+Keyword spellings are not worth shortening: words like `return` and `continue` are already a single token each.
 
 ## 15. The core: what every computer has
 
-Every core has one lingo of its own, `core 0.1`, on any device. It is the floor: only what Lingo truly can't write for
-itself, each phrase called with its group, like `std.length(x)`. Anything Lingo can write in a few lines is a lingo
-instead, written in Lingo on this floor (`lingo-library/`).
+Every lingo client has one lingo of its own, `core`, on any computer, never listed in its catalog. It is the floor:
+only what Lingo truly can't write for itself, each phrase called with its group, like `std.length(x)`. Anything Lingo
+can write in a few lines is a lingo instead, written in Lingo on this floor (`lingo-library/`).
 
 | Phrase | Why it is in the core |
 |--------|-----------------------|
@@ -670,51 +619,52 @@ instead, written in Lingo on this floor (`lingo-library/`).
 | `std.bytes(text)`, `std.from_bytes(list)` | A character's UTF-8 bytes and back, Lingo's only way to a letter's code: case, encodings |
 | `compute.now()` | The clock: seconds since 1970 |
 | `compute.wait(seconds)` | Pausing, at most 60 seconds, still stopping when asked |
-| `compute.log(x)` | A line shown to the person, which nothing else can show |
-| `store.get`, `put`, `keys`, `delete` | Onsay's own storage on the device, its files |
-| `settings.get(lingo)`, `settings.set(lingo, key, value)` | A lingo's settings, kept on the device wherever that lingo keeps them, for a form of them and to change one (section 11) |
-| `http.send(method, url, headers=nothing, body=nothing, timeout=30)` | The device's own web request, needing `net`. `request` and `use(...)` stand on it |
+| `compute.log(x)` | A line in the lingo client's log, which the Windows app keeps |
+| `store.get`, `put`, `keys`, `delete` | Onsay's own storage on the computer, its files |
+| `settings.get(lingo)`, `settings.set(lingo, key, value)` | A lingo's settings, kept on the computer wherever that lingo keeps them, for a form of them and to change one (section 11) |
+| `http.send(method, url, headers=nothing, body=nothing, timeout=30)` | The computer's own web request, needing `net`. `request` and `use(...)` stand on it |
 
 `http.send` gives `{status, headers, text}`, its headers a record by lower case name, redirects followed, at most 4 MB
-back, and fails when it takes longer than its timeout. Windows makes it with WinHTTP, and a core in WebAssembly has its
-host make it. Most lingos use `request` (`lingo-library/request.lingo`), built on it, or `use(...)` for one plain
-request.
+back, and fails when it takes longer than its timeout. Windows makes it with WinHTTP and Linux with libcurl, so proxies
+and certificates work as they do for every other program. Most lingos use `request` (`lingo-library/request.lingo`),
+built on it, or `use(...)` for one plain request.
 
 Everything else is a library lingo in the same lingos folder, called by its dotted name: `text` (`split`, `join`,
 `replace`, `trim`, `lower`, `upper` and more), `list` (`sort`, `reverse`), `math` (`round` to the nearest, up or down,
-`min`, `max`) and `time` (dates, like `time.difference(a, b, "days")`). Whether text holds a part is the operator `in`.
-What is around a `lingo(...)`, the device and its time, goes with it, so no phrase says what the device is.
+`min`, `max`), `time` (dates, like `time.difference(a, b, "days")`) and the rest of `lingo-library/`. Whether text
+holds a part is the operator `in`. What is around a `lingo(...)`, the computer and its time, goes with it, so no phrase
+says what the computer is.
 
-## 16. The Windows lingo
+## 16. The Windows lingos
 
-The Windows app ships `windows 1.0`, a native lingo in its own folder (`lingos/windows`), and `agent`, the AI agent from
-`lingo-library`. windows has these groups.
-`core/bin/onsay-core.exe <settings> --manifest` prints every line of it, and of the core's, when it is in that core's
-lingos folder.
+The Windows app ships two native lingos, each in its own folder of `lingos/`, beside `agent`, the AI from
+`lingo-library`. Their phrases, with what each gives and does, are in the catalog, and in their `lingo_phrases` in C.
 
-- **Windows** adds:
+- **`windows`**, Windows itself:
 
   | Group       | Phrases                                                              |
   |-------------|----------------------------------------------------------------------|
   | `window`    | `list`, `current`, `open`, `wait_for`, `focus`, `close`, `resize`, `move` |
   | `controls`  | `find`, `list`, `read`, `press`, `fill`, `toggle`, `pick`, `scroll`, `wait_for` |
-  | `screen`    | `screenshot`, `see`, `read_text`                                     |
-  | `mouse`     | `move`, `click`, `double_click`, `right_click`, `drag`, `scroll`, `cursor` |
-  | `keyboard`  | `type`, `press`                                                      |
   | `files`     | `read`, `write`, `add_to`, `exists`, `list`, `find`, `copy`, `move`, `delete`, `make_folder` |
   | `clipboard` | `read`, `write`                                                      |
   | `commands`  | `run`, `running`, `stop`                                             |
   | `notify`    | `show`                                                               |
-  | `pointer`   | `show`, `hide`                                                       |
-  | `input`     | the mouse and keyboard the way a person uses them: `cursor`, `click_text`, `click_on`, `type_into`, `paste`, `shortcut`, `type_lines`, `move_and_click`, `scroll_to_text`, `wait_for_text`, `copy_all`, `point_text`, `point_on`, `stop_pointing`, `click_in`, `move_in`, `drag_in`, `scroll_in`, `position_in` |
-  | `look`      | Onsay's eyes: `see`, `elements`, `overview`, `focused`, `page`, `lines`, `buttons`, `fields`, `near`, `find_text`, `open_windows` |
+  | `panel`     | `show`, `hide`: a small window of Onsay's own showing a page of HTML |
+  | `input`     | the mouse and keyboard the way a person uses them, through Onsay's own pointer: `cursor`, `click_text`, `click_on`, `type_into`, `type`, `paste`, `shortcut`, `type_lines`, `scroll_to_text`, `wait_for_text`, `copy_all`, `point_text`, `point_on`, `point_at`, `stop_pointing`, `click_in`, `move_in`, `drag_in`, `scroll_in`, `position_in` |
+  | `look`      | the screen read: `screenshot`, `elements`, `overview`, `focused`, `page`, `lines`, `buttons`, `fields`, `near`, `find_text`, `open_windows` |
+
+- **`native`**, Windows only: `native.call(library, function, returns, args)` calls any function in Windows or a DLL by
+  its name and layout, needing `run`.
 
 Conventions that matter in practice:
 - **Paths:** write them with `/`, as in `"~/notes/today.txt"`, so text never needs escapes. A path may start with `~`
   (home) or `downloads`, `desktop` or `documents`, which are found through Windows even when they've been moved. Any
   other path that doesn't start at a drive starts at the person's home.
-- **New windows:** a window builds its controls a moment after it appears, so wait for one with `controls.wait_for` before
-  pressing anything.
+- **Places:** `input`'s `click_in`, `move_in`, `drag_in`, `scroll_in` and `position_in` take a place in a window,
+  wherever it is now, or on the main screen when the window is `nothing`.
+- **New windows:** a window builds its controls a moment after it appears, so wait for one with `controls.wait_for`
+  before pressing anything.
 - **Same names:** `get`, `keys`, `list`, `read`, `write`, `find`, `delete`, `move`, `press`, `scroll`, `wait_for`,
-  `cursor`, `show` and `see` are in more than one group, so they are written with theirs, like `window.wait_for`,
-  `files.read` or `look.see`.
+  `show` and `hide` are in more than one group, so they are written with theirs, like `window.wait_for` or
+  `files.read`.

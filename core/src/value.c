@@ -1,10 +1,10 @@
 // value.c - Lingo's values in C: their arena, making, copying and comparing them, and JSON in and out.
 //
 // 1. Arena       memory for one program, freed all at once
-// 2. Values      making, copying, comparing, and their kinds
+// 2. Values      making, reading, copying, comparing, their kinds, and headers by lower case name
 // 3. UTF-8       counting characters, so text is indexed by character, not by byte, and checking bytes are text
 // 4. Buffers     growing text
-// 5. Numbers     the shortest digits that read back exactly, laid out as JavaScript does, so every runner agrees
+// 5. Numbers     the shortest digits that read back exactly, laid out as JavaScript does
 // 6. JSON out    a value as JSON, or as text
 // 7. JSON in     JSON text as a value
 #include "lingo.h"
@@ -130,6 +130,34 @@ void rec_set(arena *a, val *r, const char *key, val *x) {
   memcpy(own, key, len);
   r->r.key[r->r.n] = own;
   r->r.v[r->r.n++] = x;
+}
+
+const char *text_or(val *r, const char *key, const char *fallback) {
+  val *v = r && r->k == V_REC ? rec_get(r, key) : NULL;
+  return v && v->k == V_TEXT ? v->t.s : fallback;
+}
+
+void header_add(arena *a, val *headers, const char *name, size_t n, const char *value, size_t vn) {
+  buf low = { 0 }, both = { 0 };
+  for (size_t i = 0; i < n; i++) buf_chr(&low, (char)(name[i] >= 'A' && name[i] <= 'Z' ? name[i] + 32 : name[i]));
+  val *had = rec_get(headers, low.s ? low.s : "");
+  if (had) { buf_add(&both, had->t.s, had->t.len); buf_str(&both, ", "); }
+  buf_add(&both, value, vn);
+  rec_set(a, headers, low.s ? low.s : "", v_text(a, both.s ? both.s : "", both.n));
+  buf_free(&low), buf_free(&both);
+}
+
+val *header_lines(arena *a, const char *s) {
+  val *out = v_rec(a);
+  for (const char *end; *s; s = *end ? end + 2 : end) {
+    if (!(end = strstr(s, "\r\n"))) end = s + strlen(s);
+    const char *colon = memchr(s, ':', (size_t)(end - s)), *v = colon, *stop = end;
+    if (!colon || colon == s) continue;   // the status line
+    while (++v < end && (*v == ' ' || *v == '\t')) {}
+    while (stop > v && (stop[-1] == ' ' || stop[-1] == '\t')) stop--;
+    header_add(a, out, s, (size_t)(colon - s), v, (size_t)(stop - v));
+  }
+  return out;
 }
 
 // Text and numbers never change once made, so only lists and records need copying.

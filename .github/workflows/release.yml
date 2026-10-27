@@ -1,10 +1,9 @@
-# release.yml - a release of the lingo client, made on GitHub two ways: push a tag like v0.3.0, or open Actions,
-# pick "release", press "Run workflow" and type the version. core/build.ps1 runs, then its files go on the release
-# page, which onsay.dev and core/install.sh download from.
+# release.yml - a release of the lingo client, made on GitHub two ways: push a tag like v0.4.0, or open Actions, pick
+# "release", press "Run workflow" and type the version. core/build.ps1 runs, then its files go on the release page,
+# which onsay.dev and core/install.sh download from.
 #   lingo-client-windows-x64.zip   onsay-core.exe and the lingos folder, what the Windows app ships
-#   onsay-core-linux-x64           the core for Linux servers, and onsay-core-linux-arm64
-#   install.sh                     puts the core on a Linux server
-#   lingo.wasm                     the Lingo compiler on its own, for the web
+#   onsay-core-linux-x64           the lingo client for Linux servers, and onsay-core-linux-arm64
+#   install.sh                     puts it on a Linux server
 name: release
 
 on:
@@ -13,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version, like 0.3.1 (CORE_VERSION in core/src/core.h)'
+        description: 'Version, like 0.4.1 (CORE_VERSION in core/src/core.h)'
         required: true
 
 jobs:
@@ -33,7 +32,7 @@ jobs:
           Compress-Archive -Path core\bin\onsay-core.exe, core\bin\lingos -DestinationPath release\lingo-client-windows-x64.zip
           Copy-Item core\bin\linux-x64\onsay-core release\onsay-core-linux-x64
           Copy-Item core\bin\linux-arm64\onsay-core release\onsay-core-linux-arm64
-          Copy-Item core\install.sh, core\bin\lingo.wasm release\
+          Copy-Item core\install.sh release\
         shell: pwsh
       - uses: softprops/action-gh-release@v2
         with:

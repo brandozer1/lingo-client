@@ -1,7 +1,0 @@
-{
-  "settings": [
-    { "name": "key", "title": "OpenRouter API key", "about": "Your OpenRouter key, from openrouter.ai/keys.", "required": true, "secret": true },
-    { "name": "url", "title": "Address", "about": "Where OpenRouter answers, up to /v1.", "default": "https://openrouter.ai/api/v1" },
-    { "name": "model", "title": "Model", "about": "Any OpenRouter model id, like openai/gpt-4o-mini, for when a program names none. Else openai/gpt-4o-mini." }
-  ]
-}

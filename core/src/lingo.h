@@ -2,9 +2,9 @@
 //
 // 1. Values      nothing, true/false, numbers, text, lists and records, in an arena freed all at once
 // 2. Buffers     growing text, for JSON and messages
-// 3. Phrases     what the device can do: an id, its manifest line, what it needs, and the C function behind it
-// 4. Running     run a tree, or one phrase, to a result message
-// 5. Compiling   Lingo code to a tree of native phrases, through every lingo it is written on
+// 3. Phrases     what this computer can do: an id, its line, what it needs, and the C function behind it
+// 4. Running     a tree to its value or its error
+// 5. Compiling   every lingo in the lingos folder, and a call of one of their functions, linked down to native phrases
 // A native lingo's library is written against this and platform.h. Its one entry is lingo_phrases (LINGO_ENTRY).
 #ifndef LINGO_H
 #define LINGO_H
@@ -65,10 +65,14 @@ val *v_rec(arena *a);
 void list_push(arena *a, val *list, val *x);
 val *rec_get(val *r, const char *key);
 void rec_set(arena *a, val *r, const char *key, val *x);
+const char *text_or(val *r, const char *key, const char *fallback);   // a record's text by key, else fallback
 val *v_copy(arena *a, val *x);
 int v_same(val *a, val *b);
 int truthy(val *x);
 const char *kind_name(val *x);
+// One header into a record by its lower case name. A name said twice keeps both values, joined by ", ".
+void header_add(arena *a, val *headers, const char *name, size_t n, const char *value, size_t vn);
+val *header_lines(arena *a, const char *s);   // "Name: value" lines, each ending \r\n, as that record
 
 // UTF-8: how many characters, where character i starts, and whether bytes are text at all.
 size_t utf8_count(const char *s, size_t len);
@@ -83,7 +87,7 @@ void buf_str(buf *b, const char *s);
 void buf_chr(buf *b, char c);
 void buf_fmt(buf *b, const char *fmt, ...);
 void buf_free(buf *b);
-void buf_num(buf *b, double n);        // numbers written the way JavaScript writes them, so every runner agrees
+void buf_num(buf *b, double n);        // numbers written the way JavaScript writes them
 void buf_text(buf *b, val *x);         // a value as text: nothing is empty, lists and records as JSON
 void buf_json(buf *b, val *x);         // a value as JSON
 void buf_json_str(buf *b, const char *s, size_t n);
@@ -97,24 +101,22 @@ typedef val *(*phrase_fn)(run *r, val **args);
 
 typedef struct {
   const char *id;      // group.name
-  const char *line;    // its line in the manifest, exactly as Onsay reads it
-  const char *needs;   // the permission it uses
+  const char *needs;   // every permission it uses, like "screen.act, screen.read"
+  const char *does;    // its line after the signature, like "-> [text]: sorted"
   phrase_fn fn;
-  int count;           // how many values it takes, read from line
+  size_t lingo;        // the native lingo it is of, by number, core being 0
+  int count;           // how many values it takes, read from its line
   char **params;
-  val **defaults;      // NULL where a value has no default
+  val **defaults;      // NULL where a value has no default, NOTHING where it is nothing
 } phrase;
 
-void native_begin(const char *name, const char *version, const char *uses);   // a native lingo, like core 0.1. The core's to call
-typedef void (*lingo_entry)(void);   // a library's lingo_phrases: group_add, shape_add and phrase_add, nothing else
-void group_add(const char *name, const char *line);   // line is what follows "name: ", like "none, pure"
-void shape_add(const char *name, const char *fields); // a record a phrase gives, like window = {id,title}
+typedef void (*lingo_entry)(void);   // a library's lingo_phrases, which calls phrase_add for each of its phrases
+// line is its signature, then -> what it gives and : what it does, as it needs, like "keys(prefix=\"\") -> [text]: sorted".
 void phrase_add(const char *group, const char *needs, const char *line, phrase_fn fn);
 phrase *phrase_find(const char *id);
-const char *phrase_running(void);   // the id of the phrase being called, for one fn that serves many, like a host's
-size_t native_count(void);
-void phrase_manifest(buf *b, size_t lingo);         // native lingo number lingo, as its manifest text
-void std_phrases(void);   // std.c
+void native_begin(size_t lingo);              // the phrases added from now on are native lingo number lingo's
+val *native_phrases(arena *a, size_t lingo);  // its phrases as the compiler reads them: [{id, params: [{name, default?}], does}]
+void std_phrases(void);                       // std.c
 
 ////////// 4. RUNNING //////////
 
@@ -128,41 +130,29 @@ struct run {
   void *trap;               // where an error jumps to
   char code[16];
   buf message, at, at_error;
-  val *log;                 // notes for the person, a list of text
-  val *pictures;            // pictures for Onsay to see, sent with the result: records a device lingo makes, see picture()
   const char *const *allow; // permissions given
   int allowed;
 };
 
-// Both write a whole result message into out, {"type":"result","id","ok","value"} or with an error. The caller frees a.
-void run_program(arena *a, const char *id_json, val *program, val *input, long long steps, double ms, volatile int *stop,
-                 const char *const *allow, int allowed, buf *out);
-void run_phrase(arena *a, const char *id_json, const char *phrase_id, val *values, volatile int *stop,
-                const char *const *allow, int allowed, buf *out);
+// What a run may take, and what stops it.
+typedef struct { long long steps; double ms; volatile int *stop; const char *const *allow; int allowed; } limits;
+
+// The program's value, or NULL with the error's code and message, its file and line first when it is in a lingo.
+val *run_program(arena *a, val *program, val *input, limits l, const char **code, const char **message);
 
 ////////// 5. COMPILING //////////
 
-// On failure each gives NULL, with the problem in *message and its *line. Everything made goes in a.
-val *lingo_manifest(arena *a, const char *text, size_t n, const char **message);   // a native lingo's manifest, read
-val *lingo_read(arena *a, val *manifest, const char *folder, const char **message);  // a native or host lingo's lingo.json
-val *lingo_schema(arena *a, const char *gives, size_t n, val *shapes);             // what a listing gives, as JSON Schema
-val *lingo_gives(arena *a, val *schema, val *shapes);                              // and back
-
-void lingo_line(buf *b, val *phrase, const char *group_needs);                     // a phrase as its listing's line
-val *lingo_parse(arena *a, const char *code, size_t n, val *phrases, const char *own, int *line, const char **message);   // own: its lingo's name
-val *lingo_link(arena *a, val *program, val *stack);
-val *lingo_load(arena *a, val *natives, val *stacked, const char **message);        // natives: [text], stacked: [{file, code}]
-val *lingo_face(arena *a, val *inst, val *names, const char **message);             // what Onsay is shown, as text
-val *lingo_prepare(arena *a, val *inst, const char *code, size_t n, val *names, int *line, const char **message);   // to run
-void lingo_request(const char *json, size_t n, buf *out);                          // all of it, as one JSON call
+// natives: [{name, phrases}], each from native_phrases. stacked: [{file, code}], the lingos written in Lingo. Gives the
+// instance, {lingos: name -> listing, stack}, or NULL with a message that starts with the file at fault.
+val *lingo_load(arena *a, val *natives, val *stacked, const char **message);
+// A program whose tool takes fn's values, as a0, a1 and on, and gives what fn gives for them, linked down to native
+// phrases. NULL when no lingo here has fn.
+val *lingo_call(arena *a, val *inst, const char *fn);
 
 // For phrases.
 _Noreturn void fail(run *r, const char *code, const char *fmt, ...);   // stops with an error, never returns
 double num_of(run *r, val *x, const char *what);
 val *text_of(run *r, val *x);                                           // any value as text
-int order(run *r, val *a, val *b);                                      // -1, 0 or 1, for two numbers or two texts
-void note(run *r, val *x);
-int picture(run *r, val *x);   // {data (base64), mime, ...} sent with the result for Onsay to see. Gives its number, from 1
 
 LINGO_SHARED_END
 

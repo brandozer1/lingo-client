@@ -1,6 +1,6 @@
 // std.c - the std group of the core lingo: what Lingo can't write for itself, reaching inside values and converting them.
-// test/reference/std.mjs gives the same. Everything else for text, lists, numbers and dates is written in Lingo, in
-// ../../lingo-library (text, list, math and time).
+// Everything else for text, lists, numbers and dates is written in Lingo, in ../../lingo-library (text, list, math and
+// time).
 //
 // 1. Inside values   length, keys, slice: counted by characters for text, not bytes
 // 2. Converting      number, text, to_json, from_json, bytes, from_bytes
@@ -119,7 +119,6 @@ static val *from_bytes(run *r, val **a) {
 ////////// 3. STD_PHRASES //////////
 
 void std_phrases(void) {
-  group_add("std", "none, pure");
   phrase_add("std", "none", "length(x) -> number: items, characters or parts", len);
   phrase_add("std", "none", "keys(r) -> list: a record's part names", keys);
   phrase_add("std", "none", "slice(x, from, to=nothing) -> list|text: to not included, negative counts from the end", slice);
