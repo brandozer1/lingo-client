@@ -110,7 +110,7 @@ void list_push(arena *a, val *list, val *x) {
 }
 
 val *rec_get(val *r, const char *key) {
-  for (size_t i = 0; i < r->r.n; i++) if (!strcmp(r->r.key[i], key)) return r->r.v[i];
+  for (size_t i = 0; r && r->k == V_REC && i < r->r.n; i++) if (!strcmp(r->r.key[i], key)) return r->r.v[i];
   return NULL;
 }
 
@@ -133,7 +133,7 @@ void rec_set(arena *a, val *r, const char *key, val *x) {
 }
 
 const char *text_or(val *r, const char *key, const char *fallback) {
-  val *v = r && r->k == V_REC ? rec_get(r, key) : NULL;
+  val *v = rec_get(r, key);
   return v && v->k == V_TEXT ? v->t.s : fallback;
 }
 

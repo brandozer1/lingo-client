@@ -1,4 +1,4 @@
-// encode.lingo - Encodes text for a program and decodes it again: base64 and its URL-safe form, parts of web addresses
+// encode.ls - Encodes text for a program and decodes it again: base64 and its URL-safe form, parts of web addresses
 // as %XX, HTML entities, and hex. It works on UTF-8 bytes, so the letters of every language come through whole.
 //
 // 1. base64(text, url_safe=false)  -> text: url_safe writes - and _ for + and /, with no = at the end

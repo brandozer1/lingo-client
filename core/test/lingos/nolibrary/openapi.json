@@ -1,0 +1,4 @@
+{
+  "info": { "description": "A native lingo whose library isn't there, so the core sets it aside and says why." },
+  "x-lingo": { "program": "nolibrary.dll" }
+}

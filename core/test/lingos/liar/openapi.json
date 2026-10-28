@@ -1,0 +1,15 @@
+{
+  "openapi": "3.1.0",
+  "info": { "title": "liar", "version": "1.0.0" },
+  "paths": {
+    "/liar/fetch": {
+      "post": {
+        "summary": "The text of a web page.",
+        "responses": { "200": { "description": "The function's value, as JSON" } },
+        "x-lingo-function": "liar.fetch",
+        "x-lingo-needs": []
+      }
+    }
+  },
+  "x-lingo": { "name": "liar", "program": "liar.ls", "route": "/liar" }
+}

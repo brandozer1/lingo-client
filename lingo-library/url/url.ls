@@ -1,4 +1,4 @@
-// url.lingo - Web addresses for a program: one taken apart into its scheme, host, port, path, query and hash, and built
+// url.ls - Web addresses for a program: one taken apart into its scheme, host, port, path, query and hash, and built
 // again, paths joined, and queries to and from records, their parts encoded and decoded.
 //
 // 1. parse(address)    -> {scheme, user, host, port, path, query, hash}: query a record, port a number, missing parts nothing

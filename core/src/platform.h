@@ -3,7 +3,7 @@
 // 1. Time      the clock and sleeping
 // 2. Threads   starting one, and a gate: a lock that can also wait to be woken
 // 3. Links     a WebSocket to Onsay
-// 4. Files     read, write, delete and list, for the core's own storage
+// 4. Files     read, write, add to, delete and list, for the core's own storage and its log
 // 5. Device    what is around it, a native lingo's library, and web requests going out
 // 6. Port      web requests coming in: a port to listen on, and each connection to it
 // The engine (core.c) only uses time, the gate, files and the device. Threads, links and the port are for host.c alone.
@@ -48,8 +48,10 @@ void pl_free(pl_link *l);
 
 int pl_read(const char *path, buf *out);
 int pl_write(const char *path, const char *data, size_t n);   // replaces the file whole, never half written
+int pl_append(const char *path, const char *data, size_t n);  // adds to its end, making it when missing
 int pl_delete(const char *path);
 int pl_folder(const char *path);                              // makes it, and the folders above it, if missing
+void pl_whole(const char *path, buf *out);                    // the path whole, from the folder it runs in
 // Everything in a folder, one level: each name, whether it is a folder, its size, and when it last changed, in seconds.
 void pl_list(const char *folder, void (*each)(const char *name, int folder, double size, double changed, void *arg), void *arg);
 
@@ -69,10 +71,12 @@ val *pl_http(arena *a, const char *method, const char *url, val *headers, const 
 
 ////////// 6. PORT //////////
 
-// A port this computer listens on, and each connection to it, both a pl_socket. Each connection is read on its own thread.
+// A port this computer listens on, on every address it has when everywhere, else on 127.0.0.1 alone, and each connection
+// to it, both a pl_socket. Each connection is read on its own thread.
 typedef struct pl_socket pl_socket;
-pl_socket *pl_listen(int port, int network, buf *error);   // network 0: this computer only (127.0.0.1), 1: every address
-pl_socket *pl_accept(pl_socket *port, int *here);          // the next connection, here 1 when it is from this computer
+pl_socket *pl_listen(int port, int everywhere, buf *error);
+pl_socket *pl_accept(pl_socket *port, buf *from);          // the next connection, and the address it is from, like
+                                                           // 127.0.0.1, or NULL when none came within a second
 int pl_take(pl_socket *c, char *to, size_t n);             // what came, up to n bytes. 0 once it closed or was quiet 10 seconds
 int pl_give(pl_socket *c, const char *data, size_t n);     // all of it, or 0
 void pl_hang_up(pl_socket *c);                              // closes it and frees it

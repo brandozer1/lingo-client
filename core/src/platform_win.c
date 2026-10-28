@@ -212,11 +212,27 @@ int pl_write(const char *path, const char *data, size_t n) {
   return ok;
 }
 
+int pl_append(const char *path, const char *data, size_t n) {
+  wchar_t *w = win_wide(path);
+  FILE *f = _wfopen(w, L"ab");
+  free(w);
+  int ok = f && fwrite(data, 1, n, f) == n;
+  if (f) ok = !fclose(f) && ok;
+  return ok;
+}
+
 int pl_delete(const char *path) {
   wchar_t *w = win_wide(path);
   int ok = DeleteFileW(w) || GetLastError() == ERROR_FILE_NOT_FOUND;
   free(w);
   return ok;
+}
+
+void pl_whole(const char *path, buf *out) {
+  wchar_t *w = win_wide(path), full[MAX_PATH * 4];
+  if (GetFullPathNameW(w, sizeof full / sizeof *full, full, NULL)) win_narrow(out, full, -1);
+  else buf_str(out, path);
+  free(w);
 }
 
 int pl_folder(const char *path) {
@@ -385,19 +401,23 @@ val *pl_http(arena *a, const char *method, const char *url, val *headers, const 
 
 struct pl_socket { SOCKET s; };
 
-pl_socket *pl_listen(int port, int network, buf *error) {
+// Everywhere: IPv6 and IPv4 on one socket, or IPv4 alone on a computer without IPv6. Else 127.0.0.1 alone, which
+// Windows' firewall never asks about.
+pl_socket *pl_listen(int port, int everywhere, buf *error) {
   WSADATA w;
-  struct sockaddr_in here = { 0 };
-  struct sockaddr_in6 every = { 0 };   // its address all zeros: every one, IPv4 too once V6ONLY is off
+  struct sockaddr_in four = { 0 };
+  struct sockaddr_in6 six = { 0 };   // its address all zeros: every one, IPv4 too once V6ONLY is off
   DWORD no = 0, yes = 1;
-  here.sin_family = AF_INET, here.sin_port = htons((u_short)port), here.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-  every.sin6_family = AF_INET6, every.sin6_port = htons((u_short)port);
-  SOCKET s = WSAStartup(MAKEWORD(2, 2), &w) ? INVALID_SOCKET : socket(network ? AF_INET6 : AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  four.sin_family = AF_INET, four.sin_port = htons((u_short)port), four.sin_addr.s_addr = htonl(everywhere ? INADDR_ANY : INADDR_LOOPBACK);
+  six.sin6_family = AF_INET6, six.sin6_port = htons((u_short)port);
+  SOCKET s = WSAStartup(MAKEWORD(2, 2), &w) || !everywhere ? INVALID_SOCKET : socket(AF_INET6, SOCK_STREAM, IPPROTO_TCP);
+  int v6 = s != INVALID_SOCKET;
+  if (!v6) s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
   if (s != INVALID_SOCKET) {
     setsockopt(s, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (char *)&yes, sizeof yes);   // so no other program can listen on it too
-    if (network) setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY, (char *)&no, sizeof no);
+    if (v6) setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY, (char *)&no, sizeof no);
   }
-  if (s == INVALID_SOCKET || bind(s, network ? (struct sockaddr *)&every : (struct sockaddr *)&here, network ? sizeof every : sizeof here) || listen(s, SOMAXCONN)) {
+  if (s == INVALID_SOCKET || bind(s, v6 ? (struct sockaddr *)&six : (struct sockaddr *)&four, v6 ? sizeof six : sizeof four) || listen(s, SOMAXCONN)) {
     int code = WSAGetLastError();
     buf_fmt(error, "Port %d couldn't be opened: %s (%d)", port, code == WSAEADDRINUSE || code == WSAEACCES ? "another program is using it" : "Windows error", code);
     if (s != INVALID_SOCKET) closesocket(s);
@@ -408,18 +428,23 @@ pl_socket *pl_listen(int port, int network, buf *error) {
   return p;
 }
 
-pl_socket *pl_accept(pl_socket *port, int *here) {
-  struct sockaddr_storage from;
-  int n = sizeof from;
-  SOCKET c = accept(port->s, (struct sockaddr *)&from, &n);
+// An IPv4 address as IPv6 writes it, ::ffff:1.2.3.4, is written 1.2.3.4.
+pl_socket *pl_accept(pl_socket *port, buf *from) {
+  struct sockaddr_storage at;
+  struct timeval second = { 1, 0 };
+  fd_set ready;
+  int n = sizeof at;
+  FD_ZERO(&ready);
+  FD_SET(port->s, &ready);
+  if (select(0, &ready, NULL, NULL, &second) != 1) return NULL;
+  SOCKET c = accept(port->s, (struct sockaddr *)&at, &n);
   if (c == INVALID_SOCKET) return NULL;
   DWORD ms = 10000;
   setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, (char *)&ms, sizeof ms);
   setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, (char *)&ms, sizeof ms);
-  // 127.x.x.x, ::1, or 127.x.x.x as IPv6 writes it, ::ffff:127.x.x.x.
-  static const unsigned char loop[16] = { [15] = 1 }, mapped[12] = { [10] = 255, [11] = 255 };
-  const unsigned char *v4 = (unsigned char *)&((struct sockaddr_in *)&from)->sin_addr, *v6 = ((struct sockaddr_in6 *)&from)->sin6_addr.s6_addr;
-  *here = from.ss_family == AF_INET ? v4[0] == 127 : !memcmp(v6, loop, 16) || (!memcmp(v6, mapped, 12) && v6[12] == 127);
+  char text[64] = "";
+  inet_ntop(at.ss_family, at.ss_family == AF_INET ? (void *)&((struct sockaddr_in *)&at)->sin_addr : (void *)&((struct sockaddr_in6 *)&at)->sin6_addr, text, sizeof text);
+  buf_str(from, strncmp(text, "::ffff:", 7) || !strchr(text, '.') ? text : text + 7);
   pl_socket *s = malloc(sizeof *s);
   s->s = c;
   return s;

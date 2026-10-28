@@ -1,4 +1,4 @@
-// json.lingo - JSON for a program: text read as JSON without failing, a value written as JSON, a value reached by a
+// json.ls - JSON for a program: text read as JSON without failing, a value written as JSON, a value reached by a
 // path like a.b[0].c, two records merged deeply, and the kind of a value.
 //
 // 1. parse(text, fallback=nothing)       -> any: fallback when the text isn't JSON

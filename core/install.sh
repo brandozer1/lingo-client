@@ -4,22 +4,21 @@
 #
 #   curl -fsSL https://github.com/brandozer1/lingo-client/releases/latest/download/install.sh | sh
 #                                             downloads the latest release and installs it
-#   curl -fsSL .../install.sh | sh -s -- --network --sign-in
-#                                             the same, answering other computers too, and signed in to Onsay
+#   curl -fsSL .../install.sh | sh -s -- --sign-in
+#                                             the same, signed in to Onsay
 #   sh install.sh ./bin/linux-x64/onsay-core  installs one already here, like from a checkout
 #
-#   --network   answers every address this server has, not only this server itself (the setting listen)
 #   --sign-in   signs it in to Onsay from any device's browser, so Onsay can reach its lingos
 # As root it is for the whole server: /usr/local/bin, /var/lib/onsay and a system service. Otherwise it is for this
-# user: ~/.local/bin, ~/.onsay and a user service. Run it again to update it: its settings and sign in are kept.
+# user: ~/.local/bin, ~/.onsay and a user service. Run it again to update it: its settings, policy and sign in are kept.
+# A lingo put in its lingos folder runs once started, and other computers reach it once shared (core/README.md).
 set -e
 
 ONSAY_DOWNLOAD=https://github.com/brandozer1/lingo-client/releases/latest/download   # the latest release, see .github/workflows/release.yml
 
-network= signin= from=
+signin= from=
 for a in "$@"; do
   case "$a" in
-    --network) network=1 ;;
     --sign-in) signin=1 ;;
     *) from="$a" ;;
   esac
@@ -39,11 +38,10 @@ else curl -fsSL "$ONSAY_DOWNLOAD/onsay-core-linux-$arch" -o "$bin/onsay-core.new
 chmod 755 "$bin/onsay-core.new"
 mv "$bin/onsay-core.new" "$bin/onsay-core"
 
-# Its settings, see core/README.md: its folder, what its lingos may do, and who it answers.
+# Its settings, see core/README.md: its folder, which holds its lingos, its policy and everything it keeps.
 settings="$home/core.json"
-[ -f "$settings" ] || printf '{"home": "%s", "allow": ["files.read", "net"]}\n' "$home" > "$settings"
-if [ -n "$network" ] && ! grep -q '"listen"' "$settings"; then sed -i 's/^{/{"listen": "network", /' "$settings"; fi
-if [ -n "$signin" ] && ! grep -q '"token"' "$settings"; then "$bin/onsay-core" "$settings" --sign-in; fi
+[ -f "$settings" ] || printf '{"home": "%s"}\n' "$home" > "$settings"
+if [ -n "$signin" ] && ! grep -q '"token"' "$settings"; then "$bin/onsay-core" "$settings" sign-in; fi
 
 # A service that starts it with the server and starts it again if it stops.
 unit="[Unit]
@@ -75,4 +73,5 @@ else
   echo "The lingo client is running for $(id -un), on port 6969. Its log: journalctl --user -u onsay -f"
   echo "To keep it running after you log out: sudo loginctl enable-linger $(id -un)"
 fi
-echo "Its lingos go in $home/lingos."
+echo "Its lingos go in $home/lingos. Start one: $bin/onsay-core $settings start <lingo>"
+echo "Let other computers reach it: $bin/onsay-core $settings share <lingo> public, or ip and an address"

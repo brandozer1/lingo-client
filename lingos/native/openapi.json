@@ -1,0 +1,6 @@
+{
+  "info": {
+    "version": "1.0.0",
+    "description": "Calls a function in Windows or any DLL directly, by its name and the shape of what it takes and gives back, so any of them can be run without code written for it. Windows only. Needs run, since a call can do anything the computer can."
+  }
+}

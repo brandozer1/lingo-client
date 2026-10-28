@@ -1,4 +1,4 @@
-// list.lingo - Lists for a program: sorting, smallest first or records by one of their parts, and reversing.
+// list.ls - Lists for a program: sorting, smallest first or records by one of their parts, and reversing.
 //
 // 1. sort(list, part=nothing)   -> list: smallest first, records by part, equal ones kept in their order
 // 2. reverse(x)                 -> list or text: last first

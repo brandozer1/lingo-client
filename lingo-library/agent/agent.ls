@@ -1,4 +1,4 @@
-// agent.lingo - The library's AI, on your own key: Claude, ChatGPT, OpenRouter, or any service that answers the way
+// agent.ls - The library's AI, on your own key: Claude, ChatGPT, OpenRouter, or any service that answers the way
 // OpenAI does, like Ollama on your own computer. It talks with the person and uses any lingo it needs on the way, or
 // gives a program one answer.
 //
@@ -9,8 +9,8 @@
 // use(address, values), anything named by its address. Each tool's answer, or what went wrong, goes back to the model
 // until it replies.
 //
-// Its settings, claude_key, openai_key, openrouter_key, url, service and model, are said in lingo.json beside it and
-// kept on this computer: set them in the Onsay app's Lingos settings, or with --set. One key is enough.
+// Its settings, claude_key, openai_key, openrouter_key, url, service and model, are said in openapi.json beside it and
+// kept on this computer: set them in the Onsay app's Lingos settings, or with the command line's set. One key is enough.
 
 ////////// 1-2. ASKING //////////
 
@@ -65,18 +65,18 @@ fn service(model) {
   }
   model = model ?? given(setting("model"))
   if pick == "claude" {
-    if claude == nothing {fail "Claude needs your API key: set claude_key in agent's settings, in the Onsay app or with --set. Get one at console.anthropic.com"}
+    if claude == nothing {fail "Claude needs your API key: set claude_key in agent's settings, in the Onsay app or with the command line's set. Get one at console.anthropic.com"}
     return {kind: "claude", name: "Claude", key: claude, url: "https://api.anthropic.com/v1/messages", model: model ?? "claude-opus-5-5"}
   }
   if pick == "chatgpt" {
-    if openai == nothing and url == nothing {fail "ChatGPT needs your API key: set openai_key in agent's settings, in the Onsay app or with --set. Get one at platform.openai.com"}
+    if openai == nothing and url == nothing {fail "ChatGPT needs your API key: set openai_key in agent's settings, in the Onsay app or with the command line's set. Get one at platform.openai.com"}
     return {kind: "openai", name: url == nothing ? "ChatGPT" : url, key: openai, url: (url ?? "https://api.openai.com/v1") + "/chat/completions", model: model ?? "gpt-5-mini"}
   }
   if pick == "openrouter" {
-    if router == nothing {fail "OpenRouter needs your key: set openrouter_key in agent's settings, in the Onsay app or with --set. Get one at openrouter.ai/keys"}
+    if router == nothing {fail "OpenRouter needs your key: set openrouter_key in agent's settings, in the Onsay app or with the command line's set. Get one at openrouter.ai/keys"}
     return {kind: "openai", name: "OpenRouter", key: router, url: "https://openrouter.ai/api/v1/chat/completions", model: model ?? "openai/gpt-5-mini"}
   }
-  fail "I need a key for an AI to answer: set claude_key, openai_key or openrouter_key in agent's settings, in the Onsay app or with --set"
+  fail "I need a key for an AI to answer: set claude_key, openai_key or openrouter_key in agent's settings, in the Onsay app or with the command line's set"
 }
 
 // A setting, or nothing when it is left empty. For the agent's own use.
@@ -126,7 +126,7 @@ fn reply(ai, said, tools) {
 
 // A web answer from the AI, read as JSON, or what went wrong in plain words. For the agent's own use.
 fn heard(ai, r) {
-  if r.status == 401 or r.status == 403 {fail "{ai.name} turned the key down: check it in agent's settings, in the Onsay app or with --set"}
+  if r.status == 401 or r.status == 403 {fail "{ai.name} turned the key down: check it in agent's settings, in the Onsay app or with the command line's set"}
   if r.status < 200 or r.status > 299 {fail "{ai.name} answered {r.status}: {r.text}"}
   return std.from_json(r.text)
 }

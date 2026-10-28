@@ -1,4 +1,4 @@
-// page - for the tests: a lingo that answers web requests at its route, /hello, with serve(request), open to anyone.
+// page - for the tests: a lingo that answers web requests at its route, /hello, with serve(request), shared with anyone.
 
 // Every request to /hello, answered by its path: text, JSON, a status and headers of its own, or a failure.
 fn serve(request) {

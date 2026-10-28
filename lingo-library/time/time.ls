@@ -1,4 +1,4 @@
-// time.lingo - Dates and times: the date and time now in words for a person, and reading, formatting, adding to and
+// time.ls - Dates and times: the date and time now in words for a person, and reading, formatting, adding to and
 // comparing times, how long ago, the start of a day and the day of the week. A time is seconds since 1970, as
 // compute.now() gives the time now.
 //

@@ -1,4 +1,4 @@
-// math.lingo - Numbers for a program: rounding to whole numbers or to places, up, down or to the nearest, and the
+// math.ls - Numbers for a program: rounding to whole numbers or to places, up, down or to the nearest, and the
 // smaller or larger of two.
 //
 // 1. round(n, places=0, mode="nearest")   -> number: mode nearest, up or down, places below 0 to tens, hundreds...

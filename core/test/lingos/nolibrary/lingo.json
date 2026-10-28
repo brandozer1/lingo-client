@@ -1,7 +1,0 @@
-{
-  "name": "nolibrary",
-  "version": "1.0.0",
-  "about": "A native lingo whose library isn't there, so the core sets it aside and says why.",
-  "runs": "native",
-  "library": "nolibrary.dll"
-}

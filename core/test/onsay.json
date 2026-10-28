@@ -3,8 +3,6 @@
   "home": "test/data",
   "lingos": "test/data/lingos",
   "port": 6970,
-  "inbound": "onsay",
-  "allow": ["none", "screen.read", "files.read", "files.write", "run", "net"],
   "steps": 100000000,
   "ms": 600000
 }

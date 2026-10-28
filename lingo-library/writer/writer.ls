@@ -1,10 +1,10 @@
-// writer.lingo - Writes lingos for you. Say what a lingo should do, like a lingo that tells me the weather for a city, and
+// writer.ls - Writes lingos for you. Say what a lingo should do, like a lingo that tells me the weather for a city, and
 // it writes it, reviewed and fixed by a second look, ready to put in your computer's lingos folder. It changes a lingo
 // you already have the same way. agent's AI writes them, on your own key: a strong coding model writes the best ones.
 //
 // 1. write(request, chat=nothing, model=nothing)  -> made: a new lingo that does what request says, chat the chat before it
 // 2. revise(name, code, change, model=nothing)    -> made: the lingo name, its code, changed as asked
-// made = {name, file, code, manifest, notes}: file is <name>.lingo, manifest its lingo.json when it needs one, else
+// made = {name, file, code, manifest, notes}: file is <name>.ls, manifest its openapi.json when it needs one, else
 // nothing, and notes in plain words what it made, the settings to set and the lingos it calls. model is a model id of
 // the service agent uses, else this lingo's model setting, else agent's. A model drafts it, a second pass reviews it
 // against a checklist, and a third fixes what the review found, at most twice, so at most 5 asks. It isn't loaded to
@@ -26,10 +26,10 @@ fn write(request, chat=nothing, model=nothing) {
 
 // 2. Changes a lingo the person already has, as they ask, like add a function for tomorrow's weather, and gives back its
 // code changed and reviewed again. Use it only when they ask to change, edit, fix or add to a lingo and give its code.
-// Not for chatting or doing the task itself. name is the lingo's name, like weather, code its whole .lingo file, and
+// Not for chatting or doing the task itself. name is the lingo's name, like weather, code its whole .ls file, and
 // change what to change, in plain words. Its name stays, and so does everything the change doesn't touch.
 fn revise(name, code, change, model=nothing) {
-  if text.trim(std.text(code ?? "")) == "" {fail "To change a lingo, give its code: the whole of its .lingo file"}
+  if text.trim(std.text(code ?? "")) == "" {fail "To change a lingo, give its code: the whole of its .ls file"}
   ask = "Change this lingo as asked, keeping its name, {name}, and everything the change doesn't touch. The change: {change}\n\n"
   return made(ask + shown({name: name, code: code, manifest: nothing}), model, name)
 }
@@ -119,24 +119,24 @@ fn result(d, left) {
     rest = text.trim(std.slice(part, std.length(s) + 1))
     if not (s in set) and std.slice(rest, 0, 1) == ")" {set += [s]}
   }
-  if std.length(set) > 0 {notes += ["Then set these in its settings, in the Onsay app's Lingos settings or with --set: " + text.join(set, ", ") + "."]}
+  if std.length(set) > 0 {notes += ["Then set these in its settings, in the Onsay app's Lingos settings or with the command line's set: " + text.join(set, ", ") + "."]}
   calls = []
   for l in ["request", "json", "text", "list", "math", "url", "encode", "time", "agent"] {if l + "." in d.code {calls += [l]}}
   if std.length(calls) > 0 {notes += ["It calls " + text.join(calls, ", ") + ", so they go in the same lingos folder."]}
   if std.length(left) > 0 {notes += ["Still to fix before you use it: " + text.join(left, "; ") + "."]}
   if d.manifest == nothing {
-    notes += ["To add it, put {d.name}.lingo in your computer's lingos folder."]
+    notes += ["To add it, make a folder {d.name} in your computer's lingos folder, with {d.name}.ls in it, then start it."]
   } else {
-    notes += ["To add it, make a folder {d.name} in your computer's lingos folder, with {d.name}.lingo and its lingo.json in it."]
+    notes += ["To add it, make a folder {d.name} in your computer's lingos folder, with {d.name}.ls and its openapi.json in it, then start it."]
   }
   notes += ["It hasn't been loaded to check it: once it is in the lingos folder, the lingo client loads it, or says why it can't."]
-  return {name: d.name, file: "{d.name}.lingo", code: d.code, manifest: d.manifest, notes: text.join(notes, "\n")}
+  return {name: d.name, file: "{d.name}.ls", code: d.code, manifest: d.manifest, notes: text.join(notes, "\n")}
 }
 
 // The lingo's files, as the models read them. For writer's own use.
 fn shown(d) {
-  out = "{d.name}.lingo:\n" + d.code
-  if d.manifest != nothing {out += "\n\nlingo.json:\n" + std.to_json(d.manifest)}
+  out = "{d.name}.ls:\n" + d.code
+  if d.manifest != nothing {out += "\n\nopenapi.json:\n" + std.to_json(d.manifest)}
   return out
 }
 
@@ -148,9 +148,9 @@ fn form(d=nothing) {
 \{\"name\": \"weather\", \"notes\": \"what it does and how to use it, in one or two plain sentences\", \"manifest\": null\}
 ```
 ```lingo
-the whole weather.lingo file
+the whole weather.ls file
 ```
-manifest is its lingo.json as a JSON object when it needs one, and null when it doesn't."
+manifest is its openapi.json as a JSON object when it needs one, and null when it doesn't."
 }
 
 // What the review checks, and how it answers. For writer's own use.
@@ -170,14 +170,13 @@ Answer with one JSON object and nothing else: \{\"problems\": [\"each problem, s
 
 // What a model needs to write a lingo that loads the first time. For writer's own use.
 fn guide() {
-  return "A lingo is a small program in Lingo that runs on a person's computer, in its lingos folder: one file, <name>.lingo, or a folder <name> holding <name>.lingo and its manifest, lingo.json, when it needs one. Every fn in it is a function others can call: at its route, as POST /<name>/<function> with its values as a JSON record by name, or by its dotted name, <name>.<function>(...), from another lingo in the same folder. The comments right above a fn say what it does, and the first comment lines of the file what the lingo is. Write lingos that load the first time, do exactly what was asked, and read plainly.
+  return "A lingo is a small program in Lingo that runs on a person's computer, in its lingos folder: a folder <name> holding its code, <name>.ls, and its manifest, openapi.json, when it needs one. Every fn in it is a function others can call: at its route, as POST /<name>/<function> with its values as a JSON record by name, or by its dotted name, <name>.<function>(...), from another lingo in the same folder. The comments right above a fn say what it does, and the first comment lines of the file what the lingo is. Write lingos that load the first time, do exactly what was asked, and read plainly.
 
 THE MANIFEST
-lingo.json is a JSON object, and every part of it is optional:
+openapi.json is a JSON object holding x-lingo, an object, and every part of that is optional. Its routes, what each takes and what each needs are made from the code, so never write them:
 - settings: a list, each a name, or \{\"name\": \"key\", \"title\": \"API key\", \"about\": \"where to get it\", \"default\": ..., \"required\": true, \"secret\": true\}. A form is made from them, and the code reads each with setting(\"key\"). A setting the code reads that isn't listed is a setting too, by its name alone.
 - route: where it answers on its computer, like \"/weather\". Without it, /<name>.
-- open: true lets other computers reach it. Without it, only its own computer can.
-Write a manifest only when a setting needs a title, a default or to be kept secret, or the lingo needs a route or open.
+Like \{\"x-lingo\": \{\"settings\": [\{\"name\": \"key\", \"title\": \"API key\", \"secret\": true\}]\}\}. Write a manifest only when a setting needs a title, a default or to be kept secret, or the lingo needs a route.
 
 SERVE
 A lingo with fn serve(request) answers every request to its route itself, like a web page. request is \{method, path, query, headers, body, json\}: path the part after its route, starting with /, query a record, headers a record by lower case name, body text, and json the body read as JSON, or nothing. serve gives text, any other value, sent as JSON, or \{status, headers, body\} for a status of its own.
@@ -206,11 +205,11 @@ LINGO
 - lingo(\"what to do, in words\", \{city: \"Paris\"\}, \"what should come back\") has Onsay find a function that does it, run it, and give back its answer. Use it only when no lingo here does the job.
 
 THE WEB
-Reach it through request, or with use(...) for one plain request. Use only real services you know well, at addresses, with values and answers you are sure of, and those that need no key when one will do, like Open-Meteo for weather. When a service needs a key, read it with setting(\"key\"), and a missing one fails in plain words: fail \"Weather needs your API key: set key in weather's settings, in the Onsay app or with --set. Get one at ...\". Never make up a service, an address or a field: when you aren't sure of one, say so in notes.
+Reach it through request, or with use(...) for one plain request. Use only real services you know well, at addresses, with values and answers you are sure of, and those that need no key when one will do, like Open-Meteo for weather. When a service needs a key, read it with setting(\"key\"), and a missing one fails in plain words: fail \"Weather needs your API key: set key in weather's settings, in the Onsay app or with the command line's set. Get one at ...\". Never make up a service, an address or a field: when you aren't sure of one, say so in notes.
 
 THE FILE
-- name: lower case letters, digits and _, starting with a letter, like weather or stock_price. The file is <name>.lingo.
-- Its first lines are comments saying what the lingo is and does, in a sentence or two, in the words people would search with, starting with its file's name: // weather.lingo - The weather now anywhere... Then an empty //, a numbered list of its functions, each with its values and what it gives, and a blank line.
+- name: lower case letters, digits and _, starting with a letter, like weather or stock_price. The file is <name>.ls.
+- Its first lines are comments saying what the lingo is and does, in a sentence or two, in the words people would search with, starting with its file's name: // weather.ls - The weather now anywhere... Then an empty //, a numbered list of its functions, each with its values and what it gives, and a blank line.
 - Right above each fn, its comment lines, starting with its number: what it gives or does, when to use it, and when not to, in plain words a search can match, short and concrete, and what its values are. A helper's comment ends: For weather's own use.
 - A key or token is always a setting, never in the code and never a function's value. A default is applied in the code, setting(\"units\") ?? \"metric\", or in the manifest.
 

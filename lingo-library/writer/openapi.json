@@ -1,0 +1,7 @@
+{
+  "x-lingo": {
+    "settings": [
+      { "name": "model", "title": "Model", "about": "The model that writes lingos, of the service agent uses. A strong coding model writes the best ones. Else agent's model." }
+    ]
+  }
+}

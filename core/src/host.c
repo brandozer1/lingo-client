@@ -1,23 +1,26 @@
 // host.c - the lingo client as a program of its own, on a device whose platform.h has threads and a WebSocket.
 //
-//   onsay-core settings.json                  runs it: its port, and its connection to Onsay when it has a token
-//   onsay-core settings.json --sent           every message sent to Onsay printed on stdout too, {"sent": the message}
-//                                             a line, so the program around it can keep a log the person reads
-//   onsay-core settings.json --sign-in        signs this computer in to Onsay from any other device's browser, for a
-//                                             server with none, and writes its token into the settings
-//   onsay-core settings.json --settings <lingo>
-//                                             prints every setting of a lingo as JSON, as settings.get gives them, for
-//                                             the app's form of them
-//   onsay-core settings.json --set <lingo> <key> <value>
-//                                             changes one wherever that lingo keeps it, as settings.set does. value is
-//                                             JSON, or text as it is when it isn't JSON
+//   onsay-core settings.json                 runs it: its port, and its connection to Onsay when it has a token
+//   onsay-core settings.json --sent          every message sent to Onsay printed on stdout too, {"sent": the message} a
+//                                            line, so the program around it can keep a log the person reads
+//   onsay-core settings.json <verb> ...      one thing done, whether or not it runs, its answer printed as JSON:
+//     pack <folder> [<to>]                   a folder of a lingo's files made into its .lingo file
+//     start <lingo>, stop <lingo>            a lingo running or stopped
+//     share <lingo> <who> [--route <r>]      who may reach it: public, ip 10.0.0.0/8, my devices or a handle
+//     grant <lingo> <need> [<path>]          what it may do, like run, or files.read and a folder
+//     ceiling <needs...>                     the most this computer ever allows
+//     policy                                 the policy in force
+//     settings <lingo>                       its settings, each with its value now
+//     set <lingo> <key> <value>              one changed. value is JSON, or text as it is when it isn't JSON
+//     sign-in                                signs this computer in to Onsay from any other device's browser, for a
+//                                            server with none, and writes its token into the settings
 //
-// Threads: main (runs queued jobs one at a time, in order, or looks at the lingos folder), connection (connects, again
+// Threads: main (runs queued jobs one at a time, in order, and looks at the lingos folder), connection (connects, again
 // after a drop, hands every message to the core, queues jobs), heartbeat (pings every BEAT seconds, drops a silent
 // link), listener (takes each connection to the port), and one for each web request (reads it, queues it as a job, and
 // writes its answer). With no token there is no connection or heartbeat: it runs bare, answering its port only. A job
-// that reaches lingo(...) or use(...) asks Onsay and waits on main for the answer, answering the requests that come
-// meanwhile (ask_).
+// that reaches lingo(...) or use(...), or waits for the person's answer, waits on main, answering the requests that come
+// meanwhile (meanwhile).
 #include "core.h"
 #include "platform.h"
 #include <stdio.h>
@@ -51,6 +54,7 @@ static int ponged;                // whether this server answers pings, so silen
 static int signed_in;             // whether Onsay took this link's hello
 static long asks, requests;       // lingo(...) asks sent and web requests taken, for their ids
 
+static int port, outside;   // the port, and whether it is open to other computers, as core_look says
 static int showing;   // --sent: every message sent to Onsay printed on stdout too, {"sent":...} a line, for the app's log
 
 ////////// JOBS //////////
@@ -77,33 +81,29 @@ static int handle(message *m) {
   return 0;
 }
 
-/* lingo.run or lingo.use on main, the job's thread: {"type":"lingo","id","ask","values","gives","context","asking"}, or
-   for use(...) {"type":"lingo","id","address","values"}, goes to Onsay, and the queue is read until its answer,
-   {"type":"lingo","id","value"} or with "error" and "code", which is the phrase's answer as it is. A request that comes
-   meanwhile, from the port or from Onsay, is answered here, inside the job, since what answers may be on this computer.
-   Everything else waits, in order, at the front of the queue. Gives 0 when the link closed or the job was stopped first. */
-static int ask_(const char *values, size_t n, volatile int *stop, buf *answer) {
+/* On main, while a job waits: for Onsay's answer to its lingo(...) or use(...) number id, {"type":"lingo","id","value"}
+   or with "error" and "code", put in answer as it is, or with id 0 until done is set, by a request answered meanwhile,
+   or seconds pass. A request that comes meanwhile, from the port or from Onsay, is answered here, inside the job, since
+   what answers may be on this computer. Everything else waits, in order, at the front of the queue. Waiting for Onsay
+   ends when the link closes. Gives 1 when Onsay's answer came. */
+static int meanwhile(long id, buf *answer, volatile int *done, volatile int *stop, double seconds) {
   arena *a = arena_new();
-  long id = ++asks;
-  buf out = { 0 };
-  buf_fmt(&out, "{\"type\":\"lingo\",\"id\":%ld,", id);
-  buf_add(&out, values + 1, n - 1);   // the values by name, after the id
-  int got = 0, going = send_(out.s, out.n);
-  buf_free(&out);
+  int got = 0, going = 1;
+  double until = pl_now() + seconds;
   message *held = NULL, *held_last = NULL;
-  while (going && !got) {
+  while (going && !got && !(done && *done) && pl_now() < until) {
     pl_enter(gate);
-    while (!first && !*stop) pl_wait(gate, 1);
+    while (!first && !*stop && pl_now() < until) pl_wait(gate, until - pl_now() < 1 ? until - pl_now() : 1);
     message *m = *stop ? NULL : first;
     if (m) { first = m->next; if (!first) last = NULL; m->next = NULL; }
     pl_leave(gate);
     if (!m) break;
     val *said = m->kind == SAID && !m->to ? json_parse(a, m->text, m->n, NULL) : NULL, *of = said && said->k == V_REC ? rec_get(said, "id") : NULL;
     const char *type = text_or(said, "type", "");
-    if (!strcmp(type, "lingo") && of && of->k == V_NUM && of->n == (double)id) { buf_add(answer, m->text, m->n); got = 1; }
+    if (id && !strcmp(type, "lingo") && of && of->k == V_NUM && of->n == (double)id) { buf_add(answer, m->text, m->n); got = 1; }
     else if (m->to || !strcmp(type, "request")) handle(m);
     else {
-      going = m->kind != CLOSED;
+      going = !id || m->kind != CLOSED;
       if (held_last) held_last->next = m; else held = m;
       held_last = m;
       continue;
@@ -118,6 +118,22 @@ static int ask_(const char *values, size_t n, volatile int *stop, buf *answer) {
   return got;
 }
 
+// lingo.run or lingo.use: {"type":"lingo","id","ask","values","gives","context","asking"}, or for use(...)
+// {"type":"lingo","id","address","values"}, sent to Onsay, then its answer waited for. 0 when the link closed or the job
+// was stopped first.
+static int ask_(const char *values, size_t n, volatile int *stop, buf *answer) {
+  long id = ++asks;
+  buf out = { 0 };
+  buf_fmt(&out, "{\"type\":\"lingo\",\"id\":%ld,", id);
+  buf_add(&out, values + 1, n - 1);   // the values by name, after the id
+  int going = send_(out.s, out.n);
+  buf_free(&out);
+  return going && meanwhile(id, answer, NULL, stop, 1e12);
+}
+
+// The person's answer, waited for.
+static void wait_(volatile int *done, volatile int *stop, double seconds) { meanwhile(0, NULL, done, stop, seconds); }
+
 static void queue(char *text, size_t n, int kind, int from, answer *to) {
   message *m = malloc(sizeof *m);
   *m = (message){ NULL, text, n, kind, from, to };
@@ -128,15 +144,22 @@ static void queue(char *text, size_t n, int kind, int from, answer *to) {
   pl_leave(gate);
 }
 
-// main: every job in turn, and a look at the lingos folder while there is nothing to do.
+// main: every job in turn, and a look at the lingos folder every CORE_LOOK seconds, however busy.
 static void jobs(void) {
-  for (;;) {
+  for (double next = pl_now() + CORE_LOOK;;) {
     pl_enter(gate);
     if (!first) pl_wait(gate, CORE_LOOK);
     message *m = first;
     if (m) { first = m->next; if (!first) last = NULL; }
     pl_leave(gate);
-    if (!m) { core_look(); continue; }
+    if (pl_now() >= next) {
+      int wide = core_look();
+      pl_enter(gate);
+      outside = wide;
+      pl_leave(gate);
+      next = pl_now() + CORE_LOOK;
+    }
+    if (!m) continue;
     if (handle(m)) {
       pl_enter(gate);
       signed_in = 1;
@@ -224,7 +247,7 @@ static void respond(pl_socket *c, int status, val *h, const char *body, size_t n
   buf_free(&out);
 }
 
-typedef struct { pl_socket *c; int here; } visit;
+typedef struct { pl_socket *c; buf from; } visit;
 
 /* One web request to the port, on its own thread: its first line, headers and a body of Content-Length, read whole,
    answered on main in its turn (core_serve), and closed. One that isn't a web request is answered here with why, and
@@ -281,12 +304,14 @@ static void visitor(void *arg) {
     buf_fmt(&msg, "{\"type\":\"request\",\"id\":\"port %ld\",\"method\":\"%.*s\",\"path\":", ++requests, (int)method, in.s);
     pl_leave(gate);
     buf_json_str(&msg, in.s + method + 1, path);
+    buf_str(&msg, ",\"ip\":");
+    buf_json_str(&msg, v.from.s ? v.from.s : "", v.from.n);
     buf_str(&msg, ",\"headers\":");
     buf_json(&msg, headers);
     buf_str(&msg, ",\"body\":");
     buf_json_str(&msg, in.s + from, size);
     buf_chr(&msg, '}');
-    queue(msg.s, msg.n, SAID, v.here ? CORE_HERE : CORE_NETWORK, &to);   // the queue owns the text now
+    queue(msg.s, msg.n, SAID, CORE_PORT, &to);   // the queue owns the text now
     pl_enter(gate);
     while (!to.done) pl_wait(gate, 1);
     pl_leave(gate);
@@ -296,15 +321,39 @@ static void visitor(void *arg) {
   }
   pl_hang_up(v.c);
   buf_free(&in);
+  buf_free(&v.from);
   arena_free(a);
 }
 
-// Takes each connection to the port, and reads it on a thread of its own.
+// The port, on every address this computer has when the policy lets anyone else in, else on this computer alone, so
+// nothing asks to be let through its firewall until something is shared. NULL when it can't be, said when say is set.
+static pl_socket *listen_(int everywhere, int say) {
+  buf error = { 0 };
+  pl_socket *p = pl_listen(port, everywhere, &error);
+  if (p) core_say("Answering web requests on port %d, %s", port, everywhere ? "from other computers too" : "from this computer only");
+  else if (say) core_say("%s, so it answers no web requests", error.s);
+  buf_free(&error);
+  return p;
+}
+
+// Takes each connection to the port, and reads it on a thread of its own. When the policy changes who it lets in, the
+// port is opened again to fit, within a second of main's look, and tried again each second while it can't be.
 static void listener(void *arg) {
+  pl_socket *p = arg;
+  int wide = outside;
   for (;;) {
-    visit *v = malloc(sizeof *v);
-    if ((v->c = pl_accept(arg, &v->here))) pl_thread(visitor, v);
-    else { free(v); pl_sleep(0.1); }
+    pl_enter(gate);
+    int want = outside;
+    pl_leave(gate);
+    if (want != wide || !p) {
+      if (p) pl_hang_up(p);
+      p = listen_(want, want != wide);
+      wide = want;
+      if (!p) { pl_sleep(1); continue; }
+    }
+    visit *v = calloc(1, sizeof *v);
+    if ((v->c = pl_accept(p, &v->from))) pl_thread(visitor, v);
+    else { buf_free(&v->from); free(v); }
   }
 }
 
@@ -367,7 +416,7 @@ static int sign_in(const char *path, const core_settings *s) {
     }
     done = poll;
   }
-  if (!done) { core_say("The code ran out before Connect was pressed. Run onsay-core %s --sign-in again", path); return 1; }
+  if (!done) { core_say("The code ran out before Connect was pressed. Run onsay-core %s sign-in again", path); return 1; }
   rec_set(a, all, "token", rec_get(done, "token"));
   buf_json(&text, all);
   if (!pl_write(path, text.s, text.n)) { core_say("Signed in, but the settings file %s couldn't be written", path); return 1; }
@@ -380,36 +429,59 @@ static int sign_in(const char *path, const core_settings *s) {
 
 ////////// MAIN //////////
 
+// What each verb takes, by name, in order. The last takes the rest of the words, joined by spaces, or for ceiling as a
+// list, and set's value is read as JSON when it is JSON.
+static const char *TAKES[][4] = { { "start", "lingo" }, { "stop", "lingo" }, { "share", "lingo", "who" }, { "grant", "lingo", "need" }, { "ceiling", "needs" },
+                                  { "policy" }, { "settings", "lingo" }, { "set", "lingo", "key", "value" } };
+
 int main(int argc, char **argv) {
-  const char *path = argc > 1 ? argv[1] : "onsay.json";
-  for (int i = 2; i < argc; i++) showing |= !strcmp(argv[i], "--sent");
+  const char *path = argc > 1 ? argv[1] : "onsay.json", *verb = argc > 2 && strcmp(argv[2], "--sent") ? argv[2] : NULL;
+  size_t k = 0, count = sizeof TAKES / sizeof *TAKES;
+  while (verb && k < count && strcmp(TAKES[k][0], verb)) k++;
+  if (verb && k == count && strcmp(verb, "pack") && strcmp(verb, "sign-in")) {
+    core_say("onsay-core %s %s isn't something it does. It does pack, start, stop, share, grant, ceiling, policy, settings, set and sign-in", path, verb);
+    return 1;
+  }
+  showing = argc > 2 && !verb;
   buf text = { 0 };
   if (!pl_read(path, &text)) { core_say("Can't read the settings file %s", path); return 1; }
   const core_settings *s = core_read(text.s, text.n);
   buf_free(&text);
   if (!s) return 1;
-  if (argc > 2 && !strcmp(argv[2], "--sign-in")) return sign_in(path, s);
+  if (verb && !strcmp(verb, "sign-in")) return sign_in(path, s);
   gate = pl_gate_new();
-  if (!core_begin(send_, ask_)) return 1;
-  int setting = argc > 2 && !strcmp(argv[2], "--set");
-  if (setting || (argc > 2 && !strcmp(argv[2], "--settings"))) {
-    if (argc < (setting ? 6 : 4)) { core_say("Say which lingo, like --settings agent, or --set agent model claude-opus-5-5"); return 1; }
-    volatile int stop = 0;
+  if (!core_begin(send_, ask_, wait_)) return 1;
+  if (verb && !strcmp(verb, "pack")) {
+    if (argc < 4) { core_say("Say which folder, like pack lingos/weather"); return 1; }
+    return core_pack(argv[3], argc > 4 ? argv[4] : NULL);
+  }
+  if (verb) {
     arena *a = arena_new();
-    const char *problem = NULL, *code = NULL, *message = NULL;
-    val *values = v_list(a), *value = setting ? json_parse(a, argv[5], strlen(argv[5]), &problem) : NULL;
-    for (int i = 3; i < (setting ? 5 : 4); i++) list_push(a, values, v_cstr(a, argv[i]));
-    if (setting) list_push(a, values, problem ? v_cstr(a, argv[5]) : value);
-    val *done = core_call(a, setting ? "settings.set" : "settings.get", values, &stop, &code, &message);
-    if (!done) { core_say("%s", message); return 1; }
-    if (!setting) { buf shown = { 0 }; buf_json(&shown, done); buf_chr(&shown, '\n'); fwrite(shown.s, 1, shown.n, stdout); }
+    val *values = v_rec(a), *done;
+    const char *why = NULL;
+    int names = 1, last = argc;
+    while (names < 4 && TAKES[k][names]) names++;
+    for (int i = 3; i < argc; i++) if (!strcmp(argv[i], "--route") && i + 1 < argc) { rec_set(a, values, "route", v_cstr(a, argv[i + 1])); last = i; break; }
+    for (int i = 1; i < names && 2 + i < last; i++) {
+      buf rest = { 0 };
+      val *list = v_list(a), *v, *parsed;
+      for (int j = 2 + i; j < (i == names - 1 ? last : 3 + i); j++) { if (rest.n) buf_chr(&rest, ' '); buf_str(&rest, argv[j]); list_push(a, list, v_cstr(a, argv[j])); }
+      v = !strcmp(TAKES[k][i], "needs") ? list : v_text(a, rest.s, rest.n);
+      if (!strcmp(TAKES[k][i], "value") && (parsed = json_parse(a, rest.s, rest.n, NULL))) v = parsed;
+      rec_set(a, values, TAKES[k][i], v);
+      buf_free(&rest);
+    }
+    if (!(done = core_control(a, verb, values, &why))) { core_say("%s", why); return 1; }
+    buf shown = { 0 };
+    buf_json(&shown, done);
+    buf_chr(&shown, '\n');
+    fwrite(shown.s, 1, shown.n, stdout);
     return 0;
   }
-  // The port, here (this computer only) unless listen says network, and the connection to Onsay when there is a token.
-  buf error = { 0 };
-  pl_socket *listening = pl_listen(s->port, s->network, &error);
-  if (listening) { core_say("Answering web requests on port %d", s->port); pl_thread(listener, listening); }
-  else core_say("%s, so it answers no web requests", error.s);
+  // The port, and the connection to Onsay when there is a token.
+  port = s->port, outside = core_look();
+  pl_socket *listening = listen_(outside, 1);
+  if (listening) pl_thread(listener, listening);
   if (s->token) { pl_thread(connection, NULL); pl_thread(heartbeat, NULL); }
   else if (!listening) return 1;
   else core_say("The settings have no token, so it runs bare, with no connection to Onsay");

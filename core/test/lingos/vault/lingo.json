@@ -1,4 +1,0 @@
-{
-  "settings": [{ "name": "pin", "title": "PIN", "default": "0000", "secret": true }],
-  "keep": { "read": "read", "write": "write" }
-}

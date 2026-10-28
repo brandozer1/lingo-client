@@ -63,7 +63,7 @@ val *v_cstr(arena *a, const char *s);
 val *v_list(arena *a);
 val *v_rec(arena *a);
 void list_push(arena *a, val *list, val *x);
-val *rec_get(val *r, const char *key);
+val *rec_get(val *r, const char *key);                                // NULL when r isn't a record or hasn't key
 void rec_set(arena *a, val *r, const char *key, val *x);
 const char *text_or(val *r, const char *key, const char *fallback);   // a record's text by key, else fallback
 val *v_copy(arena *a, val *x);
@@ -101,7 +101,7 @@ typedef val *(*phrase_fn)(run *r, val **args);
 
 typedef struct {
   const char *id;      // group.name
-  const char *needs;   // every permission it uses, like "screen.act, screen.read"
+  const char *needs;   // everything it needs on the device, like "screen.act, screen.read", or "none"
   const char *does;    // its line after the signature, like "-> [text]: sorted"
   phrase_fn fn;
   size_t lingo;        // the native lingo it is of, by number, core being 0
@@ -115,8 +115,12 @@ typedef void (*lingo_entry)(void);   // a library's lingo_phrases, which calls p
 void phrase_add(const char *group, const char *needs, const char *line, phrase_fn fn);
 phrase *phrase_find(const char *id);
 void native_begin(size_t lingo);              // the phrases added from now on are native lingo number lingo's
-val *native_phrases(arena *a, size_t lingo);  // its phrases as the compiler reads them: [{id, params: [{name, default?}], does}]
+val *native_phrases(arena *a, size_t lingo);  // its phrases as the compiler reads them: [{id, params: [{name, default?}], does, needs}]
 void std_phrases(void);                       // std.c
+// Stops the run with denied unless it may use need, like run or files.read, on path, a whole path, or on nothing when
+// path is NULL (core.c). Every phrase's needs are checked as it is called, and a native lingo's file phrases check each
+// path they reach.
+void may(run *r, const char *need, const char *path);
 
 ////////// 4. RUNNING //////////
 
@@ -130,20 +134,20 @@ struct run {
   void *trap;               // where an error jumps to
   char code[16];
   buf message, at, at_error;
-  const char *const *allow; // permissions given
-  int allowed;
 };
 
 // What a run may take, and what stops it.
-typedef struct { long long steps; double ms; volatile int *stop; const char *const *allow; int allowed; } limits;
+typedef struct { long long steps; double ms; volatile int *stop; } limits;
 
 // The program's value, or NULL with the error's code and message, its file and line first when it is in a lingo.
 val *run_program(arena *a, val *program, val *input, limits l, const char **code, const char **message);
 
 ////////// 5. COMPILING //////////
 
-// natives: [{name, phrases}], each from native_phrases. stacked: [{file, code}], the lingos written in Lingo. Gives the
-// instance, {lingos: name -> listing, stack}, or NULL with a message that starts with the file at fault.
+// natives: [{name, phrases}], each from native_phrases. stacked: [{file, code}], the lingos written in Lingo, file like
+// memo.ls. Gives the instance, {lingos: name -> listing, stack}, each phrase of a listing with its inputSchema and, for a
+// Lingo lingo's, its lingos, how many lingo(...) calls it makes, and its needs, through every function it reaches. NULL
+// with a message that starts with the file at fault.
 val *lingo_load(arena *a, val *natives, val *stacked, const char **message);
 // A program whose tool takes fn's values, as a0, a1 and on, and gives what fn gives for them, linked down to native
 // phrases. NULL when no lingo here has fn.

@@ -1,4 +1,4 @@
-// request.lingo - Web requests for a program, like fetch: GET, POST, PUT, PATCH and DELETE to a web address or an API,
+// request.ls - Web requests for a program, like fetch: GET, POST, PUT, PATCH and DELETE to a web address or an API,
 // with headers, a query, a JSON or text body, a timeout, and retries when a service is busy or down. Gives the status,
 // the headers, the text and the JSON read from it.
 //

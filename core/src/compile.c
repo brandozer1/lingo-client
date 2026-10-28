@@ -7,7 +7,8 @@
 // 3. listing(a, file, code, why)        -> a lingo written in Lingo, its listing made from its code: every fn, the
 //                                          comments above each, its about, and the settings it reads
 // 4. lingo_call(a, inst, fn)            -> a program that calls one function, every Lingo function it reaches pulled in
-// 5. lingo_load(a, natives, stacked)    -> every lingo a computer has, each compiled against all of them
+// 5. lingo_load(a, natives, stacked)    -> every lingo a computer has, each compiled against all of them, with what each
+//                                          function needs and how many lingo(...) calls it makes
 #include "lingo.h"
 #include <stdarg.h>
 #include <stdint.h>
@@ -904,19 +905,18 @@ static val *words_of(arena *a, span *lines, size_t first, size_t last) {
   return out;
 }
 
-/* 3. A lingo written in Lingo is its code, <name>.lingo, and its listing is made from it, never written by hand:
+/* 3. A lingo written in Lingo is its code, <name>.ls, and its listing is made from it, never written by hand:
      each fn        a function it shares, called at its route, like /memo/recall, its values and their defaults its fn's own
      the comments   right above a fn, what it does. The first lines of the file, when they are comments, up to a blank
-                    line or an empty //, are what the lingo is, its about, "memo - " or "memo.lingo - " at their start
-                    left off, and never a fn's too
+                    line or an empty //, are what the lingo is, its about, "memo - " or "memo.ls - " at their start left
+                    off, and never a fn's too
      settings       the names of its own settings it reads with setting("key")
-   Gives {name, about, phrases: [{id, params, does, inputSchema}], settings}, or NULL with the problem, starting with
-   the file. */
+   Gives {name, about, phrases: [{id, params, does}], settings}, or NULL with the problem, starting with the file. */
 static val *listing(arena *a, const char *file, val *code, const char **why) {
-  size_t fl = strlen(file), n = fl > 6 && !strcmp(file + fl - 6, ".lingo") ? fl - 6 : 0;
+  size_t fl = strlen(file), n = fl > 3 && !strcmp(file + fl - 3, ".ls") ? fl - 3 : 0;
   int good = n && n <= 64;   // lower case letters, digits, _ and -, neither of those two first or last
   for (size_t i = 0; good && i < n; i++) good = (file[i] >= 'a' && file[i] <= 'z') || digit(file[i]) || ((file[i] == '_' || file[i] == '-') && i && i + 1 < n);
-  if (!good) return failed(why, fmt(a, "%s: a lingo is a file named for it, like notes.lingo, its name lower case letters, digits, _ and -", file));
+  if (!good) return failed(why, fmt(a, "%s: a lingo's code is named for it, like notes.ls, its name lower case letters, digits, _ and -", file));
   val *name = v_text(a, file, n);
   if (is_text(name, "lingo")) return failed(why, fmt(a, "%s: lingo is the language's own name, for lingo(...)", file));
   cx *c = context(a, NULL);
@@ -1158,15 +1158,18 @@ val *lingo_call(arena *a, val *inst, const char *fn) {
 
 ////////// 5. LOADING //////////
 
-typedef struct { val *fns, *seen; double lingos; } reaching;   // lingos: its lingo(...) calls
+// lingos: its lingo(...) calls. needs: what the native phrases it reaches need, from native, each phrase's by its id.
+typedef struct { val *fns, *seen, *native, *needs; double lingos; } reaching;
 
 static void reach(arena *a, reaching *g, const char *key);
 
 static val *reach_say(rw *r, val *id, val *args) {
   reaching *g = r->data;
+  val *needs = rec_get(g->native, id->t.s);
   (void)args;
   if (!strcmp(id->t.s, "lingo.run")) g->lingos++;
-  else if (rec_get(g->fns, id->t.s)) reach(r->a, g, id->t.s);
+  if (rec_get(g->fns, id->t.s)) reach(r->a, g, id->t.s);
+  for (size_t i = 0; needs && i < needs->l.n; i++) push_unique(r->a, g->needs, needs->l.v[i]);
   return NULL;
 }
 
@@ -1177,7 +1180,8 @@ static val *reach_call(rw *r, val *name, val *args) {
   return NULL;
 }
 
-// How many lingo(...) calls a stacked function makes, through every function it reaches, each one written counted once.
+// How many lingo(...) calls a stacked function makes, through every function it reaches, each one written counted once,
+// and everything it needs on the device.
 static void reach(arena *a, reaching *g, const char *key) {
   if (rec_get(g->seen, key)) return;
   rec_set(a, g->seen, key, VBOOL(1));
@@ -1215,7 +1219,7 @@ val *lingo_load(arena *a, val *natives, val *stacked, const char **message) {
 
   // Each is compiled against every phrase here: the native lingos', core's among them, and every Lingo lingo's in this
   // lingos folder, so one is called by its dotted name, like text.slug(title).
-  val *stack = v_rec(a), *sphrases = v_rec(a), *sfns = v_rec(a), *slines = v_rec(a), *visible = v_list(a);
+  val *stack = v_rec(a), *sphrases = v_rec(a), *sfns = v_rec(a), *slines = v_rec(a), *visible = v_list(a), *native = v_rec(a);
   rec_set(a, stack, "phrases", sphrases);
   rec_set(a, stack, "fns", sfns);
   rec_set(a, stack, "lines", slines);
@@ -1224,6 +1228,7 @@ val *lingo_load(arena *a, val *natives, val *stacked, const char **message) {
     for (size_t k = 0; k < theirs->l.n; k++) {
       // Its values as an inputSchema, those with no default required.
       val *p = theirs->l.v[k], *params = rec_get(p, "params"), *schema = v_rec(a), *props = v_rec(a), *required = v_list(a);
+      if (rec_get(p, "needs")) rec_set(a, native, rec_get(p, "id")->t.s, rec_get(p, "needs"));
       for (size_t m = 0; m < params->l.n; m++) {
         val *one = v_rec(a), *d = rec_get(params->l.v[m], "default"), *pn = rec_get(params->l.v[m], "name");
         if (d) rec_set(a, one, "default", d); else list_push(a, required, pn);
@@ -1248,9 +1253,10 @@ val *lingo_load(arena *a, val *natives, val *stacked, const char **message) {
   for (size_t i = 0; i < stacked_list->l.n; i++) {
     val *phrases = rec_get(stacked_list->l.v[i], "phrases");
     for (size_t k = 0; k < phrases->l.n; k++) {
-      reaching g = { sfns, v_rec(a), 0 };
+      reaching g = { sfns, v_rec(a), native, v_list(a), 0 };
       reach(a, &g, rec_get(phrases->l.v[k], "id")->t.s);
       rec_set(a, phrases->l.v[k], "lingos", v_num(a, g.lingos));
+      rec_set(a, phrases->l.v[k], "needs", g.needs);
     }
   }
 

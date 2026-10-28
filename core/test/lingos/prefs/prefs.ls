@@ -1,4 +1,4 @@
-// prefs - for the tests: settings answered on this device, from the file kept for it, its lingo.json's defaults, and
+// prefs - for the tests: settings answered on this device, from the file kept for it, its openapi.json's defaults, and
 // another lingo's.
 
 // Its units, metric unless set.

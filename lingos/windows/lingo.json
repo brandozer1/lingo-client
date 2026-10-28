@@ -1,7 +1,0 @@
-{
-  "name": "windows",
-  "version": "1.0.0",
-  "about": "Windows itself: its windows and their controls, files and folders, the clipboard, PowerShell commands and processes, notifications, and Onsay's panel. input uses the mouse and keyboard the way a person does, through Onsay's own pointer: click words on screen or a control by name, type, paste, press shortcuts, scroll, drag, and point at things. look reads the screen: a window in brief, its words, what to press and type in, where words are, and a picture of it.",
-  "runs": "native",
-  "library": "windows.dll"
-}

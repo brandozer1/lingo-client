@@ -1,4 +1,4 @@
-// text.lingo - Text work for a program: splitting and joining, replacing, trimming, lower and upper case, padding,
+// text.ls - Text work for a program: splitting and joining, replacing, trimming, lower and upper case, padding,
 // cutting short, slugs, cases like title, camel and snake, templates like "Hi {name}", words and lines, repeating, and
 // starts with and ends with. Whether text holds a part is the operator in: part in text.
 //

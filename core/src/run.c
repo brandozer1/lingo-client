@@ -375,19 +375,14 @@ static val *call_fn(run *r, const char *name, val *args) {
   return out == BACK ? back : NOTHING;
 }
 
-// Whether the n bytes at need name a permission given. none always is.
-static int allowed(run *r, const char *need, size_t n) {
-  if (n == 4 && !memcmp(need, "none", 4)) return 1;
-  for (int i = 0; i < r->allowed; i++) if (strlen(r->allow[i]) == n && !memcmp(r->allow[i], need, n)) return 1;
-  return 0;
-}
-
 static val *say(run *r, const char *id, val *args, val *frame) {
   phrase *p = phrase_find(id);
   if (!p) fail(r, "unknown", "This computer doesn't have the phrase %s", id);
-  for (const char *n = p->needs; *n; n += strspn(n, ", ")) {   // every permission it needs, like screen.act, screen.read
+  for (const char *n = p->needs; *n; n += strspn(n, ", ")) {   // everything it needs, like screen.act, screen.read
+    char need[32];
     size_t len = strcspn(n, ",");
-    if (!allowed(r, n, len)) fail(r, "denied", "%s needs permission for %.*s, which wasn't given", id, (int)len, n);
+    snprintf(need, sizeof need, "%.*s", (int)len, n);
+    if (strcmp(need, "none")) may(r, need, NULL);
     n += len;
   }
   // A value left out, or nothing, takes its default, as a function's does.
@@ -450,7 +445,7 @@ static val *eval(run *r, val *e, val *frame) {
 // 5. The run is kept in the arena, never on the stack, so what an error left in it is read whole after the jump back.
 val *run_program(arena *a, val *program, val *input, limits l, const char **code, const char **message) {
   run *r = arena_get(a, sizeof *r);
-  *r = (run){ .a = a, .program = program, .left = l.steps, .until = pl_now() * 1000 + l.ms, .stop = l.stop, .allow = l.allow, .allowed = l.allowed };
+  *r = (run){ .a = a, .program = program, .left = l.steps, .until = pl_now() * 1000 + l.ms, .stop = l.stop };
   trap_t t;
   r->trap = &t;
   val *back = NOTHING, *volatile out = NULL;

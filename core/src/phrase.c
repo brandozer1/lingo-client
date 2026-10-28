@@ -2,7 +2,8 @@
 //
 // 1. native_begin(lingo), phrase_add(group, needs, line, fn)  -> the phrases of native lingo number lingo, as it loads
 // 2. phrase_find(id)                                          -> a phrase by its id, like std.length
-// 3. native_phrases(a, lingo)                                 -> a native lingo's phrases, as the compiler reads them
+// 3. native_phrases(a, lingo)                                 -> a native lingo's phrases, as the compiler reads them,
+//                                                                with what each needs
 #include "lingo.h"
 #include <stdlib.h>
 #include <string.h>
@@ -85,16 +86,22 @@ val *native_phrases(arena *a, size_t lingo) {
   val *out = v_list(a);
   for (size_t i = 0; i < count; i++) {
     if (phrases[i].lingo != lingo) continue;
-    val *one = v_rec(a), *params = v_list(a);
+    val *one = v_rec(a), *params = v_list(a), *needs = v_list(a);
     for (int k = 0; k < phrases[i].count; k++) {
       val *p = v_rec(a);
       rec_set(a, p, "name", v_cstr(a, phrases[i].params[k]));
       if (phrases[i].defaults[k]) rec_set(a, p, "default", phrases[i].defaults[k]);
       list_push(a, params, p);
     }
+    for (const char *n = phrases[i].needs; *n; n += strspn(n, ", ")) {
+      size_t len = strcspn(n, ",");
+      if (len != 4 || memcmp(n, "none", 4)) list_push(a, needs, v_text(a, n, len));
+      n += len;
+    }
     rec_set(a, one, "id", v_cstr(a, phrases[i].id));
     rec_set(a, one, "params", params);
     rec_set(a, one, "does", v_cstr(a, phrases[i].does));
+    rec_set(a, one, "needs", needs);
     list_push(a, out, one);
   }
   return out;
