@@ -21,7 +21,7 @@
 
 #include "lingo.h"
 
-#define CORE_VERSION "0.7.1"
+#define CORE_VERSION "0.8.0"
 #define CORE_LOOK 5   // seconds between looks at the lingos folder
 
 typedef struct {

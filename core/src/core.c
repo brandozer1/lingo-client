@@ -311,7 +311,7 @@ static arena *library;
 static val *device;                  // the compiler's instance of every lingo that loaded
 static val *found;                   // every lingo read: {name, from, manifest, program, file and code or library,
                                      // native, running, fresh, error}. fresh: its paths are made from its code
-static val *catalog;                 // every running lingo, whether it works, and what it shares
+static val *catalog;                 // every running lingo, with its manifest or why it can't load
 static unsigned long long looked;    // a fingerprint of the lingos folder and running.json when they were last read
 #define FNV 14695981039346656037ULL
 
@@ -495,8 +495,8 @@ static const char *understated(arena *a, val *e) {
 }
 
 /* 3. A lingo's whole OpenAPI manifest, as pack writes it: what its openapi.json says, its name, program and route in
-   x-lingo, and each function it shares as a path under its route, its words, its values as JSON Schema, x-lingo-function
-   and x-lingo-needs. /name alone is its main, and a lingo with serve(request) shares serve alone, at its route. */
+   x-lingo, and each function it shares as a path under its route, its words, its values as JSON Schema, x-lingo-function,
+   x-lingo-needs and x-lingo-calls. /name alone is its main, and a lingo with serve(request) shares serve alone, at its route. */
 static val *described(arena *a, val *e) {
   const char *name = text_or(e, "name", ""), *route = route_of(a, e);
   val *given = rec_get(e, "manifest"), *l = rec_get(rec_get(device, "lingos"), name), *fns = shared(a, name);
@@ -537,6 +537,7 @@ static val *described(arena *a, val *e) {
     rec_set(a, op, "responses", responses);
     rec_set(a, op, "x-lingo-function", v_cstr(a, id));
     rec_set(a, op, "x-lingo-needs", rec_get(f, "needs") ? rec_get(f, "needs") : v_list(a));
+    rec_set(a, op, "x-lingo-calls", rec_get(f, "lingos") ? rec_get(f, "lingos") : v_num(a, 0));
     rec_set(a, item, serve ? "get" : "post", op);
     rec_set(a, paths, v_text(a, path.s, path.n)->t.s, item);
     buf_free(&path);
@@ -545,8 +546,6 @@ static val *described(arena *a, val *e) {
   rec_set(a, out, "x-lingo", x);
   return out;
 }
-
-static val *declared(arena *a, const char *lingo, val **keep);   // 7.
 
 // Reads everything again: every lingo, the natives, the graph, the manifests and the catalog, with extra, a folder being
 // packed, in place of any lingo of its name. Built beside what there was, which stays in use when even core's own lingos
@@ -635,37 +634,15 @@ static int load(const char *extra) {
   }
 
   // Each lingo's whole manifest: its own when it says its paths, else made from what loaded. Then the catalog: every
-  // running lingo, what it is, the names of its settings and every function it shares, never its code.
+  // running lingo by its name, with its manifest, or why it can't load. Never its code.
   val *all = rec_get(device, "lingos");
   catalog = v_list(a);
   for (size_t i = 0; i < found->l.n; i++) {
-    val *e = found->l.v[i], *one = v_rec(a), *settings = v_list(a), *phrases = v_list(a);
-    const char *name = text_or(e, "name", "");
-    val *own = rec_get(rec_get(all, name), "phrases");
-    if (!rec_get(e, "error") && (!rec_get(rec_get(e, "manifest"), "paths") || rec_get(e, "fresh"))) rec_set(a, e, "manifest", described(a, e));
+    val *e = found->l.v[i], *one = v_rec(a), *error = rec_get(e, "error");
+    if (!error && (!rec_get(rec_get(e, "manifest"), "paths") || rec_get(e, "fresh"))) rec_set(a, e, "manifest", described(a, e));
     if (!truthy(rec_get(e, "running"))) continue;
-    rec_set(a, one, "name", v_cstr(a, name));
-    if (rec_get(e, "error")) {
-      rec_set(a, one, "status", v_cstr(a, "broken"));
-      rec_set(a, one, "error", rec_get(e, "error"));
-      list_push(a, catalog, one);
-      continue;
-    }
-    val *mine = declared(a, name, NULL), *about = rec_get(rec_get(rec_get(e, "manifest"), "info"), "description");
-    for (size_t k = 0; k < mine->l.n; k++) list_push(a, settings, rec_get(mine->l.v[k], "name"));
-    for (size_t k = 0; own && k < own->l.n; k++) {
-      val *p = own->l.v[k], *shared_ = v_rec(a);
-      rec_set(a, shared_, "id", rec_get(p, "id"));
-      rec_set(a, shared_, "does", rec_get(p, "does"));
-      rec_set(a, shared_, "inputSchema", rec_get(p, "inputSchema"));
-      rec_set(a, shared_, "lingos", rec_get(p, "lingos") ? rec_get(p, "lingos") : v_num(a, 0));
-      list_push(a, phrases, shared_);
-    }
-    rec_set(a, one, "status", v_cstr(a, "ok"));
-    if (about && about->k == V_TEXT) rec_set(a, one, "about", about);
-    rec_set(a, one, "settings", settings);
-    rec_set(a, one, "phrases", phrases);
-    if (rec_get(e, "native")) rec_set(a, one, "native", VBOOL(1));
+    rec_set(a, one, "name", rec_get(e, "name"));
+    rec_set(a, one, error ? "error" : "openapi", error ? error : rec_get(e, "manifest"));
     list_push(a, catalog, one);
   }
   say("%zu lingos are ready", all->r.n - 1);

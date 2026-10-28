@@ -209,12 +209,8 @@ What the lingo client offers it back, from any thread:
 | `key_of`, `key_sign`, `key_forget` | this computer's own key pairs, in `home/keys`, the private half never handed out |
 | `sha256`, `base64`, `unbase64`, `ed25519_key`, `ed25519_sign`, `ed25519_check` | signing and checking (`src/sign.c`) |
 
-**The catalog** is every running lingo, never its code and never the values of its settings: `{name, status: "ok",
-about, settings, phrases, native}`, or `{name, status: "broken", error}` for one set aside, with why. `about` is its
-`openapi.json`'s `info.description`, `settings` the names of its settings, `native` true for a native lingo, and each
-of `phrases` is `{id, does, inputSchema, lingos}`: `does` is the comment above a Lingo lingo's `fn`, or a native
-phrase's line after its signature, what it gives and what it does, and `lingos` is how many `lingo(...)` calls it
-makes, through every function it reaches.
+**The catalog** is every running lingo, never its code and never the values of its settings: `{name, openapi}`, its
+whole manifest (`../docs/lingo.md`, section 11), or `{name, error}` for one set aside, with why.
 
 ## The lingos folder
 

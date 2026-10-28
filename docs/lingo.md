@@ -362,9 +362,9 @@ code calling them can't tell them apart:
   section 11.
 - **Native:** a library built for the computer, like `windows.dll`, its phrases added as it loads (`core/README.md`).
 
-**What a model reads.** The onsay lingo tells Onsay what every running lingo shares, its catalog: each function's id,
-like `files.read`, what it does, and its values as JSON Schema. A native phrase says what it gives in its `does`, the
-way the Windows lingo writes it: `-> [{name,path,size,folder,changed}]` is a list of those records, `x?` is x or
+**What a model reads.** The onsay lingo tells Onsay what every running lingo shares, its catalog: each lingo's whole
+manifest (section 11), every function with what it does and its values as JSON Schema. A native phrase says what it
+gives in its `description`, the way the Windows lingo writes it: `-> [{name,path,size,folder,changed}]` is a list of those records, `x?` is x or
 nothing, `a|b` is either, and `bool` is true or false.
 
 **Needs** are what a phrase uses on the computer, from one shared list: `net`, `store`, `files.read`, `files.write`,
@@ -443,7 +443,8 @@ a `.lingo` file whose files are deflated, as most zip programs make them, loads 
           "schema": { "type": "object", "properties": { "k": {} }, "required": ["k"] } } } },
         "responses": { "200": { "description": "The function's value, as JSON" } },
         "x-lingo-function": "memo.recall",
-        "x-lingo-needs": ["store"]
+        "x-lingo-needs": ["store"],
+        "x-lingo-calls": 0
       }
     }
   },
@@ -458,6 +459,7 @@ a `.lingo` file whose files are deflated, as most zip programs make them, loads 
 - **`summary` and `description`** are the comment above the function, its first sentence and all of it.
 - **`x-lingo-function`** is the function the path calls, like `memo.recall`, or a native's phrase, like `window.list`.
 - **`x-lingo-needs`** is everything it needs on the computer (section 10), through every function it reaches.
+- **`x-lingo-calls`** is how many `lingo(...)` calls it makes, through every function it reaches.
 - **`x-lingo`** is the lingo's own: its `name`, its `program`, its `route`, and its `settings` and `keep` when it has
   them, below.
 
@@ -499,7 +501,7 @@ Who may reach a lingo is never in its manifest: that is the computer's policy (`
 `openapi.json` lists its settings wrongly is set aside with the reason. The lingo client answers `setting(...)` from
 them, `settings.get(lingo)` gives every one with what its manifest says and its value now, and
 `settings.set(lingo, key, value)` changes one wherever it is kept (section 15). A lingo's settings are never sent to
-Onsay: its catalog names them only.
+Onsay: its manifest names them only.
 
 **`serve(request)`.** A lingo with a function `serve` answers every request to its route itself, like a page:
 

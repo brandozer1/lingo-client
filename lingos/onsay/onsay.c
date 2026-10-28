@@ -443,7 +443,8 @@ static void decided(const char *line) {
   pl_leave(lock);
 }
 
-// Started, the first time: a prompt key made when there is none, and the connection's threads. Stopped, the link closes.
+// Started, the first time: a prompt key made when there is none, and the connection's threads. Each time, the catalog
+// sent on, as the core gives it. Stopped, the link closes.
 static void running(const char *now) {
   static int started;
   pl_enter(lock);

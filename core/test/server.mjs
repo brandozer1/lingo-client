@@ -808,7 +808,7 @@ const PAGES = {
 ////////// 6. SESSION //////////
 
 let catalog = [], hello = {}, hellos = 0, failed = 0, passed = 0, skipped = 0
-const has = (name) => catalog.some((l) => l.name === name && l.status === 'ok')
+const has = (name) => catalog.some((l) => l.name === name && l.openapi)
 const report = (name, ok, more = '', ms) => {
   ok ? passed++ : failed++
   console.log(`${ok ? '  ok  ' : '  FAIL'} ${name}${ms === undefined ? '' : ` (${ms} ms)`}${more}`)
@@ -838,40 +838,43 @@ const session = (link) => {
       const r = await answered, ok = t.check(r)
       report(name, ok, ok ? '' : `\n    got: ${r.status} ${r.body}`, Date.now() - started)
     }
-    // The catalog: every running lingo and what it shares, made from its code for a Lingo lingo, never the code.
-    const entry = (name) => catalog.find((l) => l.name === name), phrase = (lingo, id) => entry(lingo)?.phrases?.find((p) => p.id === id)
+    // The catalog: every running lingo's manifest, made from its code for a Lingo lingo, never the code.
+    const entry = (name) => catalog.find((l) => l.name === name), about = (lingo) => entry(lingo)?.openapi?.info?.description
+    const ops = (lingo) => Object.values(entry(lingo)?.openapi?.paths ?? {}).flatMap((item) => Object.values(item))
+    const phrase = (lingo, id) => ops(lingo).find((o) => o['x-lingo-function'] === id), schema = (o) => o?.requestBody?.content?.['application/json']?.schema
+    const native = (lingo) => /\.(dll|so)$/.test(entry(lingo)?.openapi?.['x-lingo']?.program ?? '')
     const recall = phrase('memo', 'memo.recall')
-    report('catalog: a Lingo lingo from a .lingo file, its listing made from its code, never the code', entry('memo')?.status === 'ok' &&
-      entry('memo').about === "things to remember, kept in Onsay's own storage on this device." && entry('memo').phrases.length === 4 &&
-      same(Object.keys(recall ?? {}), ['id', 'does', 'inputSchema', 'lingos']) && recall.does === 'What was kept under that name.' && recall.lingos === 0 &&
-      'k' in (recall.inputSchema?.properties ?? {}) && !JSON.stringify(entry('memo')).includes('store.get'))
-    report('catalog: each function counts its lingo(...) calls', phrase('asker', 'asker.kept')?.lingos === 1 && phrase('asker', 'asker.forecast')?.lingos === 0)
+    report('catalog: a Lingo lingo from a .lingo file, its whole manifest made from its code, never the code', same(Object.keys(entry('memo') ?? {}), ['name', 'openapi']) &&
+      about('memo') === "things to remember, kept in Onsay's own storage on this device." && ops('memo').length === 4 && entry('memo').openapi.openapi === '3.1.0' &&
+      recall?.description === 'What was kept under that name.' && recall['x-lingo-calls'] === 0 && 'k' in (schema(recall)?.properties ?? {}) && !JSON.stringify(entry('memo')).includes('store.get'))
+    report('catalog: each function counts its lingo(...) calls', phrase('asker', 'asker.kept')?.['x-lingo-calls'] === 1 && phrase('asker', 'asker.forecast')?.['x-lingo-calls'] === 0)
     report('catalog: core, every computer\'s floor, is never listed', !entry('core'))
     if (has('windows')) {
-      const click = phrase('windows', 'input.click_text'), ids = entry('windows').phrases.map((p) => p.id)
-      report('catalog: windows, a native lingo from its .lingo file, with what it is', entry('windows').native === true && entry('windows').about?.length > 0)
-      report('windows: each phrase says what it gives and does, with its values', click?.does.startsWith('-> {x,y,text}: rings and clicks') &&
-        same(click.inputSchema, { type: 'object', properties: { words: {}, window: { default: null }, nth: { default: 0 } }, required: ['words'] }))
+      const click = phrase('windows', 'input.click_text'), ids = ops('windows').map((o) => o['x-lingo-function'])
+      report('catalog: windows, a native lingo from its .lingo file, with what it is', native('windows') && about('windows')?.length > 0)
+      report('windows: each phrase says what it gives and does, with its values', click?.description.startsWith('-> {x,y,text}: rings and clicks') &&
+        same(schema(click), { type: 'object', properties: { words: {}, window: { default: null }, nth: { default: 0 } }, required: ['words'] }))
       report('windows: one layer, input and look, the low level groups gone', ['look.screenshot', 'input.type', 'input.point_at', 'input.cursor'].every((id) => ids.includes(id)) &&
         !ids.some((id) => /^(mouse|keyboard|screen|pointer)\.|^look\.see$|^input\.move_and_click$/.test(id)))
-    } else report('catalog: windows set aside where it can\'t load', entry('windows')?.status === 'broken')
-    report('catalog: settings are names alone, its openapi.json\'s first, then any other its code reads', same(entry('prefs')?.settings, ['units', 'name', 'color']) && same(entry('memo')?.settings, []))
-    report('catalog: agent is the one AI lingo, ready on every core', entry('agent')?.status === 'ok' && ['agent.ask', 'agent.answer'].every((id) => phrase('agent', id)) && !entry('openrouter'))
+    } else report('catalog: windows set aside where it can\'t load', !!entry('windows')?.error)
+    report('catalog: settings are named in its manifest', same(entry('prefs')?.openapi['x-lingo'].settings.map((x) => x.name ?? x), ['units', 'name']) &&
+      !entry('memo')?.openapi['x-lingo'].settings)
+    report('catalog: agent is the one AI lingo, ready on every core', has('agent') && ['agent.ask', 'agent.answer'].every((id) => phrase('agent', id)) && !entry('openrouter'))
     if (has('native')) report('catalog: native is ready, one phrase that calls into Windows', phrase('native', 'native.call') !== undefined)
-    report('catalog: a native without its library', entry('nolibrary')?.status === 'broken' && /nolibrary\.dll/.test(entry('nolibrary').error))
-    report('catalog: a broken one says why', entry('broken')?.status === 'broken' && /^broken\.ls line 3: There's no lingo or group called nope here.*use\(/.test(entry('broken').error))
-    report('catalog: a phrase spelled wrong says what there is', entry('typo')?.status === 'broken' && /There's no phrase std\.lenn/.test(entry('typo').error))
-    report('catalog: a Lingo lingo can\'t hide a group of windows', entry('input')?.status === 'broken' &&
+    report('catalog: a native without its library', /nolibrary\.dll/.test(entry('nolibrary').error))
+    report('catalog: a broken one says why', /^broken\.ls line 3: There's no lingo or group called nope here.*use\(/.test(entry('broken').error))
+    report('catalog: a phrase spelled wrong says what there is', /There's no phrase std\.lenn/.test(entry('typo').error))
+    report('catalog: a Lingo lingo can\'t hide a group of windows', !!entry('input')?.error &&
       (has('windows') ? /already a part of windows/ : /no lingo or group called pointer/).test(entry('input').error))
     report('catalog: a folder with no openapi.json and no program is not a lingo', !entry('notalingo'))
-    report('catalog: a .lingo file that is not a zip says so', entry('notazip')?.status === 'broken' && /isn't a \.lingo file/.test(entry('notazip').error))
+    report('catalog: a .lingo file that is not a zip says so', /isn't a \.lingo file/.test(entry('notazip').error))
     const library = readdirSync(LIBRARY).filter((f) => existsSync(new URL(`${f}/${f}.ls`, LIBRARY)))
-    const silent = library.flatMap((l) => (entry(l)?.phrases ?? []).filter((p) => !p.does).map((p) => p.id))
+    const silent = library.flatMap((l) => ops(l).filter((o) => !o.description).map((o) => o['x-lingo-function']))
     report('library: every lingo loads from the .lingo file the build packed, says what it is, and every function says what it does', library.length >= 9 &&
-      library.every((l) => entry(l)?.status === 'ok' && entry(l).about) && !silent.length, silent.length ? `\n    silent: ${silent.join(', ')}` : '')
+      library.every((l) => has(l) && about(l)) && !silent.length, silent.length ? `\n    silent: ${silent.join(', ')}` : '')
     report('hello: the lingo client, its version, its device key and its catalog, and nothing else', same(Object.keys(hello), ['type', 'token', 'client', 'version', 'key', 'catalog']) &&
-      hello.client === 'lingo-client' && hello.version === '0.7.1' && /^ed25519:[A-Za-z0-9+/]{43}=$/.test(hello.key) && Array.isArray(hello.catalog))
-    report('catalog: onsay, a native lingo, ready, its phrases with it', entry('onsay')?.status === 'ok' && entry('onsay').native === true && phrase('onsay', 'onsay.sign_in') !== undefined)
+      hello.client === 'lingo-client' && hello.version === '0.8.0' && /^ed25519:[A-Za-z0-9+/]{43}=$/.test(hello.key) && Array.isArray(hello.catalog))
+    report('catalog: onsay, a native lingo, ready, sharing /onsay alone', native('onsay') && ops('onsay').length === 1 && phrase('onsay', 'onsay.serve') !== undefined)
     for (const [name, test, lingo] of WEB_CASES) {
       if (lingo && !has(lingo)) { skipped++; console.log(`  skip  ${name}: this core has no ${lingo}`); continue }
       const started = Date.now()
@@ -892,7 +895,7 @@ const session = (link) => {
       hello = m
       catalog = m.catalog
       current = link
-      console.log(`hello ${hellos} from ${m.client} ${m.version}: ${catalog.map((l) => `${l.name} ${l.status}`).join(', ')}`)
+      console.log(`hello ${hellos} from ${m.client} ${m.version}: ${catalog.map((l) => `${l.name} ${l.error ? 'broken' : 'ok'}`).join(', ')}`)
       const card = { handle: HANDLE, device: DEVICE, added: ADDED }
       link.send({ type: 'ready', ...card, statement: sign({ ...card, key: hellos === 2 ? publicOf(DEVICES.laptop) : m.key }), policy: 0 })
       if (hellos === 1) go()

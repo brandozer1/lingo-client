@@ -7,6 +7,9 @@ the wire*.
 
 - **Its connection** to Onsay, one WebSocket on threads of its own, reconnecting when it drops, while it runs and is
   signed in. Onsay reaches this computer's lingos down it, and its lingos ask Onsay with `lingo(...)` and `use(...)`.
+- **What this computer hosts** goes in its hello and again whenever it changes, `{type: "catalog", catalog}`: every
+  running lingo as `{name, openapi}`, its whole manifest, or `{name, error}` for one that can't load. Onsay keeps each
+  as a document of its index.
 - **Signing in** keeps the token as its secret setting, `token`, and makes this device's key, kept by the device
   (`core/README.md`, `keys/`). Its hello carries the key, and Onsay's statement on it is checked as it is ready.
 - **What Onsay signs is checked** against Onsay's key built in (`ONSAY_KEY` in `onsay.c`), never one told over the
