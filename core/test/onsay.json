@@ -1,5 +1,4 @@
 {
-  "token": "test-token",
   "home": "test/data",
   "lingos": "test/data/lingos",
   "port": 6970,

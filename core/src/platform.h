@@ -2,12 +2,12 @@
 //
 // 1. Time      the clock and sleeping
 // 2. Threads   starting one, and a gate: a lock that can also wait to be woken
-// 3. Links     a WebSocket to Onsay
-// 4. Files     read, write, add to, delete and list, for the core's own storage and its log
-// 5. Device    what is around it, a native lingo's library, and web requests going out
+// 3. Links     a WebSocket out, like the onsay lingo's to Onsay
+// 4. Files     read, write, add to, delete and list, for the core's own storage and its log, and secrets sealed
+// 5. Device    what is around it, chance, a native lingo's library, and web requests going out
 // 6. Port      web requests coming in: a port to listen on, and each connection to it
-// The engine (core.c) only uses time, the gate, files and the device. Threads, links and the port are for host.c alone.
-// Native lingos may use all of it.
+// The engine (core.c) only uses time, the gate, files and the device. Threads and the port are for host.c, and links for
+// native lingos, which may use all of it.
 #ifndef PLATFORM_H
 #define PLATFORM_H
 
@@ -54,12 +54,18 @@ int pl_folder(const char *path);                              // makes it, and t
 void pl_whole(const char *path, buf *out);                    // the path whole, from the folder it runs in
 // Everything in a folder, one level: each name, whether it is a folder, its size, and when it last changed, in seconds.
 void pl_list(const char *folder, void (*each)(const char *name, int folder, double size, double changed, void *arg), void *arg);
+// A secret kept at path for this computer's user alone, like a private key: on Windows sealed by Windows (DPAPI), so it is
+// never a plain file, and on Linux a file only its user can read. 0 when it couldn't be kept, or read back.
+int pl_seal(const char *path, const void *data, size_t n);
+int pl_unseal(const char *path, buf *out);
 
 ////////// 5. DEVICE //////////
 
 // What was around a lingo(...) asked from here, as one JSON record of each it knows: "os", "time" its
 // local time with its offset, like 2026-10-19T16:31:07-04:00, "zone", "language", and "app" and "window" in front.
 void pl_context(buf *out);
+
+void pl_random(void *to, size_t n);   // bytes no one can guess, for keys
 
 // A native lingo's library, like windows.dll, loaded and kept: its lingo_phrases, or NULL with why in error.
 lingo_entry pl_library(const char *path, buf *error);

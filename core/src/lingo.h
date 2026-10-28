@@ -5,6 +5,8 @@
 // 3. Phrases     what this computer can do: an id, its line, what it needs, and the C function behind it
 // 4. Running     a tree to its value or its error
 // 5. Compiling   every lingo in the lingos folder, and a call of one of their functions, linked down to native phrases
+// 6. Signing     SHA-256, base64, Ed25519, and this device's own keys
+// 7. Hooks       what a native lingo fills to connect this lingo client to more than its port, like the onsay lingo
 // A native lingo's library is written against this and platform.h. Its one entry is lingo_phrases (LINGO_ENTRY).
 #ifndef LINGO_H
 #define LINGO_H
@@ -157,6 +159,67 @@ val *lingo_call(arena *a, val *inst, const char *fn);
 _Noreturn void fail(run *r, const char *code, const char *fmt, ...);   // stops with an error, never returns
 double num_of(run *r, val *x, const char *what);
 val *text_of(run *r, val *x);                                           // any value as text
+
+////////// 6. SIGNING //////////
+
+// sign.c, on Monocypher. A key is 32 bytes, a private one its seed, and a signature 64.
+void sha256(const void *data, size_t n, unsigned char out[32]);
+void base64(buf *out, const void *data, size_t n);
+int unbase64(const char *s, size_t n, buf *out);   // 0 when it isn't base64
+void ed25519_key(const unsigned char seed[32], unsigned char key[32]);
+void ed25519_sign(const unsigned char seed[32], const void *msg, size_t n, unsigned char sig[64]);
+int ed25519_check(const unsigned char key[32], const void *msg, size_t n, const unsigned char sig[64]);   // 1 when key signed it
+
+// This device's own key pairs, by a name like device, kept in home/keys, the private half sealed by the device (pl_seal)
+// and never handed out (core.c). key_of gives the public half, made first when missing and make is set. 0 when there is
+// none, or it couldn't be kept or signed with.
+int key_of(const char *name, int make, unsigned char key[32]);
+int key_sign(const char *name, const void *msg, size_t n, unsigned char sig[64]);
+void key_forget(const char *name);
+
+////////// 7. HOOKS //////////
+
+/* A native lingo that connects this lingo client to more than its port, like the onsay lingo, fills these in its
+   lingo_phrases with lingo_hook. They are used only while it runs, in a lingo client that serves, never at the command
+   line, and any it leaves NULL do nothing.
+     open      who reaches it when no rule says otherwise, like "public": its own default access rule
+     running   called as it starts and each time the catalog changes, with the catalog as JSON (core/README.md), and with
+               NULL as it stops. On the job thread
+     decided   each line of decisions.log as it is written, as JSON
+     ask       lingo(...) and use(...) as a program reaches them, on the job thread: values is {"ask","values","gives",
+               "context","asking"} or {"address","values"} as JSON, and the answer goes in answer, a record with value, or
+               error and code. 0 when it can't be asked, or stop was set while it waited (lingo_wait)
+     key       a request's signer by its keyid, like laptop.brandon: {key: "ed25519:<base64>", handle, mine}, mine true
+               when it is a device of this computer's own handle. NULL when it isn't known */
+typedef struct {
+  const char *open;
+  void (*running)(const char *catalog);
+  void (*decided)(const char *line);
+  int (*ask)(const char *values, size_t n, volatile int *stop, buf *answer);
+  val *(*key)(arena *a, const char *keyid);
+} lingo_hooks;
+void lingo_hook(const lingo_hooks *hooks);
+
+/* What the lingo client offers it back, from any thread unless it says.
+     lingo_hand     a web request from elsewhere, {id, method, path, headers, body, base64} as JSON, answered in turn as
+                    the port answers one, its caller "me", the account's own call, or "ip <address>". answered gets
+                    {id, status, headers, body, base64}, on the job thread
+     lingo_stop     stops the request whose id, as JSON, is id
+     lingo_wait     on the job thread: waits until done or stop is set, or seconds pass, answering requests meanwhile
+     lingo_done     sets done, and wakes the job thread's wait
+     lingo_policy   the account's policy, with its version, kept as the one in force, its grants for this computer by
+                    device, its name on the account. NULL with why when its version is older than the one kept. Gives the
+                    grants the ceiling clamps, a record by lingo
+     lingo_setting  one of a lingo's settings as this computer keeps them, or NULL. lingo_set keeps one, 1 when it was
+     lingo_home     this lingo client's home folder, as a whole path, for a file a native lingo keeps there, like a log */
+void lingo_hand(const char *request, size_t n, const char *caller, void (*answered)(void *arg, const char *response, size_t n), void *arg);
+void lingo_stop(const char *id);
+void lingo_wait(volatile int *done, volatile int *stop, double seconds);
+void lingo_done(volatile int *done);
+val *lingo_policy(arena *a, val *account, const char *device, const char **why);
+val *lingo_setting(arena *a, const char *lingo, const char *key);
+int lingo_set(const char *lingo, const char *key, val *value);
+const char *lingo_home(void);
 
 LINGO_SHARED_END
 

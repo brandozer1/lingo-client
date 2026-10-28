@@ -1,8 +1,9 @@
 # release.yml - a release of the lingo client, made on GitHub two ways: push a tag like v0.4.0, or open Actions, pick
 # "release", press "Run workflow" and type the version. core/build.ps1 runs, then its files go on the release page,
 # which onsay.dev and core/install.sh download from.
-#   lingo-client-windows-x64.zip   onsay-core.exe and the lingos folder, what the Windows app ships
+#   lingo-client-windows-x64.zip   onsay-core.exe and the lingos folder, onsay among them, what the Windows app ships
 #   onsay-core-linux-x64           the lingo client for Linux servers, and onsay-core-linux-arm64
+#   onsay-linux-x64.lingo          the onsay lingo for Linux, and onsay-linux-arm64.lingo
 #   install.sh                     puts it on a Linux server
 name: release
 
@@ -32,6 +33,8 @@ jobs:
           Compress-Archive -Path core\bin\onsay-core.exe, core\bin\lingos -DestinationPath release\lingo-client-windows-x64.zip
           Copy-Item core\bin\linux-x64\onsay-core release\onsay-core-linux-x64
           Copy-Item core\bin\linux-arm64\onsay-core release\onsay-core-linux-arm64
+          Copy-Item core\bin\linux-x64\lingos\onsay.lingo release\onsay-linux-x64.lingo
+          Copy-Item core\bin\linux-arm64\lingos\onsay.lingo release\onsay-linux-arm64.lingo
           Copy-Item core\install.sh release\
         shell: pwsh
       - uses: softprops/action-gh-release@v2

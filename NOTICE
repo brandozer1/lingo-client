@@ -17,3 +17,10 @@ puff (core/src/puff.c, core/src/puff.h)
   zlib's small inflate, by Mark Adler, used as it comes to read deflated
   files in a .lingo file. Distributed under the zlib license, which is in
   core/src/puff.h with its copyright.
+
+Monocypher 4.0.2 (core/src/monocypher.c, monocypher.h, monocypher-ed25519.c,
+monocypher-ed25519.h)
+  Ed25519 signing and checking, by Loup Vaillant, Michael Savage and Fabio
+  Scotoni, used as it comes (https://monocypher.org). Dedicated to the public
+  domain under CC0 1.0, or else under the 2-clause BSD license, both in each
+  file's header with its copyright.

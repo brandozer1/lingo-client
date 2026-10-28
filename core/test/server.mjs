@@ -1,18 +1,23 @@
-// server.mjs - a stand-in for Onsay on this computer, proving the lingo client end to end, over its connection and its port.
+// server.mjs - a stand-in for Onsay on this computer, proving the lingo client and its onsay lingo end to end, over the
+// onsay lingo's connection and the port, speaking the contract of docs/security.md in the onsay repo (The onsay lingo and
+// the wire), signing with a test key the test build of the onsay lingo trusts.
 //
 //   node test/server.mjs          then, in another terminal:   bin/test/onsay-core.exe test/onsay.json
 // The test core's home is test/data, made fresh each run: its lingos folder holds the test lingos (test/lingos) as
-// folders, memo packed into memo.lingo, every .lingo file the build made (bin/lingos), and a deflated one and a broken
-// one made here. Each are running, as running.json says, under the policy.json written here. Each case is a request,
-// sent down the connection as Onsay sends one for this computer's own account, or to the port, or a command, and what
-// the answer must be. A case about a lingo the core hasn't got, like windows, is skipped.
+// folders, memo packed into memo.lingo, every .lingo file the build made (bin/lingos), the onsay lingo's test build
+// (bin/test/lingos), and a deflated one and a broken one made here. Each are running, as running.json says, under the
+// policy.json written here, the onsay lingo signed in with the token written into its settings. Each case is a request,
+// sent down the connection as Onsay sends one for this computer's own account, signed, or as its proxy passes one on, or
+// to the port, or a command, and what the answer must be. A case about a lingo the core hasn't got, like windows, is
+// skipped.
 //
 // 1. WebSocket   just enough of it, with no packages
 // 2. Zips        .lingo files read and made, stored or deflated
-// 3. Cases       requests and what each must answer
-// 4. Onsay       answers to lingo(...) and use(...), an AI that answers the way OpenAI does, signing in, and pages for
-//                http.send
-// 5. Session     hello, the cases in order, the catalog, then a drop the core must come back from
+// 3. Signing     what Onsay signs, as Onsay signs it, and requests signed by a device (RFC 9421)
+// 4. Cases       requests and what each must answer
+// 5. Onsay       answers to lingo(...), use(...) and prompts, an AI that answers the way OpenAI does, signing in, the
+//                policy, names resolved, and pages for http.send
+// 6. Session     hello, ready, the cases in order, the catalog, then a drop the core must come back from
 
 import http from 'node:http'
 import net from 'node:net'
@@ -23,12 +28,12 @@ import { rmSync, cpSync, readdirSync, existsSync, mkdirSync, writeFileSync, read
 import { execFileSync, spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
-const PORT = 8787, TOKEN = 'test-token'   // bin/test/onsay-core.exe connects to ws://127.0.0.1:8787/live
+const PORT = 8787, TOKEN = 'test-token'   // the test onsay lingo connects to ws://127.0.0.1:8787/live, signed in with TOKEN
 const HTTP = `http://127.0.0.1:${PORT}/http`   // the stand-in's pages for http.send
 const AI = `http://127.0.0.1:${PORT}/ai`        // and its AI, for agent
-const WEB = 6970, BARE = 6971, CLOSED = 6973     // the test core's port, and the bare and the closed cores', below
+const WEB = 6970, BARE = 6971, CLOSED = 6973, SERVED = 6974   // the test core's port, and the bare, the closed and the signing in cores', below
 const CORE = fileURLToPath(new URL('..', import.meta.url)), EXE = fileURLToPath(new URL('../bin/test/onsay-core.exe', import.meta.url))
-const DATA = new URL('./data/', import.meta.url), SETTINGS = new URL('settings/', DATA), LINGOS = new URL('lingos/', DATA)
+const DATA = new URL('./data/', import.meta.url), SETTINGS = new URL('settings/', DATA), LINGOS = new URL('lingos/', DATA), BUILT = new URL('../bin/', import.meta.url)
 const LIBRARY = new URL('../../lingo-library/', import.meta.url), HOME = fileURLToPath(DATA).replace(/[\\/]$/, '')
 // What the test core may do: everything but act on the screen, the ceiling, and grants for the lingos that read the
 // screen, run commands and reach files outside its home. Anyone may reach page, and with no account policy, the
@@ -120,7 +125,32 @@ const deflated = (files) => {
   return Buffer.concat([...parts, central, end])
 }
 
-////////// 3. CASES //////////
+////////// 3. SIGNING //////////
+
+// Onsay's test key, which the test onsay lingo has built in, and the devices /resolve names, each with its own key.
+const PKCS8 = Buffer.from('302e020100300506032b657004220420', 'hex')
+const keyOf = (seed) => crypto.createPrivateKey({ key: Buffer.concat([PKCS8, seed]), format: 'der', type: 'pkcs8' })
+const publicOf = (k) => `ed25519:${crypto.createPublicKey(k).export({ format: 'der', type: 'spki' }).subarray(-32).toString('base64')}`
+const ONSAY = keyOf(Buffer.alloc(32, 7)), HANDLE = 'tester', DEVICE = 'test-device', ADDED = '2026-10-28T14:00:00.000Z'
+const DEVICES = { laptop: keyOf(Buffer.alloc(32, 1)), phone: keyOf(Buffer.alloc(32, 2)), tablet: keyOf(Buffer.alloc(32, 3)) }
+
+// What Onsay signs, as Onsay signs it (server/lib/signing.js): JSON with every record's keys sorted, no spaces.
+const canonical = (v) => Array.isArray(v) ? `[${v.map(canonical).join(',')}]`
+  : v && typeof v === 'object' ? `{${Object.keys(v).filter((k) => v[k] !== undefined).sort().map((k) => `${JSON.stringify(k)}:${canonical(v[k])}`).join(',')}}`
+    : JSON.stringify(v ?? null)
+const sign = (value, key = ONSAY) => `onsay:${crypto.sign(null, Buffer.from(canonical(value)), key).toString('base64')}`
+const digest = (body) => crypto.createHash('sha256').update(body).digest('base64')
+
+/* The headers of a request signed by a device, keyid like laptop.tester, as its proxy passes it on: HTTP Message
+   Signatures (RFC 9421) over @method, @target-uri and content-digest, the target as the device sent it. */
+const signedBy = (device, keyid, method, path, body = '', more = {}) => {
+  const host = 'api.onsay.dev', d = `sha-256=:${digest(body)}:`, params = `("@method" "@target-uri" "content-digest");created=${Math.floor(Date.now() / 1000)};nonce="${crypto.randomBytes(8).toString('hex')}";keyid="${keyid}"`
+  const base = `"@method": ${method}\n"@target-uri": https://${host}${path}\n"content-digest": ${d}\n"@signature-params": ${params}`
+  return { 'x-forwarded-for': '198.18.0.5, 10.0.0.1', 'x-forwarded-host': host, 'x-forwarded-proto': 'https', 'content-digest': d, 'signature-input': `on=${params}`,
+    signature: `on=:${crypto.sign(null, Buffer.from(base), DEVICES[device]).toString('base64')}:`, ...more }
+}
+
+////////// 4. CASES //////////
 
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
 const gives = (want) => (r) => r.status === 200 && same(r.json, want)
@@ -377,20 +407,50 @@ const WEB_CASES = [
     (await raw('POST /memo/recall HTTP/1.1\r\nContent-Length: 5000000\r\n\r\n')).startsWith('HTTP/1.1 413')],
   ['web: a need above the ceiling is a 403', async () => (await post('/windows/input/type', ['x'])).status === 403, 'windows'],
   ['proxied: a request through Onsay is answered as the port answers it', async (send) => {
-    const r = await send('/hello/text?name=Bo', undefined, { owner: undefined })
+    const r = await send('/hello/text?name=Bo', undefined, { as: undefined })
     return r.status === 200 && r.body === 'hi Bo' && r.base64 === false && r.headers['content-type'].startsWith('text/plain')
   }],
   ['proxied: a body in base64 is a 400 that says why', async (send) => {
-    const r = await send('/hello/json', undefined, { owner: undefined, method: 'POST', body: Buffer.from([0xff, 0xfe]).toString('base64'), base64: true })
+    const r = await send('/hello/json', undefined, { as: undefined, method: 'POST', body: Buffer.from([0xff, 0xfe]).toString('base64'), base64: true })
     return r.status === 400 && /isn't text/.test(r.json?.error)
   }],
   ['access: a lingo not shared is not there, and / lists only what is shared', async (send) => {
-    const [a, b] = [await send('/memo/recall?k=milk', undefined, { owner: undefined }), await send('/', undefined, { owner: undefined })]
-    return a.status === 404 && /There's nothing at \/memo\/recall/.test(a.json?.error) && same(b.json.lingos.map((l) => l.name), ['page'])
+    const [a, b] = [await send('/memo/recall?k=milk', undefined, { as: undefined }), await send('/', undefined, { as: undefined })]
+    return a.status === 404 && /There's nothing at \/memo\/recall/.test(a.json?.error) && same(b.json.lingos.map((l) => l.name), ['onsay', 'page'])
   }],
-  ["owner: Onsay's own request counts as this computer: every running lingo, natives too", async (send) => {
+  ["me: the account's own request, signed by Onsay, reaches every running lingo by the defaults, natives too", async (send) => {
     const [a, b] = [await send('/memo/recall?k=milk'), await send('/')]
-    return a.status === 200 && a.json === '2 litres' && b.json.lingos.some((l) => l.name === 'memo') && (!has('windows') || b.json.lingos.some((l) => l.name === 'windows'))
+    return a.status === 200 && a.json === '2 litres' && b.json.lingos.some((l) => l.name === 'memo') && (!has('windows') || b.json.lingos.some((l) => l.name === 'windows')) &&
+      decisions().some((d) => d.caller === 'me' && d.lingo === 'memo' && d.why === 'rule: me')
+  }],
+  ["me: one whose signature doesn't check out, or that is too old, is a 401, and never runs", async (send) => {
+    const old = new Date(Date.now() - 600_000).toISOString()
+    const [a, b, c] = [await send('/memo/remember', { k: 'forged', v: 'x' }, { signed: sign({ as: 'me', at: new Date().toISOString(), device: DEVICE, id: 'other', method: 'POST', path: '/memo/remember', sha256: digest('') }) }),
+      await send('/memo/remember', { k: 'forged', v: 'x' }, { at: old, signed: sign({ as: 'me', at: old, device: DEVICE, id: `r${next + 1}`, method: 'POST', path: '/memo/remember', sha256: digest(JSON.stringify({ k: 'forged', v: 'x' })) }) }),
+      await send('/memo/recall?k=forged')]
+    return a.status === 401 && /doesn't check out/.test(a.json?.error) && b.status === 401 && c.status === 200 && c.json === null
+  }],
+  ['signed: a device of my own handle, by its RFC 9421 signature, reaches what my devices may, its key looked up and its statement checked', async (send) => {
+    const r = await send('/memo/recall?k=milk', undefined, { as: undefined, headers: signedBy('laptop', 'laptop.tester', 'GET', '/memo/recall?k=milk') })
+    return r.status === 200 && r.json === '2 litres' && decisions().some((d) => d.caller === 'laptop.tester' && d.why === 'rule: my devices' && d.allowed)
+  }],
+  ['signed: a device of another handle reaches only what is shared with that handle', async (send) => {
+    const ask = () => send('/memo/recall?k=milk', undefined, { as: undefined, headers: signedBy('phone', 'phone.james', 'GET', '/memo/recall?k=milk') })
+    const before = await ask()
+    command('share', 'memo', 'james')
+    const after = await ask()
+    return before.status === 404 && after.status === 200 && after.json === '2 litres' && decisions().some((d) => d.caller === 'phone.james' && d.why === 'rule: james')
+  }],
+  ["signed: a signature that doesn't check out, a nonce used twice, a body changed, and a key whose statement doesn't check out, are each a 401", async (send) => {
+    const headers = signedBy('laptop', 'laptop.tester', 'GET', '/memo/recall?k=milk')
+    const [forged, again, changed, unvouched] = [
+      await send('/memo/recall?k=milk', undefined, { as: undefined, headers: signedBy('phone', 'laptop.tester', 'GET', '/memo/recall?k=milk') }),
+      await send('/memo/recall?k=milk', undefined, { as: undefined, headers }).then(() => send('/memo/recall?k=milk', undefined, { as: undefined, headers })),
+      await send('/memo/recall', { k: 'milk' }, { as: undefined, headers: signedBy('laptop', 'laptop.tester', 'POST', '/memo/recall', JSON.stringify({ k: 'eggs' })) }),
+      await send('/memo/recall?k=milk', undefined, { as: undefined, headers: signedBy('tablet', 'tablet.tester', 'GET', '/memo/recall?k=milk') }),
+    ]
+    return forged.status === 401 && /doesn't check out/.test(forged.json?.error) && again.status === 401 && /nonce/.test(again.json?.error) &&
+      changed.status === 401 && /Content-Digest/.test(changed.json?.error) && unvouched.status === 401 && /no key known/.test(unvouched.json?.error)
   }],
   ['access: shared with one address, by the control route, and only that address reaches it', async (send) => {
     const shared = await control('share', { lingo: 'memo', who: 'ip 203.0.113.7' })
@@ -410,7 +470,7 @@ const WEB_CASES = [
   }],
   ['access: / lists for an address only what it may reach', async (send) => {
     const r = await send('/', undefined, from('203.0.113.7'))
-    return same(r.json.lingos.map((l) => l.name).sort(), ['memo', 'page'])
+    return same(r.json.lingos.map((l) => l.name).sort(), ['memo', 'onsay', 'page'])
   }],
   ['access: with no account policy, the defaults; with one, the account policy, the overrides still on top', async (send) => {
     const before = await send('/memo/all', undefined, from('192.0.2.60'))
@@ -450,6 +510,10 @@ const WEB_CASES = [
   ['control: settings and set', async () => {
     const set = await control('set', { lingo: 'prefs', key: 'name', value: 'Cy' }), got = await web('/.lingo/settings?lingo=prefs')
     return set.status === 200 && got.status === 200 && got.json.find((s) => s.name === 'name').value === 'Cy'
+  }],
+  ['control: call runs any function here, and says plainly when there is none', async () => {
+    const [a, b] = [await control('call', { fn: 'memo.recall', values: ['milk'] }), await control('call', { fn: 'memo.nope' })]
+    return gives('2 litres')(a) && b.status === 400 && /no function or phrase called memo.nope/.test(b.json?.error)
   }],
   ['control: grant and ceiling, and what is wrong with one said plainly', async () => {
     const [a, b, c, d] = [await control('grant', { lingo: 'memo', need: 'files.read ~/Pictures' }), await control('grant', { lingo: 'memo', need: 'teleport' }),
@@ -545,14 +609,90 @@ const WEB_CASES = [
     const r = await web('/')
     return r.json.lingos.some((l) => l.name === 'liar' && /liar\.ls: liar\.fetch needs net, which its openapi\.json doesn't say/.test(l.error))
   }],
-  ['the command line: sign-in writes the token Onsay gives into the settings', async () => {
-    writeFileSync(new URL('signin.json', DATA), JSON.stringify({ home: 'test/data/signin', port: 6972 }))
-    const done = await new Promise((end) => spawn(EXE, ['test/data/signin.json', 'sign-in'], { cwd: CORE, stdio: 'ignore' }).on('exit', end))
-    const s = JSON.parse(readFileSync(new URL('signin.json', DATA), 'utf8'))
-    return done === 0 && s.token === 'signed-in-token' && /^[0-9a-f]{32}$/.test(s.install)
+  ['policy: a new version pushed is fetched, checked, kept for this device, and what the ceiling clamped sent back', async (send) => {
+    policies.push({ version: 2, policy: { access: [{ who: 'me', lingos: '*' }, { who: 'my devices', lingos: '*' }], grants: { [DEVICE]: { windows: ['screen.read', 'screen.act'] } }, offline: 'defaults' } })
+    current.send({ type: 'policy', version: 2 })
+    const got = await soon(() => applied.some((m) => m.version === 2))
+    const kept = JSON.parse(readFileSync(new URL('policy.account.json', DATA), 'utf8')), a = applied.find((m) => m.version === 2)
+    const r = await send('/memo/recall?k=milk')
+    return got && same(a.clamped, { windows: ['screen.act'] }) && kept.version === 2 && kept.device === DEVICE && same(kept.grants[DEVICE].windows, ['screen.read', 'screen.act']) &&
+      same((await control('policy')).json.grants.windows, ['screen.read', 'files.read ~/no-such-file-here.txt']) && r.status === 200
   }],
-  ['bare: with no token it runs on its own, answers its port, its own limits hold, and lingo(...) says it is not connected', async () => {
-    writeFileSync(new URL('bare.json', DATA), JSON.stringify({ home: 'test/data', lingos: 'test/data/lingos', port: BARE, steps: 1000000000, ms: 300 }))
+  ["policy: an older version, and one whose signature doesn't check out, are refused", async () => {
+    policies.push({ version: 1, policy: { access: [], grants: {}, offline: 'defaults' } })
+    current.send({ type: 'policy', version: 1 })
+    await pause(1000)
+    policies.push({ version: 3, policy: { access: [], grants: {}, offline: 'defaults' }, forged: true })
+    current.send({ type: 'policy', version: 3 })
+    await pause(1500)
+    const kept = JSON.parse(readFileSync(new URL('policy.account.json', DATA), 'utf8'))
+    rmSync(new URL('policy.account.json', DATA))
+    return kept.version === 2 && !applied.some((m) => m.version !== 2)
+  }],
+  ['log: each decision is sent to Onsay for the activity feed', async () =>
+    logged.some((l) => l.caller === 'ip 203.0.113.8' && l.lingo === 'memo' && l.allowed === false) && logged.some((l) => l.caller === 'laptop.tester' && l.allowed) &&
+    logged.every((l) => ['at', 'caller', 'lingo', 'route', 'need', 'allowed', 'why'].every((k) => k in l))],
+  ['/onsay: a prompt with the prompt key is sent to Onsay, with the chat so far, and answered with its session', async () => {
+    const key = (await web('/.lingo/settings?lingo=onsay')).json.find((s) => s.name === 'prompt_key').value
+    const ask = (body, k = key) => web('/onsay', { method: 'POST', body, headers: { authorization: `Bearer ${k}` } })
+    const a = await ask({ prompt: 'hello' }), b = await ask({ prompt: 'and again', session: a.json?.session }), c = await ask({ prompt: 'plan a trip', session: a.json?.session })
+    const [none, wrong] = [await web('/onsay', { method: 'POST', body: { prompt: 'hi' } }), await ask({ prompt: 'hi' }, 'not-the-key')]
+    onsayed = { key, session: a.json?.session }
+    return /^[0-9a-f]{48}$/.test(key) && a.status === 200 && a.json.text === 'Onsay heard: hello' && /^[0-9a-f]{18}$/.test(a.json.session) && b.json.session === a.json.session &&
+      prompted.at(-2).prompt === 'and again' && prompted.at(-2).session === a.json.session && same(prompted.at(-2).chat, [{ prompt: 'hello', text: 'Onsay heard: hello' }]) &&
+      same(c.json, { session: a.json.session, questions: ['Where to?', 'When?'] }) && none.status === 401 && wrong.status === 401 && /prompt key/.test(wrong.json?.error)
+  }],
+  ['/onsay: its sessions, the newest first, and one with every turn', async () => {
+    const auth = { headers: { authorization: `Bearer ${onsayed.key}` } }
+    const [list, one, missing] = [await web('/onsay/sessions', auth), await web(`/onsay/sessions/${onsayed.session}`, auth), await web('/onsay/sessions/nope', auth)]
+    return list.status === 200 && same(list.json[0], { session: onsayed.session, prompt: 'hello' }) && one.json.turns.length === 3 && same(one.json.turns[2], { prompt: 'plan a trip', questions: ['Where to?', 'When?'] }) &&
+      missing.status === 404
+  }],
+  ['/onsay: open to anyone through the proxy by its own default rule, still with its prompt key', async (send) => {
+    const ask = (k) => send('/onsay', { prompt: 'from afar' }, { as: undefined, headers: { ...from('198.18.0.9').headers, authorization: `Bearer ${k}` } })
+    const [a, b] = [await ask(onsayed.key), await ask('wrong')]
+    return a.status === 200 && a.json.text === 'Onsay heard: from afar' && b.status === 401 && (await control('policy')).json.access.some((r) => r.who === 'public' && r.lingos === 'onsay' && r.default)
+  }],
+  ['sent.log: every message sent to Onsay kept, a line each with when, every token masked, pings left out', async () => {
+    const text = readFileSync(new URL('sent.log', DATA), 'utf8'), lines = text.trim().split('\n').map((l) => JSON.parse(l)), types = new Set(lines.map((l) => l.message.type))
+    return lines.every((l) => !isNaN(Date.parse(l.at))) && ['hello', 'response', 'lingo', 'prompt', 'applied', 'log', 'api'].every((t) => types.has(t)) && !types.has('ping') &&
+      lines.find((l) => l.message.type === 'hello').message.token === '(hidden)' && !text.includes(`"token":"${TOKEN}"`)
+  }],
+  ['the command line: call onsay.sign_in keeps the token Onsay gives and makes the device key, sealed; status says so; sign_out forgets both', async () => {
+    writeFileSync(new URL('signin.json', DATA), JSON.stringify({ home: 'test/data/signin', lingos: 'test/data/lingos', port: 6972 }))
+    // Run beside the stand-in, never blocking it, since sign_in asks it.
+    const call = (...args) => new Promise((done) => {
+      let out = ''
+      spawn(EXE, ['test/data/signin.json', 'call', ...args], { cwd: CORE, stdio: ['ignore', 'pipe', 'ignore'] }).on('close', () => { try { done(JSON.parse(out)) } catch { done(undefined) } }).stdout.on('data', (d) => { out += d })
+    })
+    const signed = await call('onsay.sign_in', 'test box'), kept = JSON.parse(readFileSync(new URL('signin/settings/onsay.json', DATA), 'utf8')), sealed = readFileSync(new URL('signin/keys/device', DATA))
+    const status = await call('onsay.status'), out = await call('onsay.sign_out'), after = await call('onsay.status')
+    return signed?.handle === 'tester' && /^ed25519:[A-Za-z0-9+/]{43}=$/.test(signed.key) && named === 'test box' && kept.token === 'signed-in-token' &&
+      (process.platform !== 'win32' || sealed.length > 32) && status?.signed_in === true && status.key === signed.key && status.connected === false && out === null &&
+      after?.signed_in === false && after.key === null
+  }],
+  ['signing in from an app: sign_in through /.lingo/call gives the address and code at once, finishes on its own, and status says so', async () => {
+    mkdirSync(new URL('served/', DATA), { recursive: true })
+    writeFileSync(new URL('served/running.json', DATA), JSON.stringify(['onsay']))
+    writeFileSync(new URL('served.json', DATA), JSON.stringify({ home: 'test/data/served', lingos: 'test/data/lingos', port: SERVED }))
+    const core = spawn(EXE, ['test/data/served.json'], { cwd: CORE, stdio: 'ignore' })
+    const call = async (fn, values = []) => (await web('/.lingo/call', { port: SERVED, method: 'POST', body: { fn, values } })).json
+    let r = { status: 0 }
+    for (let i = 0; i < 50 && !r.status; i++) { await pause(200); r = await web('/', { port: SERVED }) }
+    const started = Date.now(), signed = await call('onsay.sign_in'), quick = Date.now() - started < 1500
+    const done = await soon(async () => (await call('onsay.status'))?.signed_in === true)
+    const status = await call('onsay.status'), out = await call('onsay.sign_out'), after = await call('onsay.status')
+    core.kill()
+    return same(signed, { url: 'http://127.0.0.1:8787/connect', code: 'TEST-CODE' }) && quick && done && status.signing_in === false &&
+      /^ed25519:/.test(status.key) && out === null && after.signed_in === false && after.key === null
+  }],
+  ['bare: with no onsay lingo it runs on its own, answers its port, its own limits hold, and lingo(...) says it is not connected', async () => {
+    const lingos = new URL('barelingos/', DATA), home = new URL('bare/', DATA)
+    cpSync(LINGOS, lingos, { recursive: true })
+    rmSync(new URL('onsay.lingo', lingos))
+    mkdirSync(home, { recursive: true })
+    writeFileSync(new URL('running.json', home), JSON.stringify(readdirSync(lingos).map((n) => n.replace(/\.lingo$/, ''))))
+    writeFileSync(new URL('bare.json', DATA), JSON.stringify({ home: 'test/data/bare', lingos: 'test/data/barelingos', port: BARE, steps: 1000000000, ms: 300 }))
     const core = spawn(EXE, ['test/data/bare.json'], { cwd: CORE, stdio: 'ignore' })
     let r = { status: 0 }
     for (let i = 0; i < 50 && !r.status; i++) { await pause(200); r = await web('/', { port: BARE }) }
@@ -577,14 +717,16 @@ const WEB_CASES = [
   }],
 ]
 // What a request through Onsay's proxy carries, from an address.
-const from = (ip) => ({ owner: undefined, headers: { host: 'laptop.example.onsay.dev', 'x-forwarded-for': `${ip}, 10.0.0.1` } })
+const from = (ip) => ({ as: undefined, headers: { host: 'laptop.example.onsay.dev', 'x-forwarded-for': `${ip}, 10.0.0.1` } })
 
-////////// 4. ONSAY //////////
+////////// 5. ONSAY //////////
 
 /* Canned answers to lingo(...) and use(...): each ask, by its words or its address, answered as the program runs, or
    failed with why. One reaches this computer on the way with a request, memo's recall, run while the program waits.
    asked is the last ask, every each one, device the last request's answer, shown what the command line printed. */
-let asked = {}, device = null, every = [], shown = null
+let asked = {}, device = null, every = [], shown = null, onsayed = {}, named = null
+const prompted = [], applied = [], logged = [], policies = []   // what came to Onsay, and each account policy, the last the one GET /policy gives
+let current = null   // the link the core is on now
 const LINGO = [
   [/capital of a country/, ({ values }) => ({ France: 'Paris', Japan: 'Tokyo' })[values.country]],
   [/kept under a name/, ({ values }) => `kept: ${values.name}`],
@@ -623,10 +765,29 @@ const ai = (q, s) => {
   })
 }
 
-// Signing in, as Onsay does it: a code to show, then the token once the person pressed Connect, here at once.
-const SIGN_IN = {
-  '/connect': (s) => s.writeHead(201, { 'content-type': 'application/json' }).end(JSON.stringify({ url: 'http://127.0.0.1:8787/connect', code: 'TEST-CODE', poll: 'p1' })),
-  '/connect/poll': (s) => s.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ status: 'done', token: 'signed-in-token', account: { handle: 'tester', email: 'tester@example.com' } })),
+// A prompt to /onsay answered as Onsay's search does: what it heard, or questions back.
+const prompt = (m, link) => {
+  prompted.push(m)
+  link.send(/trip/.test(m.prompt) ? { type: 'answer', id: m.id, questions: ['Where to?', 'When?'] } : { type: 'answer', id: m.id, text: `Onsay heard: ${m.prompt}` })
+}
+
+const json = (s, status, body) => s.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body))
+// Onsay's API: signing in, as Onsay does it, a code to show, then the token once the person pressed Connect, here at
+// once; the account's policy, signed; and names resolved, each device with its key and Onsay's statement on it.
+const API = {
+  'POST /connect': (q, s, body) => { named = JSON.parse(body).name; json(s, 201, { url: 'http://127.0.0.1:8787/connect', code: 'TEST-CODE', poll: 'p1' }) },
+  'POST /connect/poll': (q, s) => json(s, 200, { status: 'done', token: 'signed-in-token', account: { handle: 'tester', email: 'tester@example.com' } }),
+  'GET /policy': (q, s) => {
+    if (q.headers.authorization !== `Bearer ${TOKEN}`) return json(s, 401, { error: 'Sign in first' })
+    const p = policies.at(-1) ?? { version: 0, policy: { access: [{ who: 'me', lingos: '*' }, { who: 'my devices', lingos: '*' }], grants: {}, offline: 'defaults' } }
+    json(s, 200, { version: p.version, policy: p.policy, signed: sign({ version: p.forged ? 4 : p.version, policy: p.policy }) })
+  },
+  'GET /resolve': (q, s) => {
+    const name = q.url.split('/').pop(), [device, handle] = name.split('.'), key = DEVICES[device]
+    if (!key || !handle) return json(s, 404, { error: `There's no computer or route called ${name}` })
+    const card = { name: device, key: publicOf(key), added: ADDED }
+    json(s, 200, { name, kind: 'computer', online: true, devices: [{ ...card, statement: sign({ ...card, device, handle, name: undefined }, device === 'tablet' ? DEVICES.tablet : ONSAY) }] })
+  },
 }
 
 // Pages for http.send and request, by their path under /http.
@@ -644,7 +805,7 @@ const PAGES = {
   },
 }
 
-////////// 5. SESSION //////////
+////////// 6. SESSION //////////
 
 let catalog = [], hello = {}, hellos = 0, failed = 0, passed = 0, skipped = 0
 const has = (name) => catalog.some((l) => l.name === name && l.status === 'ok')
@@ -653,16 +814,18 @@ const report = (name, ok, more = '', ms) => {
   console.log(`${ok ? '  ok  ' : '  FAIL'} ${name}${ms === undefined ? '' : ` (${ms} ms)`}${more}`)
 }
 
+let next = 0
 const session = (link) => {
-  let next = 0
   const waiting = new Map()
-  // A request down the connection, Onsay's own for this computer's account unless more says otherwise. Its response, its
-  // body read as JSON too.
+  /* A request down the connection, the account's own unless more says otherwise: as "me", at now, and signed by Onsay
+     over {as, at, device, id, method, path, sha256}, unless more gives its own. Its response, its body read as JSON too. */
   const send = (path, values, more = {}) => new Promise((done) => {
-    const id = `r${++next}`
-    waiting.set(id, (m) => { try { m.json = JSON.parse(m.body) } catch {} done(m) })
-    link.send({ type: 'request', id, method: values === undefined ? 'GET' : 'POST', path, body: values === undefined ? '' : JSON.stringify(values), base64: false, owner: true,
-      ...more, headers: { host: 'api.onsay.dev', 'content-type': 'application/json', ...more.headers } })
+    const id = `r${++next}`, m = { type: 'request', id, method: values === undefined ? 'GET' : 'POST', path, body: values === undefined ? '' : JSON.stringify(values), base64: false, as: 'me',
+      at: new Date().toISOString(), ...more, headers: { host: 'api.onsay.dev', 'content-type': 'application/json', ...more.headers } }
+    if (m.as === 'me' && !more.signed) m.signed = sign({ as: 'me', at: m.at, device: DEVICE, id, method: m.method, path: m.path, sha256: digest(m.body) })
+    if (m.as !== 'me') delete m.at
+    waiting.set(id, (r) => { try { r.json = JSON.parse(r.body) } catch {} done(r) })
+    link.send(m)
   })
 
   const go = async () => {
@@ -671,7 +834,7 @@ const session = (link) => {
       if (t.lingo && !has(t.lingo)) { skipped++; console.log(`  skip  ${name}: this core has no ${t.lingo}`); continue }
       t.before?.()
       const started = Date.now(), answered = send(t.path, t.values)
-      if (t.stopAfter) setTimeout(() => link.send({ type: 'stop', id: `r${next}` }), t.stopAfter)
+      if (t.stopAfter) { const id = `r${next}`; setTimeout(() => link.send({ type: 'stop', id }), t.stopAfter) }
       const r = await answered, ok = t.check(r)
       report(name, ok, ok ? '' : `\n    got: ${r.status} ${r.body}`, Date.now() - started)
     }
@@ -706,8 +869,9 @@ const session = (link) => {
     const silent = library.flatMap((l) => (entry(l)?.phrases ?? []).filter((p) => !p.does).map((p) => p.id))
     report('library: every lingo loads from the .lingo file the build packed, says what it is, and every function says what it does', library.length >= 9 &&
       library.every((l) => entry(l)?.status === 'ok' && entry(l).about) && !silent.length, silent.length ? `\n    silent: ${silent.join(', ')}` : '')
-    report('hello: the lingo client, its version and its catalog, and nothing else', same(Object.keys(hello), ['type', 'token', 'client', 'version', 'catalog']) &&
-      hello.client === 'lingo-client' && hello.version === '0.6.0' && Array.isArray(hello.catalog))
+    report('hello: the lingo client, its version, its device key and its catalog, and nothing else', same(Object.keys(hello), ['type', 'token', 'client', 'version', 'key', 'catalog']) &&
+      hello.client === 'lingo-client' && hello.version === '0.7.0' && /^ed25519:[A-Za-z0-9+/]{43}=$/.test(hello.key) && Array.isArray(hello.catalog))
+    report('catalog: onsay, a native lingo, ready, its phrases with it', entry('onsay')?.status === 'ok' && entry('onsay').native === true && phrase('onsay', 'onsay.sign_in') !== undefined)
     for (const [name, test, lingo] of WEB_CASES) {
       if (lingo && !has(lingo)) { skipped++; console.log(`  skip  ${name}: this core has no ${lingo}`); continue }
       const started = Date.now()
@@ -718,19 +882,30 @@ const session = (link) => {
     link.drop()
   }
 
+  // Ready, with Onsay's statement on the device's key: after the first drop, one that doesn't check out, which the core
+  // must refuse, dropping the link and coming back.
   return (text) => {
     const m = JSON.parse(text)
     if (m.type === 'hello') {
-      hellos++
       if (m.token !== TOKEN) { link.drop(); return }
+      hellos++
       hello = m
       catalog = m.catalog
+      current = link
       console.log(`hello ${hellos} from ${m.client} ${m.version}: ${catalog.map((l) => `${l.name} ${l.status}`).join(', ')}`)
-      link.send({ type: 'ready', device: 'test-device' })
+      const card = { handle: HANDLE, device: DEVICE, added: ADDED }
+      link.send({ type: 'ready', ...card, statement: sign({ ...card, key: hellos === 2 ? publicOf(DEVICES.laptop) : m.key }), policy: 0 })
       if (hellos === 1) go()
-      else { report('reconnects by itself', true); console.log(`\n${passed} passed, ${failed} failed${skipped ? `, ${skipped} skipped` : ''}`); process.exit(failed ? 1 : 0) }
+      else if (hellos === 3) {
+        report("reconnects by itself, after refusing a statement on its key that doesn't check out", true)
+        console.log(`\n${passed} passed, ${failed} failed${skipped ? `, ${skipped} skipped` : ''}`)
+        process.exit(failed ? 1 : 0)
+      }
     } else if (m.type === 'response') waiting.get(m.id)?.(m)
     else if (m.type === 'lingo' && 'id' in m) answer(m, link, send)
+    else if (m.type === 'prompt') prompt(m, link)
+    else if (m.type === 'applied') applied.push(m)
+    else if (m.type === 'log') logged.push(...m.entries)
     else if (m.type === 'catalog') catalog = m.catalog
     else if (m.type === 'ping') link.send({ type: 'pong' })
     else console.log('  core said', m)
@@ -741,8 +916,9 @@ const session = (link) => {
 // person puts lingos in a computer's lingos folder, every one of them running.
 rmSync(DATA, { recursive: true, force: true })
 mkdirSync(LINGOS, { recursive: true })
-for (const from of [new URL('./lingos/', import.meta.url), new URL('../bin/lingos/', import.meta.url)])
+for (const from of [new URL('./lingos/', import.meta.url), new URL('lingos/', BUILT), new URL('test/lingos/', BUILT)])
   for (const name of readdirSync(from)) if (name !== 'memo') cpSync(new URL(name, from), new URL(name, LINGOS), { recursive: true })
+keep('onsay', { token: TOKEN })
 writeFileSync(new URL('squeezed.lingo', LINGOS), deflated({
   'openapi.json': JSON.stringify({ 'x-lingo': { program: 'squeezed.ls' } }),
   'squeezed.ls': '// squeezed - for the tests: a .lingo file whose files are deflated, as most zip programs make them.\n\n// Says its name.\nfn main() {return "squeezed"}\n',
@@ -754,7 +930,8 @@ writeFileSync(new URL('running.json', DATA), JSON.stringify(readdirSync(LINGOS).
 
 const server = http.createServer((q, s) => {
   if (q.method === 'POST' && q.url === '/ai/chat/completions') return ai(q, s)
-  if (q.method === 'POST' && SIGN_IN[q.url]) return q.resume().on('end', () => SIGN_IN[q.url](s))
+  const api = API[`${q.method} ${q.url.replace(/^\/resolve\/.*/, '/resolve')}`]
+  if (api) { let body = ''; q.on('data', (d) => { body += d }); return q.on('end', () => api(q, s, body)) }
   const page = PAGES[q.url.replace(/^\/http/, '').split('?')[0]]
   if (q.url.startsWith('/http/') && page) {
     let body = ''

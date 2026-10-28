@@ -11,6 +11,8 @@
 #include <ws2tcpip.h>
 #include <windows.h>
 #include <winhttp.h>
+#include <wincrypt.h>
+#include <bcrypt.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -270,6 +272,32 @@ void pl_list(const char *folder, void (*each)(const char *name, int folder, doub
   } while (FindNextFileW(h, &found));
   FindClose(h);
 }
+
+// Sealed by DPAPI to this Windows user: the file holds only what Windows can open again, for that user on this computer.
+int pl_seal(const char *path, const void *data, size_t n) {
+  DATA_BLOB in = { (DWORD)n, (BYTE *)data }, out = { 0 };
+  if (!CryptProtectData(&in, L"lingo client key", NULL, NULL, NULL, CRYPTPROTECT_UI_FORBIDDEN, &out)) return 0;
+  int ok = pl_write(path, (const char *)out.pbData, out.cbData);
+  LocalFree(out.pbData);
+  return ok;
+}
+
+int pl_unseal(const char *path, buf *out) {
+  buf sealed = { 0 };
+  DATA_BLOB in = { 0 }, open = { 0 };
+  int ok = pl_read(path, &sealed);
+  in.cbData = (DWORD)sealed.n, in.pbData = (BYTE *)sealed.s;
+  ok = ok && CryptUnprotectData(&in, NULL, NULL, NULL, NULL, CRYPTPROTECT_UI_FORBIDDEN, &open);
+  if (ok) {
+    buf_add(out, (const char *)open.pbData, open.cbData);
+    SecureZeroMemory(open.pbData, open.cbData);
+    LocalFree(open.pbData);
+  }
+  buf_free(&sealed);
+  return ok;
+}
+
+void pl_random(void *to, size_t n) { BCryptGenRandom(NULL, to, (ULONG)n, BCRYPT_USE_SYSTEM_PREFERRED_RNG); }
 
 // One text field of the context, left out when empty.
 static void context_field(buf *out, const char *name, const wchar_t *w) {

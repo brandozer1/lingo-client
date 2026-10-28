@@ -234,7 +234,9 @@ saved = use("https://api.example.com/v1/items", {name: "milk"})
   the `request` lingo, on `http.send`.
 - **After an `@`,** where the answer goes: it is sent on to that address as a plain call, the answer its first value.
   `https://` may be left off.
-- It compiles to the phrase `lingo.use(address, values)`, every core's own, and is asked of Onsay when the line runs.
+- It compiles to the phrase `lingo.use(address, values)`, every core's own, and is asked of Onsay when the line runs,
+  through the onsay lingo (`lingos/onsay`). On a lingo client without it, it fails: `This lingo client isn't connected
+  to Onsay`.
 - **`values`** is a record, matched to the function's values by name, a list, in order, or nothing. With a record, a
   name it doesn't take fails (`... takes place, not city`), a required one left out fails (`... needs where`), and an
   optional one left out takes its default. A query and a record are merged, the record winning, and a query with a
@@ -306,7 +308,7 @@ may be worked out while the program runs, like a goal an AI chose: `lingo(goal, 
 
 It is an ordinary call, made when the program reaches that line. The program asks Onsay, waits, gets back only the
 answer, and goes on. Nothing is added to the computer. Every core compiles `lingo(...)` the same way, as the phrase
-`lingo.run`, and asks Onsay over its connection, exactly as for `use(...)` (section 6), saying which of its functions
+`lingo.run`, and asks Onsay over the onsay lingo's connection, exactly as for `use(...)` (section 6), saying which of its functions
 asks, so it never gets itself as the answer.
 
 There are two ways to reach a function: name it, with a dotted call here or `use(...)` elsewhere, or ask for it in
@@ -360,7 +362,7 @@ code calling them can't tell them apart:
   section 11.
 - **Native:** a library built for the computer, like `windows.dll`, its phrases added as it loads (`core/README.md`).
 
-**What a model reads.** The lingo client tells Onsay what every running lingo shares, its catalog: each function's id,
+**What a model reads.** The onsay lingo tells Onsay what every running lingo shares, its catalog: each function's id,
 like `files.read`, what it does, and its values as JSON Schema. A native phrase says what it gives in its `does`, the
 way the Windows lingo writes it: `-> [{name,path,size,folder,changed}]` is a list of those records, `x?` is x or
 nothing, `a|b` is either, and `bool` is true or false.
@@ -537,15 +539,17 @@ reaches are kept. What is left calls nothing but native phrases. An error inside
 ## 12. Where lingos run
 
 Code runs where it lives. A running lingo in a computer's lingos folder runs in that computer's lingo client, when a
-request reaches its route (section 11) from that computer, from another, or from Onsay, and the caller may reach it, and
-only the answer goes back. Its code may call `lingo(...)` and `use(...)`, which ask Onsay and wait, or `setting(...)`,
+request reaches its route (section 11) from that computer, from another, or from Onsay through the onsay lingo, and the
+caller may reach it, and only the answer goes back. Its code may call `lingo(...)` and `use(...)`, which ask Onsay and
+wait, or `setting(...)`,
 answered by that computer's lingo client itself. Anything at any other address runs there, its own way, reached by a
 plain web request. Onsay runs no Lingo: it passes requests and answers. An answer sent to a computer after an `@` is a
 request too, the answer the function's first value.
 
 Each computer decides what its lingos may do, in its policy, and the lingo client refuses any phrase that needs what it
 may not have, and stops any call the moment Onsay or the person says stop. `core/README.md` has the policy and the
-messages between a lingo client and Onsay, and `core/test/server.mjs` runs real lingos on a real lingo client.
+hooks a native lingo fills, `lingos/onsay/README.md` how the onsay lingo talks with Onsay, and `core/test/server.mjs`
+runs real lingos on a real lingo client.
 
 
 ## 13. The tree: what the compiler gives
@@ -668,8 +672,9 @@ says what the computer is.
 
 ## 16. The Windows lingos
 
-The Windows app ships two native lingos, built from `lingos/` into `windows.lingo` and `native.lingo`, beside the lingos of
-`lingo-library`, `agent` among them. Their phrases, with what each gives, does and needs, are in their `openapi.json`
+The Windows app ships two native lingos for Windows, built from `lingos/` into `windows.lingo` and `native.lingo`, beside
+the onsay lingo, which every computer has (`lingos/onsay/README.md`), and the lingos of `lingo-library`, `agent` among
+them. Their phrases, with what each gives, does and needs, are in their `openapi.json`
 and the catalog, and in their `lingo_phrases` in C.
 
 - **`windows`**, Windows itself:

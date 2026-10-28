@@ -11,6 +11,7 @@
 #include <dlfcn.h>
 #include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <poll.h>
@@ -169,18 +170,6 @@ struct pl_link {
   buf held;                  // what was read and isn't a whole frame yet
 };
 
-static const char ALPHABET[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-static void base64(buf *out, const unsigned char *s, size_t n) {
-  for (size_t i = 0; i < n; i += 3) {
-    unsigned v = (unsigned)s[i] << 16 | (i + 1 < n ? (unsigned)s[i + 1] << 8 : 0) | (i + 2 < n ? s[i + 2] : 0);
-    buf_chr(out, ALPHABET[v >> 18 & 63]);
-    buf_chr(out, ALPHABET[v >> 12 & 63]);
-    buf_chr(out, i + 1 < n ? ALPHABET[v >> 6 & 63] : '=');
-    buf_chr(out, i + 2 < n ? ALPHABET[v & 63] : '=');
-  }
-}
-
 // SHA-1, only for the server's Sec-WebSocket-Accept, which is base64 of SHA-1 of the key and the protocol's own GUID.
 static void sha1(const unsigned char *s, size_t n, unsigned char digest[20]) {
   unsigned h[5] = { 0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0 };
@@ -335,7 +324,7 @@ int pl_receive(pl_link *l, buf *out) {
     size_t at = 2 + size + (l->held.n >= 2 && h[1] & 0x80 ? 4 : 0);
     if (l->held.n < at) { if (!read_more(l)) return 0; continue; }
     if (size) { n = 0; for (size_t i = 0; i < size; i++) n = n << 8 | h[2 + i]; }
-    if (n > (1u << 30)) return 0;   // a message of more than a GB is no message from Onsay
+    if (n > (1u << 30)) return 0;   // a message of more than a GB is no message at all
     if (l->held.n < at + n) { if (!read_more(l)) return 0; continue; }
     int op = h[0] & 15, fin = h[0] & 0x80;
     char *body = l->held.s + at;
@@ -397,6 +386,28 @@ int pl_append(const char *path, const char *data, size_t n) {
 }
 
 int pl_delete(const char *path) { return !remove(path) || errno == ENOENT; }
+
+// A file only its user can read or write, made so from the start.
+int pl_seal(const char *path, const void *data, size_t n) {
+  buf temp = { 0 };
+  buf_fmt(&temp, "%s.new", path);
+  remove(temp.s);
+  int fd = open(temp.s, O_WRONLY | O_CREAT | O_EXCL, 0600), ok = fd >= 0 && write(fd, data, n) == (ssize_t)n;
+  if (fd >= 0) ok = !fsync(fd) && !close(fd) && ok;
+  ok = ok && !rename(temp.s, path);
+  if (!ok) remove(temp.s);
+  buf_free(&temp);
+  return ok;
+}
+
+int pl_unseal(const char *path, buf *out) { return pl_read(path, out); }
+
+void pl_random(void *to, size_t n) {
+  for (size_t got = 0; got < n;) {
+    ssize_t k = getrandom((char *)to + got, n - got, 0);
+    if (k > 0) got += (size_t)k;
+  }
+}
 
 void pl_whole(const char *path, buf *out) {
   char *full = realpath(path, NULL);

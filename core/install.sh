@@ -1,14 +1,16 @@
 #!/bin/sh
-# install.sh - puts the lingo client on a Linux server: the program, its folder and settings, and a service that keeps
-# it running. It runs bare, answering its own lingos on port 6969, with no Onsay account, unless it is signed in.
+# install.sh - puts the lingo client on a Linux server: the program, the onsay lingo, its folder and settings, and a
+# service that keeps it running. It answers its own lingos on port 6969, with no Onsay account until it is signed in.
 #
 #   curl -fsSL https://github.com/brandozer1/lingo-client/releases/latest/download/install.sh | sh
 #                                             downloads the latest release and installs it
 #   curl -fsSL .../install.sh | sh -s -- --sign-in
 #                                             the same, signed in to Onsay
-#   sh install.sh ./bin/linux-x64/onsay-core  installs one already here, like from a checkout
+#   sh install.sh ./bin/linux-x64/onsay-core  installs one already here, like from a checkout, with lingos/onsay.lingo
+#                                             beside it
 #
-#   --sign-in   signs it in to Onsay from any device's browser, so Onsay can reach its lingos
+#   --sign-in   signs it in to Onsay from any device's browser, so Onsay can reach its lingos: onsay-core core.json call
+#               onsay.sign_in, which can be run any time after
 # As root it is for the whole server: /usr/local/bin, /var/lib/onsay and a system service. Otherwise it is for this
 # user: ~/.local/bin, ~/.onsay and a user service. Run it again to update it: its settings, policy and sign in are kept.
 # A lingo put in its lingos folder runs once started, and other computers reach it once shared (core/README.md).
@@ -38,10 +40,16 @@ else curl -fsSL "$ONSAY_DOWNLOAD/onsay-core-linux-$arch" -o "$bin/onsay-core.new
 chmod 755 "$bin/onsay-core.new"
 mv "$bin/onsay-core.new" "$bin/onsay-core"
 
-# Its settings, see core/README.md: its folder, which holds its lingos, its policy and everything it keeps.
+# The onsay lingo, which connects it to Onsay once it is signed in (../lingos/onsay/README.md).
+if [ -n "$from" ]; then cp "$(dirname "$from")/lingos/onsay.lingo" "$home/lingos/onsay.lingo"
+else curl -fsSL "$ONSAY_DOWNLOAD/onsay-linux-$arch.lingo" -o "$home/lingos/onsay.lingo"; fi
+
+# Its settings, see core/README.md: its folder, which holds its lingos, its policy and everything it keeps. The onsay
+# lingo runs, and keeps its sign in as its own setting.
 settings="$home/core.json"
 [ -f "$settings" ] || printf '{"home": "%s"}\n' "$home" > "$settings"
-if [ -n "$signin" ] && ! grep -q '"token"' "$settings"; then "$bin/onsay-core" "$settings" sign-in; fi
+"$bin/onsay-core" "$settings" start onsay > /dev/null
+if [ -n "$signin" ] && ! grep -q '"token":"' "$home/settings/onsay.json" 2> /dev/null; then "$bin/onsay-core" "$settings" call onsay.sign_in > /dev/null; fi
 
 # A service that starts it with the server and starts it again if it stops.
 unit="[Unit]
@@ -75,3 +83,4 @@ else
 fi
 echo "Its lingos go in $home/lingos. Start one: $bin/onsay-core $settings start <lingo>"
 echo "Let other computers reach it: $bin/onsay-core $settings share <lingo> public, or ip and an address"
+echo "Sign it in to Onsay, so Onsay and your other devices can reach it: $bin/onsay-core $settings call onsay.sign_in"

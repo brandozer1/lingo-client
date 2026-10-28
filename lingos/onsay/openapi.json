@@ -1,0 +1,12 @@
+{
+  "info": {
+    "version": "1.0.0",
+    "description": "Onsay on this computer: its connection to Onsay, so Onsay and the person's other devices can reach its lingos and its lingos can ask Onsay with lingo(...) and use(...), its sign in, and /onsay, where prompts come in from anyone with its prompt key, each answered by Onsay."
+  },
+  "x-lingo": {
+    "settings": [
+      { "name": "token", "title": "Sign in", "about": "This computer's sign in to Onsay, kept by onsay-core <settings> call onsay.sign_in or by the Onsay app.", "secret": true },
+      { "name": "prompt_key", "title": "Prompt key", "about": "What a program sends as Authorization: Bearer <prompt key> to prompt this computer at /onsay. Made on its first start.", "secret": true }
+    ]
+  }
+}
