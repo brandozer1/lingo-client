@@ -31,7 +31,7 @@
 #else
 #define LIVE "wss://api.onsay.dev/live"
 #define API "https://api.onsay.dev"
-#define ONSAY_KEY "ed25519:"
+#define ONSAY_KEY "ed25519:JAyqe6gpH0e2k51yjygP66uAo92x0ebK8q3w+y/B4Tw="
 #endif
 #define BEAT 20       // seconds between pings
 #define SILENT 60     // seconds without a word before the link is taken as dead
