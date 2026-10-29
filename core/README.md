@@ -133,7 +133,9 @@ onsay-core settings.json <verb> ...           does one thing and prints its answ
 | `pack <folder> [<to>]` | makes the folder of a lingo's files into its `.lingo` file, in `to` or beside the folder (`../docs/lingo.md`, section 11) |
 | `start <lingo>`, `stop <lingo>` | a lingo running or stopped. A running lingo client sees it within 5 seconds |
 | `share <lingo> <who> [--route <r>]` | adds an access rule: `share photos james --route /share`, `share memo ip 192.168.1.20`. `<lingo>` may be `"*"` |
+| `unshare <lingo> <who>` | takes out every rule `share` wrote that lets them reach it: `unshare photos james` |
 | `grant <lingo> <need>` | adds a grant: `grant desk run`, `grant photos files.read C:\Users\me\Pictures` |
+| `ungrant <lingo> <need>` | takes that grant back: `ungrant desk run` |
 | `ceiling <needs...>` | sets the ceiling: `ceiling net store files.read` |
 | `policy` | prints the policy in force, `{ceiling, access, block, grants}`, and `local` and `account`, the files as they are |
 | `settings <lingo>` | prints every setting of a lingo, each with its value now, for a form of them |
@@ -158,7 +160,8 @@ answers what the command line prints, or `{error}` with a 400.
 | `/.lingo/settings`, `/.lingo/set` | `lingo`, and `key` and `value` | as on the command line |
 | `/.lingo/manifest` | `lingo` | its whole manifest |
 | `/.lingo/policy` | | the policy in force, with the files |
-| `/.lingo/share`, `/.lingo/grant`, `/.lingo/ceiling` | `lingo`, `who` and `route`; `lingo` and `need`; `needs`, a list | the policy in force |
+| `/.lingo/share`, `/.lingo/unshare` | `lingo`, `who`, and `route` for share | the policy in force |
+| `/.lingo/grant`, `/.lingo/ungrant`, `/.lingo/ceiling` | `lingo` and `need`; `needs`, a list | the policy in force |
 | `/.lingo/call` | `fn`, and `values`, a list | the function's value |
 
 ## Requests

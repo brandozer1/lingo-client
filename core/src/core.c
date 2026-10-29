@@ -1160,7 +1160,9 @@ static int serving;   // how many requests are being answered, one inside anothe
      manifest {lingo}                its whole OpenAPI manifest, as the catalog has it, or why it can't load
      policy                          the policy in force, and the files it comes from
      share {lingo, who, route}       an access rule added to policy.json's overrides: who may reach lingo, or "*"
+     unshare {lingo, who}            every rule there that lets who reach lingo, or "*", taken out
      grant {lingo, need}             a grant added there, like run or files.read C:\Users\me\Pictures
+     ungrant {lingo, need}           that grant taken out of there
      ceiling {needs}                 the most this computer ever allows
      call {fn, values}               a function of any lingo here, or a phrase, run as this computer, its values in order,
                                      like onsay.sign_in, its value */
@@ -1224,6 +1226,24 @@ val *core_control(arena *a, const char *verb, val *v, const char **why) {
     list_push(a, access, rule);
     if (!keep_json("policy.json", local)) { *why = "This computer couldn't save policy.json"; return NULL; }
     out = policy(a);
+  } else if (!strcmp(verb, "unshare")) {
+    const char *who = text_or(v, "who", "");
+    val *access = rec_get(over, "access"), *kept = v_list(a);
+    for (size_t i = 0; access && access->k == V_LIST && i < access->l.n; i++)
+      if (strcmp(text_or(access->l.v[i], "who", ""), who) || strcmp(text_or(access->l.v[i], "lingos", ""), lingo)) list_push(a, kept, access->l.v[i]);
+    if (!access || access->k != V_LIST || kept->l.n == access->l.n) { *why = fmt(a, "Nothing on this computer shares %s with %s", lingo, who); return NULL; }
+    rec_set(a, over, "access", kept);
+    if (!keep_json("policy.json", local)) { *why = "This computer couldn't save policy.json"; return NULL; }
+    out = policy(a);
+  } else if (!strcmp(verb, "ungrant")) {
+    const char *need = text_or(v, "need", "");
+    val *grants = rec_get(over, "grants"), *mine = rec_get(grants, lingo), *kept = v_list(a);
+    for (size_t i = 0; mine && mine->k == V_LIST && i < mine->l.n; i++)
+      if (mine->l.v[i]->k != V_TEXT || strcmp(mine->l.v[i]->t.s, need)) list_push(a, kept, mine->l.v[i]);
+    if (!mine || mine->k != V_LIST || kept->l.n == mine->l.n) { *why = fmt(a, "%s has no grant %s on this computer", lingo, need); return NULL; }
+    rec_set(a, grants, lingo, kept);
+    if (!keep_json("policy.json", local)) { *why = "This computer couldn't save policy.json"; return NULL; }
+    out = policy(a);
   } else if (!strcmp(verb, "grant")) {
     const char *need = text_or(v, "need", "");
     size_t w = strcspn(need, " ");
@@ -1251,7 +1271,7 @@ val *core_control(arena *a, const char *verb, val *v, const char **why) {
     val *given = rec_get(v, "values");
     if (!(out = core_call(a, fn, given && given->k == V_LIST ? given : values, &stop, &code, &message)))
       { *why = !strcmp(code, "unknown") ? fmt(a, "There's no function or phrase called %s here, like memo.recall", fn) : message; return NULL; }
-  } else { *why = fmt(a, "There's nothing called %s here. It does start, stop, asks, answer, settings, set, manifest, policy, share, grant, ceiling and call", verb); return NULL; }
+  } else { *why = fmt(a, "There's nothing called %s here. It does start, stop, asks, answer, settings, set, manifest, policy, share, unshare, grant, ungrant, ceiling and call", verb); return NULL; }
   return out;
 }
 
@@ -1327,6 +1347,7 @@ void key_forget(const char *name) {
 
 // 9.
 const char *lingo_home(void) { return set.root; }
+int lingo_serves(void) { return live; }
 
 // When anything in the lingos folder or running.json changed: everything read again, and each running native lingo told
 // the new catalog. 1 when an access rule written in the policy in force lets in public or an ip, so the port opens to

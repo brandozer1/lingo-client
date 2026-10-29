@@ -39,13 +39,17 @@ From an app on this computer, through the lingo client's `/.lingo/call` (`{fn, v
 its `call`:
 
 ```
-onsay-core core.json call onsay.sign_in [name]   signs this computer in from any device's browser. In the lingo client
-                                                 that runs, as an app calls it, it gives {url, code} at once, the address
-                                                 to open and the code it shows, and waits for Connect in the background.
+onsay-core core.json call onsay.sign_in [name]   signs this computer in from any device's browser. In a lingo client
+                                                 that serves, as an app calls it, it gives {url, code} at once, the
+                                                 address to open and the code it shows, and waits for Connect in the
+                                                 background, even with the onsay lingo stopped, so nothing waits on it.
                                                  On the command line it says them on the log and waits, giving
                                                  {handle, key}. name is what Onsay calls it, its host name when left out
-onsay-core core.json call onsay.status           {signed_in, signing_in, connected, handle, device, key}: signing_in while
-                                                 a sign in waits for Connect, handle and device once connected
+onsay-core core.json call onsay.status           {signed_in, signing_in, failed, running, connected, handle, device, key}:
+                                                 signing_in while a sign in waits for Connect, failed why the last one
+                                                 didn't finish, in words, running whether the onsay lingo runs, handle
+                                                 and device once connected
+onsay-core core.json call onsay.devices          [{name, online, seen}]: the account's computers, as Onsay knows them
 onsay-core core.json call onsay.sign_out         this computer forgets its sign in and its key
 ```
 

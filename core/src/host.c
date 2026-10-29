@@ -6,7 +6,9 @@
 //     pack <folder> [<to>]                   a folder of a lingo's files made into its .lingo file
 //     start <lingo>, stop <lingo>            a lingo running or stopped
 //     share <lingo> <who> [--route <r>]      who may reach it: public, me, my devices, a handle, or ip 10.0.0.0/8
+//     unshare <lingo> <who>                  every rule share wrote for who and it taken out
 //     grant <lingo> <need> [<path>]          what it may do, like run, or files.read and a folder
+//     ungrant <lingo> <need> [<path>]        that taken back
 //     ceiling <needs...>                     the most this computer ever allows
 //     policy                                 the policy in force
 //     settings <lingo>                       its settings, each with its value now
@@ -255,7 +257,8 @@ static void listener(void *arg) {
 
 // What each verb takes, by name, in order. The last takes the rest of the words, joined by spaces, or for ceiling and
 // call as a list, and set's value and call's values are read as JSON when they are JSON.
-static const char *TAKES[][4] = { { "start", "lingo" }, { "stop", "lingo" }, { "share", "lingo", "who" }, { "grant", "lingo", "need" }, { "ceiling", "needs" },
+static const char *TAKES[][4] = { { "start", "lingo" }, { "stop", "lingo" }, { "share", "lingo", "who" }, { "unshare", "lingo", "who" }, { "grant", "lingo", "need" },
+                                  { "ungrant", "lingo", "need" }, { "ceiling", "needs" },
                                   { "policy" }, { "settings", "lingo" }, { "set", "lingo", "key", "value" }, { "manifest", "lingo" }, { "call", "fn", "values" } };
 
 int main(int argc, char **argv) {
@@ -263,7 +266,7 @@ int main(int argc, char **argv) {
   size_t k = 0, count = sizeof TAKES / sizeof *TAKES;
   while (verb && k < count && strcmp(TAKES[k][0], verb)) k++;
   if (verb && k == count && strcmp(verb, "pack")) {
-    core_say("onsay-core %s %s isn't something it does. It does pack, start, stop, share, grant, ceiling, policy, settings, set, manifest and call", path, verb);
+    core_say("onsay-core %s %s isn't something it does. It does pack, start, stop, share, unshare, grant, ungrant, ceiling, policy, settings, set, manifest and call", path, verb);
     return 1;
   }
   buf text = { 0 };

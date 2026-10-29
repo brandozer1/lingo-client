@@ -9,7 +9,8 @@
 // 3. Hooks          lingo(...) and use(...), a signer's key, decisions, and starting and stopping
 // 4. Policy         fetched, checked and handed to the core
 // 5. /onsay         prompts, with the prompt key, and sessions
-// 6. Signing in     sign_in, sign_out and status, from an app through /.lingo/call or from onsay-core <settings> call
+// 6. Signing in     sign_in, sign_out and status, from an app through /.lingo/call or from onsay-core <settings> call,
+//                   and the account's devices
 // 7. lingo_phrases
 #include "core.h"
 #include "platform.h"
@@ -606,6 +607,7 @@ static val *serve(run *r, val **v) {
 ////////// 6. SIGNING IN //////////
 
 static int attempt, signing;   // the sign in now, by its number, so a newer one or signing out ends it; signing: it waits
+static char failed[256];       // why the last sign in in the background didn't finish, for status
 
 /* Asks Onsay every two seconds whether the person pressed Connect, for as long as the code lasts, 10 minutes, then keeps
    the token as this lingo's secret setting and makes this device's key. The account it signed in as, or NULL with why.
@@ -642,9 +644,10 @@ static void background(void *arg) {
   waiting *w = arg;
   arena *a = arena_new();
   buf why = { 0 };
-  if (!connect_(a, w->body, NULL, w->mine, &why)) say("%s", why.s);
+  int done = connect_(a, w->body, NULL, w->mine, &why) != NULL;
+  if (!done) say("%s", why.s);
   pl_enter(lock);
-  if (w->mine == attempt) signing = 0;
+  if (w->mine == attempt) signing = 0, snprintf(failed, sizeof failed, "%s", done ? "" : why.s);
   pl_leave(lock);
   buf_free(&why);
   arena_free(a);
@@ -652,8 +655,8 @@ static void background(void *arg) {
 }
 
 /* Signs this computer in from any device's browser: Onsay gives an address and a code to open there, and the person
-   signs in and presses Connect. In the lingo client that runs, as an app calls it, the address and code come back at once
-   and the rest waits in the background, which status follows. On the command line it says them on the log and waits,
+   signs in and presses Connect. In a lingo client that serves, as an app calls it, the address and code come back at once
+   and the rest waits in the background, which status follows, even with this lingo stopped, so a request never waits on it. On the command line it says them on the log and waits,
    giving the handle and this device's key. Its install id, kept in the store, gets it its own instance back when it signs
    in again. name is what Onsay calls it, its host name when left out. */
 static val *sign_in(run *r, val **v) {
@@ -677,17 +680,19 @@ static val *sign_in(run *r, val **v) {
   buf_json(&body, install);
   buf_chr(&body, '}');
   val *start = api(a, "POST", "/connect", body.s, &status, &error), *account;
-  if (!start || status != 201) fail(r, "phrase", "Signing in didn't start: %s", error.n ? error.s : text_or(start, "error", "Onsay said no"));
+  buf_free(&error);
+  if (!start) fail(r, "phrase", "Onsay couldn't be reached. Check that this computer is online, then try again");
+  if (status != 201) fail(r, "phrase", "Onsay didn't start signing in: %s", text_or(start, "error", "it said no"));
   say("Open %s on any device, sign in, and press Connect. Your code is %s", text_or(start, "url", ""), text_or(start, "code", ""));
   body.n = 0;
   buf_str(&body, "{\"poll\":");
   buf_json_str(&body, text_or(start, "poll", ""), strlen(text_or(start, "poll", "")));
   buf_chr(&body, '}');
-  if (on) {
+  if (on || lingo_serves()) {
     waiting *w = malloc(sizeof *w + body.n + 1);
     memcpy(w->body, body.s, body.n + 1);
     pl_enter(lock);
-    w->mine = ++attempt, signing = 1;
+    w->mine = ++attempt, signing = 1, *failed = 0;
     pl_leave(lock);
     pl_thread(background, w);
     rec_set(a, out, "url", rec_get(start, "url") ? rec_get(start, "url") : NOTHING);
@@ -719,8 +724,9 @@ static val *sign_out(run *r, val **v) {
   return NOTHING;
 }
 
-// {signed_in, signing_in, connected, handle, device, key}: signing_in, connected, handle and device only in the lingo
-// client that runs.
+/* {signed_in, signing_in, failed, running, connected, handle, device, key}: failed is why the last sign in didn't finish,
+   or nothing, and running whether this lingo runs. signing_in, failed, connected, handle and device only in a lingo
+   client that serves. */
 static val *status(run *r, val **v) {
   arena *a = r->a;
   val *out = v_rec(a), *token = lingo_setting(a, "onsay", "token");
@@ -730,12 +736,34 @@ static val *status(run *r, val **v) {
   rec_set(a, out, "signed_in", VBOOL(token && token->k == V_TEXT && token->t.len));
   pl_enter(lock);
   rec_set(a, out, "signing_in", VBOOL(signing));
+  rec_set(a, out, "failed", *failed ? v_cstr(a, failed) : NOTHING);
+  rec_set(a, out, "running", VBOOL(on));
   rec_set(a, out, "connected", VBOOL(ready));
   rec_set(a, out, "handle", *handle ? v_cstr(a, handle) : NOTHING);
   rec_set(a, out, "device", *device ? v_cstr(a, device) : NOTHING);
   pl_leave(lock);
   rec_set(a, out, "key", shown.n ? v_text(a, shown.s, shown.n) : NOTHING);
   buf_free(&shown);
+  return out;
+}
+
+// The account's computers as Onsay knows them, the oldest first: [{name, online, seen}], seen when each last said anything.
+static val *devices(run *r, val **v) {
+  arena *a = r->a;
+  buf error = { 0 };
+  double status = 0;
+  val *said = api(a, "GET", "/lingos", NULL, &status, &error), *computers = rec_get(said, "computers"), *out = v_list(a);
+  buf_free(&error);
+  if (!said) fail(r, "phrase", "Onsay couldn't be reached. Check that this computer is online, then try again");
+  if (status == 401) fail(r, "phrase", "Sign in to see your devices");
+  if (status != 200 || !computers || computers->k != V_LIST) fail(r, "phrase", "Onsay couldn't list your devices: %s", text_or(said, "error", "it said no"));
+  for (size_t i = 0; i < computers->l.n; i++) {
+    val *c = computers->l.v[i], *one = v_rec(a);
+    rec_set(a, one, "name", rec_get(c, "name") ? rec_get(c, "name") : NOTHING);
+    rec_set(a, one, "online", VBOOL(truthy(rec_get(c, "online"))));
+    rec_set(a, one, "seen", rec_get(c, "seen") ? rec_get(c, "seen") : NOTHING);
+    list_push(a, out, one);
+  }
   return out;
 }
 
@@ -750,6 +778,7 @@ LINGO_ENTRY void lingo_phrases(void) {
   phrase_add("onsay", "net, store", "sign_in(name=nothing) -> {url,code}, or {handle,key} on the command line: signs this computer in to "
              "Onsay from any device's browser, at the address given with the code; status says when it is done", sign_in);
   phrase_add("onsay", "none", "sign_out(): this computer forgets its sign in and its key", sign_out);
-  phrase_add("onsay", "none", "status() -> {signed_in,signing_in,connected,handle,device,key}: whether this computer is signed in to "
+  phrase_add("onsay", "net", "devices() -> [{name,online,seen}]: the account's computers, whether each is online, and when each was last seen", devices);
+  phrase_add("onsay", "none", "status() -> {signed_in,signing_in,failed,running,connected,handle,device,key}: whether this computer is signed in to "
              "Onsay, and as what", status);
 }

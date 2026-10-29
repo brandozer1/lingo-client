@@ -1,7 +1,7 @@
 {
   "info": {
     "version": "1.0.0",
-    "description": "Onsay on this computer: its connection to Onsay, so Onsay and the person's other devices can reach its lingos and its lingos can ask Onsay with lingo(...) and use(...), its sign in, and /onsay, where prompts come in from anyone with its prompt key, each answered by Onsay."
+    "description": "Connects this computer to Onsay, so Onsay answers what you ask in the chat, your other devices can reach this computer, and the programs on it can ask Onsay for help. Its lingos ask Onsay with lingo(...) and use(...), and /onsay takes prompts from anyone with its prompt key, each answered by Onsay."
   },
   "x-lingo": {
     "settings": [

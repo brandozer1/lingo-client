@@ -521,6 +521,20 @@ const WEB_CASES = [
     return a.status === 200 && policyFile().overrides.grants.memo.includes('files.read ~/Pictures') && b.status === 400 && /A grant is a need/.test(b.json.error) &&
       c.status === 400 && /The ceiling is a list/.test(c.json.error) && d.status === 400 && /There's nothing called nope/.test(d.json.error)
   }],
+  ['control: unshare and ungrant take out what share and grant wrote, and say plainly when there is nothing to take out', async () => {
+    await control('share', { lingo: 'memo', who: 'anna' })
+    await control('grant', { lingo: 'memo', need: 'run' })
+    const [a, b, c, d] = [await control('unshare', { lingo: 'memo', who: 'anna' }), await control('ungrant', { lingo: 'memo', need: 'run' }),
+      await control('unshare', { lingo: 'memo', who: 'anna' }), await control('ungrant', { lingo: 'memo', need: 'run' })]
+    const kept = policyFile().overrides
+    return a.status === 200 && b.status === 200 && !kept.access.some((r) => r.who === 'anna') && kept.access.some((r) => r.who === 'james') &&
+      !kept.grants.memo.includes('run') && kept.grants.memo.includes('files.read ~/Pictures') && c.status === 400 && /Nothing on this computer shares memo with anna/.test(c.json.error) &&
+      d.status === 400 && /memo has no grant run/.test(d.json.error)
+  }],
+  ["devices: the account's computers as Onsay lists them, each online or not and when last seen", async () => {
+    const r = await control('call', { fn: 'onsay.devices' })
+    return r.status === 200 && same(r.json, [{ name: 'laptop', online: true, seen: ADDED }, { name: 'desk', online: false, seen: null }])
+  }],
   ['the ceiling: lowered, a need above it is refused for every lingo, and raised again', async () => {
     await control('ceiling', { needs: ['store'] })
     const r = await post('/checks/http_get', { base: HTTP })
@@ -702,7 +716,20 @@ const WEB_CASES = [
     const status = await call('onsay.status'), out = await call('onsay.sign_out'), after = await call('onsay.status')
     core.kill()
     return same(signed, { url: 'http://127.0.0.1:8787/connect', code: 'TEST-CODE' }) && quick && done && status.signing_in === false &&
-      /^ed25519:/.test(status.key) && out === null && after.signed_in === false && after.key === null
+      status.running === true && status.failed === null && /^ed25519:/.test(status.key) && out === null && after.signed_in === false && after.key === null
+  }],
+  ['signing in from an app with the onsay lingo stopped never waits, says why one failed, and devices says to sign in first', async () => {
+    writeFileSync(new URL('served/running.json', DATA), '[]')
+    const core = spawn(EXE, ['test/data/served.json'], { cwd: CORE, stdio: 'ignore' })
+    const call = async (fn, values = []) => (await web('/.lingo/call', { port: SERVED, method: 'POST', body: { fn, values } })).json
+    let r = { status: 0 }
+    for (let i = 0; i < 50 && !r.status; i++) { await pause(200); r = await web('/', { port: SERVED }) }
+    const started = Date.now(), signed = await call('onsay.sign_in', ['refused']), quick = Date.now() - started < 1500
+    const ended = await soon(async () => (await call('onsay.status'))?.signing_in === false)
+    const status = await call('onsay.status'), devices = await web('/.lingo/call', { port: SERVED, method: 'POST', body: { fn: 'onsay.devices' } })
+    core.kill()
+    return signed?.code === 'TEST-CODE' && quick && ended && status.running === false && status.signed_in === false &&
+      status.failed === "Signing in didn't finish: The code was turned down" && devices.status === 400 && /Sign in to see your devices$/.test(devices.json?.error)
   }],
   ['bare: with no onsay lingo it runs on its own, answers its port, its own limits hold, and lingo(...) says it is not connected', async () => {
     const lingos = new URL('barelingos/', DATA), home = new URL('bare/', DATA)
@@ -791,10 +818,14 @@ const prompt = (m, link) => {
 
 const json = (s, status, body) => s.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body))
 // Onsay's API: signing in, as Onsay does it, a code to show, then the token once the person pressed Connect, here at
-// once; the account's policy, signed; and names resolved, each device with its key and Onsay's statement on it.
+// once, or turned down for a computer called refused; the account's policy, signed; its computers; and names resolved,
+// each device with its key and Onsay's statement on it.
 const API = {
   'POST /connect': (q, s, body) => { named = JSON.parse(body).name; json(s, 201, { url: 'http://127.0.0.1:8787/connect', code: 'TEST-CODE', poll: 'p1' }) },
-  'POST /connect/poll': (q, s) => json(s, 200, { status: 'done', token: 'signed-in-token', account: { handle: 'tester', email: 'tester@example.com' } }),
+  'POST /connect/poll': (q, s) => json(s, 200, named === 'refused' ? { status: 'error', error: 'The code was turned down' }
+    : { status: 'done', token: 'signed-in-token', account: { handle: 'tester', email: 'tester@example.com' } }),
+  'GET /lingos': (q, s) => q.headers.authorization !== `Bearer ${TOKEN}` ? json(s, 401, { error: 'Sign in to continue' })
+    : json(s, 200, { computers: [{ name: 'laptop', online: true, seen: ADDED, lingos: [] }, { name: 'desk', online: false, seen: null, lingos: [] }] }),
   'GET /policy': (q, s) => {
     if (q.headers.authorization !== `Bearer ${TOKEN}`) return json(s, 401, { error: 'Sign in first' })
     const p = policies.at(-1) ?? { version: 0, policy: { access: [{ who: 'me', lingos: '*' }, { who: 'my devices', lingos: '*' }], grants: {}, offline: 'defaults' } }
@@ -893,7 +924,7 @@ const session = (link) => {
     report('library: every lingo loads from the .lingo file the build packed, says what it is, and every function says what it does', library.length >= 9 &&
       library.every((l) => has(l) && about(l)) && !silent.length, silent.length ? `\n    silent: ${silent.join(', ')}` : '')
     report('hello: the lingo client, its version, its device key and its catalog, and nothing else', same(Object.keys(hello), ['type', 'token', 'client', 'version', 'key', 'catalog']) &&
-      hello.client === 'lingo-client' && hello.version === '0.9.0' && /^ed25519:[A-Za-z0-9+/]{43}=$/.test(hello.key) && Array.isArray(hello.catalog))
+      hello.client === 'lingo-client' && hello.version === '0.9.1' && /^ed25519:[A-Za-z0-9+/]{43}=$/.test(hello.key) && Array.isArray(hello.catalog))
     report('catalog: onsay, a native lingo, ready, sharing /onsay alone', native('onsay') && ops('onsay').length === 1 && phrase('onsay', 'onsay.serve') !== undefined)
     for (const [name, test, lingo] of WEB_CASES) {
       if (lingo && !has(lingo)) { skipped++; console.log(`  skip  ${name}: this core has no ${lingo}`); continue }

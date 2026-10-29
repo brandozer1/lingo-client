@@ -211,7 +211,8 @@ void lingo_hook(const lingo_hooks *hooks);
                     device, its name on the account. NULL with why when its version is older than the one kept. Gives the
                     grants the ceiling clamps, a record by lingo
      lingo_setting  one of a lingo's settings as this computer keeps them, or NULL. lingo_set keeps one, 1 when it was
-     lingo_home     this lingo client's home folder, as a whole path, for a file a native lingo keeps there, like a log */
+     lingo_home     this lingo client's home folder, as a whole path, for a file a native lingo keeps there, like a log
+     lingo_serves   1 in a lingo client that serves, whether or not the native lingo asking runs, 0 at the command line */
 void lingo_hand(const char *request, size_t n, const char *caller, void (*answered)(void *arg, const char *response, size_t n), void *arg);
 void lingo_stop(const char *id);
 void lingo_wait(volatile int *done, volatile int *stop, double seconds);
@@ -220,6 +221,7 @@ val *lingo_policy(arena *a, val *account, const char *device, const char **why);
 val *lingo_setting(arena *a, const char *lingo, const char *key);
 int lingo_set(const char *lingo, const char *key, val *value);
 const char *lingo_home(void);
+int lingo_serves(void);
 
 LINGO_SHARED_END
 
