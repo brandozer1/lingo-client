@@ -576,6 +576,24 @@ const WEB_CASES = [
     try { command('--settings', 'prefs') } catch { refused = true }
     return before.ceiling.length === POLICY.ceiling.length && policyFile().overrides.grants.memo.includes('files.write ~/Notes') && refused
   }],
+  ['the command line: manifest prints a lingo\'s whole manifest, and why one can\'t load', async () => {
+    const m = command('manifest', 'memo')
+    let why = ''
+    try { execFileSync(EXE, ['test/onsay.json', 'manifest', 'broken'], { cwd: CORE, encoding: 'utf8', stdio: ['ignore', 'ignore', 'pipe'] }) } catch (e) { why = e.stderr }
+    return m.paths?.['/memo/recall']?.post['x-lingo-function'] === 'memo.recall' && m['x-lingo'].route === '/memo' && /broken\.ls line 3: There's no lingo or group called nope/.test(why)
+  }],
+  ['the command line: with no onsay lingo running, call asks lingo(...) and use(...) of the address its settings name as ask', async () => {
+    writeFileSync(new URL('asking.json', DATA), JSON.stringify({ home: 'test/data', ask: `http://127.0.0.1:${PORT}/ask` }))
+    const call = (...args) => new Promise((done) => {
+      let out = '', err = ''
+      const p = spawn(EXE, ['test/data/asking.json', 'call', ...args], { cwd: CORE })
+      p.stdout.on('data', (d) => { out += d })
+      p.stderr.on('data', (d) => { err += d })
+      p.on('close', () => done({ out: out.trim(), err }))
+    })
+    const [none, kept, forecast] = [await call('checks.impossible'), await call('asker.kept', 'eggs'), await call('asker.forecast', 'Rome')]
+    return kept.out === '"kept: eggs"' && forecast.out === '"Rome: sunny for 1 days"' && asked.address === 'weather.example.com/weather/forecast' && /book a flight/.test(none.err)
+  }],
   ['the root: a file inside this lingo client\'s home is routine, no grant or app needed', async () => {
     writeFileSync(INSIDE, 'in here')
     return gives('in here')(await post('/chores/read', { path: INSIDE }))
@@ -738,14 +756,14 @@ const LINGO = [
   }],
   [/never answered/, () => new Promise(() => {})],
 ]
-const answer = async (m, link, send) => {
+const answer = async (m, send) => {
   asked = m
   every.push(m)
   const found = LINGO.find(([match]) => match.test(m.ask ?? m.address))
   try {
     if (!found) throw new Error(m.address ? `There's no lingo called ${m.address.split(/[./]/)[0]}` : `Nothing can do "${m.ask}" yet`)
-    link.send({ type: 'lingo', id: m.id, value: (await found[1](m, send)) ?? null })
-  } catch (e) { link.send({ type: 'lingo', id: m.id, error: e.message, code: 'phrase' }) }
+    return { value: (await found[1](m, send)) ?? null }
+  } catch (e) { return { error: e.message, code: 'phrase' } }
 }
 
 // An AI that answers the way OpenAI does, to the test key only, saying which model was asked and the last thing said.
@@ -782,6 +800,8 @@ const API = {
     const p = policies.at(-1) ?? { version: 0, policy: { access: [{ who: 'me', lingos: '*' }, { who: 'my devices', lingos: '*' }], grants: {}, offline: 'defaults' } }
     json(s, 200, { version: p.version, policy: p.policy, signed: sign({ version: p.forged ? 4 : p.version, policy: p.policy }) })
   },
+  // lingo(...) and use(...) asked of the address a bare lingo client's settings name as its ask.
+  'POST /ask': (q, s, body) => answer(JSON.parse(body)).then((a) => json(s, 200, a)),
   'GET /resolve': (q, s) => {
     const name = q.url.split('/').pop(), [device, handle] = name.split('.'), key = DEVICES[device]
     if (!key || !handle) return json(s, 404, { error: `There's no computer or route called ${name}` })
@@ -873,7 +893,7 @@ const session = (link) => {
     report('library: every lingo loads from the .lingo file the build packed, says what it is, and every function says what it does', library.length >= 9 &&
       library.every((l) => has(l) && about(l)) && !silent.length, silent.length ? `\n    silent: ${silent.join(', ')}` : '')
     report('hello: the lingo client, its version, its device key and its catalog, and nothing else', same(Object.keys(hello), ['type', 'token', 'client', 'version', 'key', 'catalog']) &&
-      hello.client === 'lingo-client' && hello.version === '0.8.0' && /^ed25519:[A-Za-z0-9+/]{43}=$/.test(hello.key) && Array.isArray(hello.catalog))
+      hello.client === 'lingo-client' && hello.version === '0.9.0' && /^ed25519:[A-Za-z0-9+/]{43}=$/.test(hello.key) && Array.isArray(hello.catalog))
     report('catalog: onsay, a native lingo, ready, sharing /onsay alone', native('onsay') && ops('onsay').length === 1 && phrase('onsay', 'onsay.serve') !== undefined)
     for (const [name, test, lingo] of WEB_CASES) {
       if (lingo && !has(lingo)) { skipped++; console.log(`  skip  ${name}: this core has no ${lingo}`); continue }
@@ -905,7 +925,7 @@ const session = (link) => {
         process.exit(failed ? 1 : 0)
       }
     } else if (m.type === 'response') waiting.get(m.id)?.(m)
-    else if (m.type === 'lingo' && 'id' in m) answer(m, link, send)
+    else if (m.type === 'lingo' && 'id' in m) answer(m, send).then((a) => link.send({ type: 'lingo', id: m.id, ...a }))
     else if (m.type === 'prompt') prompt(m, link)
     else if (m.type === 'applied') applied.push(m)
     else if (m.type === 'log') logged.push(...m.entries)

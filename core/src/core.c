@@ -2,7 +2,7 @@
 //
 // 1. Settings        the settings file, read once, and JSON files in its home
 // 2. Floor           the compute, store, http and settings phrases every core has, and lingo(...) and use(...), asked of
-//                    the native lingo that answers them
+//                    the native lingo that answers them, or of the settings' ask
 // 3. Lingos          .lingo files and folders: read, loaded, their OpenAPI manifests, running or stopped, the catalog,
 //                    and the hooks of native lingos that run
 // 4. Policy          policy.json and the account's: callers, signatures and access, the ceiling, grants, the root, asks
@@ -10,7 +10,8 @@
 // 5. Stops           stopping the running request
 // 6. Calls           one function of a lingo, run
 // 7. Lingo settings  setting(...), settings.get and settings.set, kept on this computer, never on Onsay
-// 8. Control         start, stop, the person's answers, settings, the policy and call, at /.lingo/ and on the command line
+// 8. Control         start, stop, the person's answers, settings, manifests, the policy and call, at /.lingo/ and on the
+//                    command line
 // 9. Hooks           what native lingos are offered back: the account's policy kept, settings, this device's keys, its
 //                    home, and looking at the lingos folder again
 // 10. Requests       web requests, from this computer's port or handed in by a native lingo, each answered by the lingo
@@ -237,17 +238,25 @@ static val *send_(run *r, val **a) {
   return got;
 }
 
-// lingo(...) and use(...) as a program reaches them: asked of the running native lingo that answers them, which waits.
+/* lingo(...) and use(...) as a program reaches them: asked of the running native lingo that answers them, which waits,
+   else POSTed to the settings' ask, a web address that answers the same way. */
 static val *asked(run *r, buf *in) {
-  buf out = { 0 };
+  buf out = { 0 }, why = { 0 };
   size_t k = 1;
+  const char *at = text_or(set.all, "ask", NULL);
+  val *got = NULL, *answer, *text;
   while (k < 64 && !(on[k] && hooks[k].ask)) k++;
-  int answered = k < 64 && hooks[k].ask(in->s, in->n, r->stop, &out);
-  buf_free(in);
-  val *got = answered ? json_parse(r->a, out.s ? out.s : "", out.n, NULL) : NULL;
-  buf_free(&out);
+  if (k < 64 && hooks[k].ask(in->s, in->n, r->stop, &out)) got = json_parse(r->a, out.s ? out.s : "", out.n, NULL);
+  else if (at) {
+    val *headers = v_rec(r->a);
+    rec_set(r->a, headers, "content-type", v_cstr(r->a, "application/json"));
+    if ((answer = pl_http(r->a, "POST", at, headers, in->s, in->n, set.ms / 1000, &why)) && (text = rec_get(answer, "text")) && text->k == V_TEXT)
+      got = json_parse(r->a, text->t.s, text->t.len, NULL);
+  }
+  const char *problem = why.n ? v_text(r->a, why.s, why.n)->t.s : "This lingo client isn't connected to Onsay";
+  buf_free(in), buf_free(&out), buf_free(&why);
   if (*r->stop) fail(r, "stopped", "Stopped by the person");
-  if (!got || got->k != V_REC) fail(r, "phrase", "This lingo client isn't connected to Onsay");
+  if (!got || got->k != V_REC) fail(r, "phrase", "%s", problem);
   const char *error = text_or(got, "error", NULL);
   if (error) fail(r, text_or(got, "code", "phrase"), "%s", error);
   return rec_get(got, "value") ? rec_get(got, "value") : NOTHING;
@@ -1148,6 +1157,7 @@ static int serving;   // how many requests are being answered, one inside anothe
      answer {id, answer}             once, always or no to one
      settings {lingo}                its settings, each with what it is and its value now
      set {lingo, key, value}         one of them changed
+     manifest {lingo}                its whole OpenAPI manifest, as the catalog has it, or why it can't load
      policy                          the policy in force, and the files it comes from
      share {lingo, who, route}       an access rule added to policy.json's overrides: who may reach lingo, or "*"
      grant {lingo, need}             a grant added there, like run or files.read C:\Users\me\Pictures
@@ -1188,6 +1198,11 @@ val *core_control(arena *a, const char *verb, val *v, const char **why) {
     if (!strcmp(verb, "set")) list_push(a, values, rec_get(v, "key") ? rec_get(v, "key") : NOTHING), list_push(a, values, rec_get(v, "value") ? rec_get(v, "value") : NOTHING);
     out = core_call(a, !strcmp(verb, "set") ? "settings.set" : "settings.get", values, &stop, &code, &message);
     if (!out) { *why = message; return NULL; }
+  } else if (!strcmp(verb, "manifest")) {
+    val *e = entry_of(lingo);
+    if (!e) { *why = fmt(a, "There's no lingo called %s here", lingo); return NULL; }
+    if (rec_get(e, "error")) { *why = text_or(e, "error", ""); return NULL; }
+    out = rec_get(e, "manifest");
   } else if (!strcmp(verb, "policy")) out = policy(a);
   else if (!strcmp(verb, "share")) {
     const char *who = text_or(v, "who", ""), *route = text_or(v, "route", NULL), *slash = strchr(who, '/');
@@ -1236,7 +1251,7 @@ val *core_control(arena *a, const char *verb, val *v, const char **why) {
     val *given = rec_get(v, "values");
     if (!(out = core_call(a, fn, given && given->k == V_LIST ? given : values, &stop, &code, &message)))
       { *why = !strcmp(code, "unknown") ? fmt(a, "There's no function or phrase called %s here, like memo.recall", fn) : message; return NULL; }
-  } else { *why = fmt(a, "There's nothing called %s here. It does start, stop, asks, answer, settings, set, policy, share, grant, ceiling and call", verb); return NULL; }
+  } else { *why = fmt(a, "There's nothing called %s here. It does start, stop, asks, answer, settings, set, manifest, policy, share, grant, ceiling and call", verb); return NULL; }
   return out;
 }
 

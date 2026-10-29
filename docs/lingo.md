@@ -316,6 +316,9 @@ words with `lingo(...)` when you don't know which.
 
 A lingo's own code may call `lingo(...)` too.
 
+A lingo client with no onsay lingo running asks the web address its settings name as `ask` instead, the same way
+(`core/README.md`, *Settings*). Onsay runs its own library like that.
+
 ## 8. How a function runs
 
 1. A function is called at its lingo's route (section 11), its values given by name or in order, and defaults fill the

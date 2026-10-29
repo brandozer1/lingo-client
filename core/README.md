@@ -30,6 +30,7 @@ One JSON file, given as the first argument.
 | `lingos` | the lingos folder, `home/lingos` when left out |
 | `port` | where it answers, 6969 when left out: on 127.0.0.1 alone, so the firewall never asks, until a rule written in the policy lets in `public` or an `ip`, then on every address the computer has, opened again within 5 seconds of a change |
 | `steps`, `ms` | the most one request may take, in steps and milliseconds |
+| `ask` | a web address that answers `lingo(...)` and `use(...)` when no running native lingo does, at the command line too: each is POSTed there as JSON, as the `ask` hook is given it, and answered the same way (*Hooks*). Left out, they fail. Onsay runs its own library this way |
 
 What it keeps in `home`:
 
@@ -137,6 +138,7 @@ onsay-core settings.json <verb> ...           does one thing and prints its answ
 | `policy` | prints the policy in force, `{ceiling, access, block, grants}`, and `local` and `account`, the files as they are |
 | `settings <lingo>` | prints every setting of a lingo, each with its value now, for a form of them |
 | `set <lingo> <key> <value>` | changes one, wherever that lingo keeps it. The value is JSON, like `"metric"` or `5`, or text as it is when it isn't JSON |
+| `manifest <lingo>` | prints a lingo's whole OpenAPI manifest, as the catalog has it, or why it can't load |
 | `call <lingo.function> [values...]` | runs a function of a lingo, or a native lingo's phrase, as this computer, its values in order, each JSON or text, and prints its value: `call memo.recall milk`, `call onsay.sign_in` |
 
 The windows lingo also writes a line of JSON on stdout for each thing the app draws: Onsay's pointer gliding and
@@ -154,6 +156,7 @@ answers what the command line prints, or `{error}` with a 400.
 | `/.lingo/asks` | | the questions waiting, each `{id, lingo, need, path, caller}`. Asking makes the app count as open for 10 seconds, so an app asks every second or so |
 | `/.lingo/answer` | `id`, `answer`: `once`, `always` or `no` | `null` |
 | `/.lingo/settings`, `/.lingo/set` | `lingo`, and `key` and `value` | as on the command line |
+| `/.lingo/manifest` | `lingo` | its whole manifest |
 | `/.lingo/policy` | | the policy in force, with the files |
 | `/.lingo/share`, `/.lingo/grant`, `/.lingo/ceiling` | `lingo`, `who` and `route`; `lingo` and `need`; `needs`, a list | the policy in force |
 | `/.lingo/call` | `fn`, and `values`, a list | the function's value |
@@ -193,7 +196,7 @@ command line.
 | `open` | who reaches it when no rule says otherwise, like `"public"`: its own default rule |
 | `running(catalog)` | called as it starts and each time the catalog changes, with the catalog as JSON, and with `NULL` as it stops |
 | `decided(line)` | each line of `decisions.log` as it is written |
-| `ask(values, n, stop, answer)` | answers `lingo(...)` and `use(...)`: `values` is `{ask, values, gives, context, asking}` or `{address, values}`, and the answer a record with `value`, or `error` and `code`. With no running lingo to ask, they fail with "This lingo client isn't connected to Onsay" |
+| `ask(values, n, stop, answer)` | answers `lingo(...)` and `use(...)`: `values` is `{ask, values, gives, context, asking}` or `{address, values}`, and the answer a record with `value`, or `error` and `code`. With no running lingo to ask, they are asked of the settings' `ask`, else fail with "This lingo client isn't connected to Onsay" |
 | `key(a, keyid)` | a request's signer, by its keyid like `laptop.brandon`: `{key: "ed25519:<base64>", handle, mine}`, or `NULL` |
 
 What the lingo client offers it back, from any thread:
@@ -281,7 +284,7 @@ catalog, packing and loading, running and stopped, access by address, range, rou
 that check out and those that don't, blocks, the account policy pushed, fetched, kept and refused when older, what the
 ceiling clamped, grants, the ceiling, the root, the person's answers through an app, the decision log and its lines
 sent on, `/onsay` and its sessions, `sent.log`, signing in and out from the command line and from an app, the control
-routes, every command, a bare core with no onsay lingo on port 6971, and coming back after a dropped connection and a
-statement that doesn't check out.
+routes, every command, `call` asking `lingo(...)` and `use(...)` of its settings' `ask`, a bare core with no onsay lingo
+on port 6971, and coming back after a dropped connection and a statement that doesn't check out.
 
 A release is made by `../.github/workflows/release.yml` when a version tag is pushed.

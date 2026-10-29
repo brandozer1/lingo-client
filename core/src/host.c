@@ -11,6 +11,7 @@
 //     policy                                 the policy in force
 //     settings <lingo>                       its settings, each with its value now
 //     set <lingo> <key> <value>              one changed. value is JSON, or text as it is when it isn't JSON
+//     manifest <lingo>                       its whole OpenAPI manifest, or why it can't load
 //     call <lingo.function> [values...]      a function of a lingo, or a phrase, run here, like onsay.sign_in. Each
 //                                            value is JSON, or text as it is when it isn't JSON
 //
@@ -255,14 +256,14 @@ static void listener(void *arg) {
 // What each verb takes, by name, in order. The last takes the rest of the words, joined by spaces, or for ceiling and
 // call as a list, and set's value and call's values are read as JSON when they are JSON.
 static const char *TAKES[][4] = { { "start", "lingo" }, { "stop", "lingo" }, { "share", "lingo", "who" }, { "grant", "lingo", "need" }, { "ceiling", "needs" },
-                                  { "policy" }, { "settings", "lingo" }, { "set", "lingo", "key", "value" }, { "call", "fn", "values" } };
+                                  { "policy" }, { "settings", "lingo" }, { "set", "lingo", "key", "value" }, { "manifest", "lingo" }, { "call", "fn", "values" } };
 
 int main(int argc, char **argv) {
   const char *path = argc > 1 ? argv[1] : "onsay.json", *verb = argc > 2 ? argv[2] : NULL;
   size_t k = 0, count = sizeof TAKES / sizeof *TAKES;
   while (verb && k < count && strcmp(TAKES[k][0], verb)) k++;
   if (verb && k == count && strcmp(verb, "pack")) {
-    core_say("onsay-core %s %s isn't something it does. It does pack, start, stop, share, grant, ceiling, policy, settings, set and call", path, verb);
+    core_say("onsay-core %s %s isn't something it does. It does pack, start, stop, share, grant, ceiling, policy, settings, set, manifest and call", path, verb);
     return 1;
   }
   buf text = { 0 };
