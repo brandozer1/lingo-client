@@ -301,7 +301,7 @@ const CASES = [
   {
     name: 'a lingo reaching one elsewhere with use(...), asked of Onsay at its address',
     path: '/asker/forecast', values: { city: 'Rome' },
-    check: (r) => gives('Rome: sunny for 1 days')(r) && asked.address === 'weather.example.com/lingos/weather.lingo/forecast' && same(asked.values, ['Rome', 1]),
+    check: (r) => gives('Rome: sunny for 1 days')(r) && asked.address === 'weather.example.com/weather/forecast' && same(asked.values, ['Rome', 1]),
   },
   { name: 'a lingo calling one in the same lingos folder by its dotted name', path: '/asker/noted', values: { k: 'milk' }, check: gives('2 litres') },
   { name: 'lingo(...) nothing can do', path: '/checks/impossible', check: fails(500, /book a flight/) },
@@ -730,7 +730,7 @@ let current = null   // the link the core is on now
 const LINGO = [
   [/capital of a country/, ({ values }) => ({ France: 'Paris', Japan: 'Tokyo' })[values.country]],
   [/kept under a name/, ({ values }) => `kept: ${values.name}`],
-  [/^weather\/forecast$|\/weather\.lingo\/forecast$/, ({ values: [city, days] }) => `${city}: sunny for ${days} days`],
+  [/(^|\/)weather\/forecast$/, ({ values: [city, days] }) => `${city}: sunny for ${days} days`],
   [/only this device knows|^notes(\.laptop)?\/check$/, async (m, send) => {
     device = await send('/memo/recall?k=milk')
     if (device.status !== 200) throw new Error(device.json?.error)

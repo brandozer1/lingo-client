@@ -209,25 +209,25 @@ runs, its name and how many values it takes, as below:
 - **A lingo in the same lingos folder,** by its name: `text.slug(title)` calls the function `slug` of the lingo `text`,
   there beside it. The compiler finds it in the folder, so there is nothing to import or list.
 - **Anything else doesn't compile,** and says to use `use(...)`: `There's no lingo or group called notes here. To reach
-  one somewhere else, write use("its address"), like use("laptop.brandon/lingos/notes.lingo/add")`.
+  one somewhere else, write use("its address"), like use("laptop.brandon/notes/add")`.
 
 **`use(address, values)`** reaches anything somewhere else, in one line, and gives back its answer, like `lingo(...)` part
 of the language. It is to Lingo what fetch is to JavaScript: for what is off this computer.
 
 ```
-forecast = use("laptop.brandon/lingos/weather.lingo/forecast", {place: "Paris", days: 3})
-windows = use("laptop.brandon/lingos/windows.lingo/window/list")
-shown = use("laptop.brandon/lingos/check.lingo@desktop.brandon/lingos/show.lingo/print")
+forecast = use("laptop.brandon/weather/forecast", {place: "Paris", days: 3})
+windows = use("laptop.brandon/windows/window/list")
+shown = use("laptop.brandon/check@desktop.brandon/show/print")
 issues = use("https://mcp.example.com/mcp#search_issues", {repo: "onsay"})
 page = use("https://api.example.com/v1/items?limit=5")
 saved = use("https://api.example.com/v1/items", {name: "milk"})
 ```
 
-- **A lingo at an address:** a place, then the lingo and its function: a computer, `laptop.brandon`, its lingos under
-  `/lingos/`, the file and the function, `test.lingo/find`, `main` when none is named, and the query any values. Onsay
-  finds the place by its name. It runs where it lives, and only its answer comes back.
+- **A lingo at an address:** a place, then the lingo and its function: a computer, `laptop.brandon`, then the lingo's
+  route and the function, `test/find`, the path its lingo client answers, `main` at the route alone, and the query any
+  values. Onsay finds the place by its name. It runs where it lives, and only its answer comes back.
 - **An MCP tool:** the server's URL and the tool after a `#`.
-- **A plain web address**, any address on the web whose path names no `/lingos/<file>.lingo`: a plain web request, a GET
+- **A plain web address**, any address on the web: a plain web request, a GET
   with no values and a POST of the values as JSON with some. The answer is read as JSON when it says it is JSON, else it
   is its text, and any status but 2xx fails in plain words with the status and the start of what it said:
   `https://api.example.com/v1/x answered 404 Not Found: no such item`. For headers, other methods or tries again, use
@@ -284,13 +284,13 @@ There's no phrase files.size. files has: read, write, add_to, exists, list, find
 std.slice(x, from, to=null) takes 2 to 3 values, not 1
 list is in window and controls and files: write window.list or controls.list or files.list
 There's no function or phrase called tidy. Write it with fn tidy(...){...}
-There's no lingo or group called notes here. To reach one somewhere else, write use("its address"), like use("laptop.brandon/lingos/notes.lingo/add")
+There's no lingo or group called notes here. To reach one somewhere else, write use("its address"), like use("laptop.brandon/notes/add")
 ```
 
 A `use(...)`'s errors come when its line runs, and a `try` catches them:
 ```
 There's no route called forcast
-laptop.brandon is offline, so laptop.brandon/lingos/text.lingo/slug can't run there now
+laptop.brandon is offline, so laptop.brandon/text/slug can't run there now
 There's no route called laptop.sarah
 There's no handle called nobody
 https://api.example.com/v1/x answered 404 Not Found: no such item

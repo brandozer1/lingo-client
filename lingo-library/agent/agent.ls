@@ -152,7 +152,7 @@ fn guide() {
     "can't know or do yourself, like the time now, the weather, a web page, or something on the person's computers, " +
     "instead of saying you can't: say the task in plain words with every detail it needs, and give any values it needs by " +
     "name in values, like city for the weather. use(address, values) reaches what an address names and gives back its " +
-    "answer: a lingo's function, like laptop.brandon/lingos/text.lingo/slug with the value text, or a web address, when " +
+    "answer: a lingo's function, like laptop.brandon/text/slug with the value text, or a web address, when " +
     "the person or an answer names one. A tool that fails says why: try another way, or tell the person. When you have " +
     "what you need, reply."
 }
@@ -165,9 +165,9 @@ fn described(kind) {
       task: {type: "string", description: "What to do, in plain words, with every detail it needs"},
       values: {type: "object", description: "The values it needs, by name, like city for the weather, or none"},
     }},
-    {name: "use", does: "Reaches what an address names and gives back its answer: a lingo's function, like laptop.brandon/lingos/text.lingo/slug, or a web address", takes: {
-      address: {type: "string", description: "What to reach: a computer, then the lingo's file and its function, like laptop.brandon/lingos/text.lingo/slug, or a web address"},
-      values: {type: "object", description: "Its values by name, like text for text.lingo/slug, or none"},
+    {name: "use", does: "Reaches what an address names and gives back its answer: a lingo's function, like laptop.brandon/text/slug, or a web address", takes: {
+      address: {type: "string", description: "What to reach: a computer, then the lingo and its function, like laptop.brandon/text/slug, or a web address"},
+      values: {type: "object", description: "Its values by name, like text for text.slug, or none"},
     }},
   ]
   out = []

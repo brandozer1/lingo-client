@@ -8,7 +8,7 @@ fn kept(k) {
 
 // A city's forecast, from a lingo on a web server, reached with use(...).
 fn forecast(city) {
-  return use("weather.example.com/lingos/weather.lingo/forecast", [city, 1])
+  return use("weather.example.com/weather/forecast", [city, 1])
 }
 
 // What memo, a lingo in this same lingos folder, keeps under a name, called by its dotted name.

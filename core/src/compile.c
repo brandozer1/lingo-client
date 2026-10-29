@@ -443,15 +443,15 @@ static val *items(ps *p, const char *close) {
 }
 
 /* use(address, values) is a call of lingo.use, made as the program reaches it: Onsay reaches what the address names
-   and gives back its answer. A lingo at an address, like laptop.brandon/lingos/test.lingo/find, runs there with the
+   and gives back its answer. A lingo at an address, like laptop.brandon/test/find, runs there with the
    values, a record by name or a list in order, an MCP tool after a #, any other web address is a plain web request, and
    after an @, where the answer goes. Everything local needs no use: a lingo in the same lingos folder is a dotted call. */
 static val *using(cx *c, val *args, int line) {
   arena *a = c->a;
   val *address = at(args, 0), *named = v_rec(a);
-  if (!address) return problem(c, line, "use(...) says what it reaches first, like use(\"laptop.brandon/lingos/weather.lingo/now\", {place: \"Paris\"})");
+  if (!address) return problem(c, line, "use(...) says what it reaches first, like use(\"laptop.brandon/weather/now\", {place: \"Paris\"})");
   if (args->l.n > 2) return problem(c, line, "use(...) takes an address and its values, and no more");
-  if (address->k == V_TEXT && !address->t.len) return problem(c, line, "use(...) names what it reaches, like use(\"laptop.brandon/lingos/weather.lingo/now\", {place: \"Paris\"})");
+  if (address->k == V_TEXT && !address->t.len) return problem(c, line, "use(...) names what it reaches, like use(\"laptop.brandon/weather/now\", {place: \"Paris\"})");
   rec_set(a, named, "address", address);
   rec_set(a, named, "values", args->l.n > 1 ? args->l.v[1] : NOTHING);
   return mk(a, "say", 2, T(a, "lingo.use"), named);
@@ -470,7 +470,7 @@ static val *phrase_node(cx *c, const char *id, val *args, int line) {
     if (!known) {
       char *path = fmt(a, "%s", id + first + 1);
       for (char *s = path; *s; s++) if (*s == '.') *s = '/';
-      return problem(c, line, fmt(a, "There's no lingo or group called %.*s here. To reach one somewhere else, write use(\"its address\"), like use(\"laptop.brandon/lingos/%.*s.lingo/%s\")",
+      return problem(c, line, fmt(a, "There's no lingo or group called %.*s here. To reach one somewhere else, write use(\"its address\"), like use(\"laptop.brandon/%.*s/%s\")",
                                   (int)first, id, (int)first, id, path));
     }
     const char *dot = strrchr(id, '.');
