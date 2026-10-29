@@ -187,7 +187,8 @@ void key_forget(const char *name);
                NULL as it stops. On the job thread
      decided   each line of decisions.log as it is written, as JSON
      ask       lingo(...) and use(...) as a program reaches them, on the job thread: values is {"ask","values","gives",
-               "context","asking"} or {"address","values"} as JSON, and the answer goes in answer, a record with value, or
+               "context","asking","for"} or {"address","values","for"} as JSON, for the id of the request whose run asks,
+               when one does, and the answer goes in answer, a record with value, or
                error and code. 0 when it can't be asked, or stop was set while it waited (lingo_wait)
      key       a request's signer by its keyid, like laptop.brandon: {key: "ed25519:<base64>", handle, mine}, mine true
                when it is a device of this computer's own handle. NULL when it isn't known */

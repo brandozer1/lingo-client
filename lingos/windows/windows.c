@@ -1936,9 +1936,9 @@ LINGO_ENTRY void lingo_phrases(void) {
 
   // input: the mouse and keyboard the way a person uses them. A window, where one is taken, may be nothing for the main
   // screen.
-  phrase_add("input", "none", "cursor(how=nothing) -> text: how the pointer acts: virtual, the default, never touches the user's mouse, "
-             "and its clicks may be ignored by browsers, games and some apps. real moves and clicks the real mouse and works everywhere. "
-             "Given how, it changes until changed again", mouse_mode);
+  phrase_add("input", "none", "cursor(how=nothing) -> text: says which pointer Onsay clicks with, virtual or real, or switches it. It moves "
+             "and clicks nothing. virtual, the default, never touches the user's mouse, and its clicks may be ignored by browsers, games "
+             "and some apps. real moves and clicks the real mouse and works everywhere. Given how, it changes until changed again", mouse_mode);
   phrase_add("input", "screen.act, screen.read", "click_text(words, window=nothing, nth=0) -> {x,y,text}: rings and clicks those words where "
              "they are on screen, read by OCR. nth picks a later one when they show more than once. Fails when they aren't there", input_click_text);
   phrase_add("input", "screen.act, screen.read", "click_on(window, match) -> " CONTROL ": rings and clicks the first control in the window "
@@ -1953,7 +1953,8 @@ LINGO_ENTRY void lingo_phrases(void) {
   phrase_add("input", "screen.act, screen.read", "scroll_to_text(words, window=nothing, tries=10) -> {x,y,text}?: scrolls down until those "
              "words are on screen and gives where they are, or nothing", input_scroll_to_text);
   phrase_add("input", "screen.read", "wait_for_text(words, window=nothing, seconds=10) -> {x,y,text}?: waits until those words show on screen "
-             "and gives where they are, or nothing when time runs out", input_wait_for_text);
+             "and gives where they are, or nothing when time runs out. Only for waiting on something to appear: it does nothing itself",
+             input_wait_for_text);
   phrase_add("input", "screen.act, screen.read", "copy_all(window) -> text: brings the window to the front, selects everything in it and copies "
              "it, and gives the text", input_copy_all);
   phrase_add("input", "screen.read", "point_text(words, say=\"\", window=nothing, seconds=10) -> {x,y,w,h,text}: rings those words on screen "
@@ -1966,8 +1967,9 @@ LINGO_ENTRY void lingo_phrases(void) {
   phrase_add("input", "screen.act, screen.read", "click_in(window, x, y, how=\"left\") -> {x,y}: clicks a place in a window, wherever the window "
              "is now: x, y from its top left in pixels, or between -1 and 1 a share of its size, 0.5 the middle, and below 0 back from its "
              "right or bottom. how is left, double or right. window may be a match like {app}, brought to the front first", input_click_in);
-  phrase_add("input", "screen.act, screen.read", "move_in(window, x, y, seconds=0) -> {x,y}: glides the pointer to a place in a window, the "
-             "same way as click_in, at a hand's pace or over seconds", input_move_in);
+  phrase_add("input", "screen.act, screen.read", "move_in(window=nothing, x=0.5, y=0.5, seconds=0) -> {x,y}: moves the mouse pointer, gliding "
+             "it to a place in a window, or on the screen with no window, the middle unless given. x, y the same way as click_in, at a "
+             "hand's pace or over seconds", input_move_in);
   phrase_add("input", "screen.act, screen.read", "drag_in(window, x1, y1, x2, y2): drags from one place in a window to another, the same way as "
              "click_in", input_drag_in);
   phrase_add("input", "screen.act, screen.read", "scroll_in(window, amount, x=0.5, y=0.5) -> {x,y}: scrolls at a place in a window, the middle "

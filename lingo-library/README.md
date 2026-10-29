@@ -15,7 +15,7 @@ and when it has settings, its `openapi.json`. The first lines of each file list 
 | `url` | web addresses taken apart and built again, paths joined, and queries to and from records | `encode`, `text` |
 | `time` | dates and times: reading ISO text, formatting, adding, the time between, how long ago, days, and now in words | `text`, `math` |
 | `request` | web requests, to a web address or an Onsay name, with headers, a query, a body, a timeout and tries again, on `http.send` | `url`, `json`, `text` |
-| `agent` | the library's AI, on the person's own key for Claude, ChatGPT, OpenRouter or any service that answers the way OpenAI does: `ask`, an agent that talks with the person and uses any lingo on the way, and `answer`, one answer for a program | |
+| `agent` | the library's AI, on the person's own key for Claude, ChatGPT, OpenRouter or any service that answers the way OpenAI does: `ask`, an agent that talks with the person through the whole conversation, uses any lingo on the way and asks one or two short questions when it must, or gives a program one answer | |
 | `writer` | writes a new lingo from a plain description, or changes one, reviewed and fixed by a second look | `agent`, `json`, `text` |
 
 Each needs every lingo it calls beside it, and those they call: `writer` needs `agent`, `json` and `text`, and
@@ -36,4 +36,4 @@ Onsay app's Lingos settings, or with `onsay-core core.json set agent claude_key 
 A lingo's first comment lines say what it is, then an empty `//` and a numbered legend of its functions, and a blank
 line. Each `fn` has its comment right above it, starting with its number: what it gives, when to use it, and plainly
 when not to, in the words a person would ask with. Every `fn` is shared, so a helper's comment says so: "For request's
-own use". How a lingo is made, its `openapi.json` and packing it, are in section 11 of `../docs/lingo.md`.
+own use", which marks it `x-lingo-internal` in its manifest, so Onsay lists it nowhere. How a lingo is made, its `openapi.json` and packing it, are in section 11 of `../docs/lingo.md`.

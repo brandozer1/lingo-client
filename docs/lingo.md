@@ -309,7 +309,8 @@ may be worked out while the program runs, like a goal an AI chose: `lingo(goal, 
 It is an ordinary call, made when the program reaches that line. The program asks Onsay, waits, gets back only the
 answer, and goes on. Nothing is added to the computer. Every core compiles `lingo(...)` the same way, as the phrase
 `lingo.run`, and asks Onsay over the onsay lingo's connection, exactly as for `use(...)` (section 6), saying which of its functions
-asks, so it never gets itself as the answer.
+asks, so it never gets itself as the answer, and which request it runs for, so Onsay answers it as part of that request:
+in its mode, with its steps (Onsay's `docs/lingo-function.md`, Two modes).
 
 There are two ways to reach a function: name it, with a dotted call here or `use(...)` elsewhere, or ask for it in
 words with `lingo(...)` when you don't know which.
@@ -463,6 +464,9 @@ a `.lingo` file whose files are deflated, as most zip programs make them, loads 
 - **`x-lingo-function`** is the function the path calls, like `memo.recall`, or a native's phrase, like `window.list`.
 - **`x-lingo-needs`** is everything it needs on the computer (section 10), through every function it reaches.
 - **`x-lingo-calls`** is how many `lingo(...)` calls it makes, through every function it reaches.
+- **`x-lingo-internal`**, `true` on a helper whose comment says it is for the lingo's own use, like "For memo's own
+  use". It is still called the same way, but Onsay lists it nowhere: not in its index, its searches or any list a person
+  sees. A native lingo's phrase says it the same way in its words.
 - **`x-lingo`** is the lingo's own: its `name`, its `program`, its `route`, and its `settings` and `keep` when it has
   them, below.
 

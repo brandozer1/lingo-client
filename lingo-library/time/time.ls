@@ -146,7 +146,7 @@ fn now_in_words(zone=nothing) {
 
 ////////// HELPERS //////////
 
-// A time as seconds, from seconds or ISO text, or now when it is nothing.
+// A time as seconds, from seconds or ISO text, or now when it is nothing. For time's own use.
 fn at(time) {
   if time == nothing {return compute.now()}
   try {return time - 0} catch e {}
@@ -156,6 +156,7 @@ fn at(time) {
 }
 
 // A time's date and clock by the civil calendar every clock counts by: its days since 1970 as a year, month and day.
+// For time's own use.
 fn parts(t) {
   s = math.round(t, 0, "down")
   days = math.round(s / 86400, 0, "down")
@@ -171,7 +172,7 @@ fn parts(t) {
     hour: math.round(clock / 3600, 0, "down"), minute: math.round(clock / 60, 0, "down") % 60, second: clock % 60, weekday: (days + 4) % 7}
 }
 
-// The days since 1970 of a date, the other way.
+// The days since 1970 of a date, the other way. For time's own use.
 fn days_of(year, month, day) {
   y = year - (month <= 2 ? 1 : 0)
   era = math.round(y / 400, 0, "down")
@@ -180,23 +181,23 @@ fn days_of(year, month, day) {
   return era * 146097 + yoe * 365 + math.round(yoe / 4, 0, "down") - math.round(yoe / 100, 0, "down") + doy - 719468
 }
 
-// How many days a month has.
+// How many days a month has. For time's own use.
 fn days_in(year, month) {return (month == 12 ? days_of(year + 1, 1, 1) : days_of(year, month + 1, 1)) - days_of(year, month, 1)}
 
-// Seconds in a unit that is always as long.
+// Seconds in a unit that is always as long. For time's own use.
 fn seconds(unit) {
   s = {seconds: 1, minutes: 60, hours: 3600, days: 86400, weeks: 604800}[unit]
   if s == nothing {fail "a unit is seconds, minutes, hours, days, weeks, months or years"}
   return s
 }
 
-// A unit as its plural, so minute and minutes are one.
+// A unit as its plural, so minute and minutes are one. For time's own use.
 fn plural(unit) {
   u = text.lower(unit)
   return std.slice(u, -1) == "s" ? u : u + "s"
 }
 
-// A zone's hours from UTC, from any of the ways now_in_words takes one.
+// A zone's hours from UTC, from any of the ways now_in_words takes one. For time's own use.
 fn hours(zone) {
   z = text.upper(text.trim(zone))
   if "T" in z and std.length(z) > 10 {

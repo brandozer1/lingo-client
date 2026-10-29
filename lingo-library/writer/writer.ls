@@ -2,7 +2,8 @@
 // it writes it, reviewed and fixed by a second look, ready to put in your computer's lingos folder. It changes a lingo
 // you already have the same way. agent's AI writes them, on your own key: a strong coding model writes the best ones.
 //
-// 1. write(request, chat=nothing, model=nothing)  -> made: a new lingo that does what request says, chat the chat before it
+// 1. write(request, messages=nothing, model=nothing) -> made: a new lingo that does what request says, messages the
+//                                                    conversation it comes from
 // 2. revise(name, code, change, model=nothing)    -> made: the lingo name, its code, changed as asked
 // made = {name, file, code, manifest, notes}: file is <name>.ls, manifest its openapi.json when it needs one, else
 // nothing, and notes in plain words what it made, the settings to set and the lingos it calls. model is a model id of
@@ -15,12 +16,12 @@
 // 1. Writes a new lingo from a plain description of what it should do, like a lingo that tells me the weather for a
 // city: its Lingo code, ready to put in the computer's lingos folder. Use it only when the person asks for a lingo to be
 // written, made, created or built. Not for chatting, answering questions or doing the task itself. notes says what it
-// made, the settings to set and the lingos it calls. request is what the lingo should do, in plain words. chat is the
-// conversation before the request, oldest first: a list of {from, text}, from being you or onsay.
-fn write(request, chat=nothing, model=nothing) {
+// made, the settings to set and the lingos it calls. request is what the lingo should do, in plain words. messages is
+// the conversation it comes from, oldest first: a list of {role, content}, role being user or assistant.
+fn write(request, messages=nothing, model=nothing) {
   before = ""
-  for t in chat ?? [] {before += "{t.from}: {t.text}\n"}
-  if before != "" {before = "The conversation before it:\n" + before + "\n"}
+  for m in messages ?? [] {before += "{m.role}: {m.content}\n"}
+  if before != "" {before = "The conversation it comes from:\n" + before + "\n"}
   return made(before + "Write a new lingo that does this: {request}", model, nothing)
 }
 
@@ -54,7 +55,7 @@ fn made(asked, model, name) {
 
 // The model's lingo, its name as a lingo's name: lower case words joined by _. For writer's own use.
 fn drafted(prompt, model, name) {
-  a = answered(agent.answer(prompt, model))
+  a = answered(agent.ask(prompt, nothing, model))
   if json.kind(a.code) != "text" {
     fail "The model's answer had no code in it, so nothing was written. Try again, or set a stronger model in writer's settings"
   }
@@ -65,8 +66,8 @@ fn drafted(prompt, model, name) {
 
 // The problems a second model finds, reading the lingo against the checklist. For writer's own use.
 fn reviewed(asked, d, model) {
-  a = answered(agent.answer("You review lingos written for Onsay, against the guide they were written by.\n\n" + guide() +
-    "\n\nWhat was asked:\n" + asked + "\n\nThe lingo, as written:\n\n" + shown(d) + "\n\n" + checklist(), model))
+  a = answered(agent.ask("You review lingos written for Onsay, against the guide they were written by.\n\n" + guide() +
+    "\n\nWhat was asked:\n" + asked + "\n\nThe lingo, as written:\n\n" + shown(d) + "\n\n" + checklist(), nothing, model))
   out = []
   for p in json.kind(a.problems) == "list" ? a.problems : [] {out += [std.text(p)]}
   return out
@@ -199,7 +200,7 @@ LINGO
   compute: now() (seconds since 1970, UTC), wait(seconds) (at most 60), log(x).
   store: get(key) (text, or nothing), put(key, value) (kept as text), keys(prefix=\"\"), delete(key): small things a lingo remembers.
   http: send(method, url, headers=nothing, body=nothing, timeout=30) -> \{status, headers, text\}. Use request instead.
-- Lingos in the same folder, called by their dotted names: request for web requests with headers, a query, a timeout and tries again (request.get(address, options), request.post(address, body, options)), json, text (split, join, replace, trim, lower, upper and more), list (sort, reverse), math (round, min, max), url, encode, time (dates and times), and agent, an AI model on the person's own key: agent.answer(prompt) gives one answer as text. Call only functions you are sure of: a call to one that doesn't exist doesn't load.
+- Lingos in the same folder, called by their dotted names: request for web requests with headers, a query, a timeout and tries again (request.get(address, options), request.post(address, body, options)), json, text (split, join, replace, trim, lower, upper and more), list (sort, reverse), math (round, min, max), url, encode, time (dates and times), and agent, an AI model on the person's own key: agent.ask(prompt) gives one answer as text. Call only functions you are sure of: a call to one that doesn't exist doesn't load.
 - use(\"address\", values) reaches anything somewhere else and gives back its answer: a lingo on another computer, like use(\"laptop.brandon/text/slug\", \{text: \"Hi there\"\}), an MCP tool, like use(\"https://mcp.example.com/mcp#search\", \{q: \"x\"\}), or a web address, a GET with no values and a POST of the values as JSON with them, giving the answer read as JSON when it is JSON, else its text, and failing in plain words on any status but 2xx.
 - setting(\"key\") is the person's own setting of that name for this lingo, or nothing when it isn't set. setting(\"token\", \"github\") reads another lingo's.
 - lingo(\"what to do, in words\", \{city: \"Paris\"\}, \"what should come back\") has Onsay find a function that does it, run it, and give back its answer. Use it only when no lingo here does the job.

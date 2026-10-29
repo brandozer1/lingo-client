@@ -240,10 +240,20 @@ const CASES = [
     check: (r) => gives('Bo')(r) && same(shown.map((s) => s.value), ['cli', 'Bo', null]) && shown[0].title === 'Units',
   },
   // agent: the library's AI, on a key from its settings on this computer, here the stand-in's.
-  { name: 'agent.answer with no key says where to set one', before: () => keep('agent', {}), path: '/agent/answer', values: { prompt: 'hello' }, check: fails(500, /agent's settings/) },
-  { name: 'agent.answer asks with the key, model and address from its settings', before: () => keep('agent', { openai_key: 'test-key', url: AI }), path: '/agent/answer', values: { prompt: 'hello' }, check: gives('gpt-5-mini says: hello') },
-  { name: 'agent.answer with a model of its own', path: '/agent/answer', values: { prompt: 'hi there', model: 'qwen/qwen3' }, check: gives('qwen/qwen3 says: hi there') },
-  { name: 'agent.answer with a key turned down', before: () => keep('agent', { openai_key: 'wrong', url: AI }), path: '/agent/answer', values: { prompt: 'hello' }, check: fails(500, /turned the key down/) },
+  { name: 'agent.ask with no key says where to set one', before: () => keep('agent', {}), path: '/agent/ask', values: { prompt: 'hello' }, check: fails(500, /agent's settings/) },
+  { name: 'agent.ask asks with the key, model and address from its settings', before: () => keep('agent', { openai_key: 'test-key', url: AI }), path: '/agent/ask', values: { prompt: 'hello' }, check: gives('gpt-5-mini says: hello') },
+  { name: 'agent.ask with a model of its own', path: '/agent/ask', values: { prompt: 'hi there', model: 'qwen/qwen3' }, check: gives('qwen/qwen3 says: hi there') },
+  {
+    name: 'agent.ask reads the whole conversation, from its first message of the person, with its guide, which it never repeats',
+    path: '/agent/ask', values: { prompt: 'what did you just say?', messages: [{ role: 'assistant', content: 'cut off' }, { role: 'user', content: 'hi' }, { role: 'assistant', content: 'Hello there.' }, { role: 'user', content: 'what did you just say?' }] },
+    check: (r) => gives('gpt-5-mini says: what did you just say?')(r) && same(thought.messages.map((m) => m.role), ['system', 'user', 'assistant', 'user']) &&
+      thought.messages[2].content === 'Hello there.' && /never repeat, quote, sum up or describe them/.test(thought.messages[0].content) && thought.tools.some((t) => t.function.name === 'questions'),
+  },
+  {
+    name: 'agent.ask asks the person one or two short questions with its questions tool, in the questions format',
+    path: '/agent/ask', values: { prompt: 'plan a trip' }, check: gives({ questions: [{ question: 'Where to?', choices: ['Rome', 'Oslo'] }, 'When?'] }),
+  },
+  { name: 'agent.ask with a key turned down', before: () => keep('agent', { openai_key: 'wrong', url: AI }), path: '/agent/ask', values: { prompt: 'hello' }, check: fails(500, /turned the key down/) },
   // http.send, the core's own web request, against the stand-in's own pages (PAGES below), and request on it.
   { name: 'http: a GET, its status, headers and text', path: '/checks/http_get', values: { base: HTTP }, check: gives([200, 'yes', 'hello ?x=1']) },
   { name: 'http: a POST with headers and a body', path: '/checks/http_post', values: { base: HTTP }, check: gives([201, { method: 'POST', name: 'Ada', type: 'text/plain', body: 'héllo' }]) },
@@ -302,7 +312,7 @@ const CASES = [
   },
   { name: 'lingo(...) with words worked out as it runs', path: '/checks/capital_of_japan', check: (r) => gives('Tokyo')(r) && asked.gives === '' },
   { name: "lingo(...): Onsay reaches this computer's lingos while it waits", path: '/checks/only_here', check: (r) => gives('heard: 2 litres')(r) && device?.status === 200 },
-  { name: "a lingo's own lingo(...)", path: '/asker/kept', values: { k: 'eggs' }, check: gives('kept: eggs') },
+  { name: "a lingo's own lingo(...), saying the request it runs for", path: '/asker/kept', values: { k: 'eggs' }, check: (r) => gives('kept: eggs')(r) && asked.for === `r${next}` },
   {
     name: 'a lingo reaching one elsewhere with use(...), asked of Onsay at its address',
     path: '/asker/forecast', values: { city: 'Rome' },
@@ -674,21 +684,38 @@ const WEB_CASES = [
   ['log: each decision is sent to Onsay for the activity feed', async () =>
     logged.some((l) => l.caller === 'ip 203.0.113.8' && l.lingo === 'memo' && l.allowed === false) && logged.some((l) => l.caller === 'laptop.tester' && l.allowed) &&
     logged.every((l) => ['at', 'caller', 'lingo', 'route', 'need', 'allowed', 'why'].every((k) => k in l))],
-  ['/onsay: a prompt with the prompt key is sent to Onsay, with the chat so far, and answered with its session', async () => {
+  ['/onsay: a prompt with the prompt key is sent to Onsay, with the whole session as chat messages, and answered with its session', async () => {
     const key = (await web('/.lingo/settings?lingo=onsay')).json.find((s) => s.name === 'prompt_key').value
     const ask = (body, k = key) => web('/onsay', { method: 'POST', body, headers: { authorization: `Bearer ${k}` } })
     const a = await ask({ prompt: 'hello' }), b = await ask({ prompt: 'and again', session: a.json?.session }), c = await ask({ prompt: 'plan a trip', session: a.json?.session })
+    const d = await ask({ prompt: 'Where to? Rome\nWhen? May', session: a.json?.session })
     const [none, wrong] = [await web('/onsay', { method: 'POST', body: { prompt: 'hi' } }), await ask({ prompt: 'hi' }, 'not-the-key')]
     onsayed = { key, session: a.json?.session }
+    const said = (role, content) => ({ role, content })
     return /^[0-9a-f]{48}$/.test(key) && a.status === 200 && a.json.text === 'Onsay heard: hello' && /^[0-9a-f]{18}$/.test(a.json.session) && b.json.session === a.json.session &&
-      prompted.at(-2).prompt === 'and again' && prompted.at(-2).session === a.json.session && same(prompted.at(-2).chat, [{ prompt: 'hello', text: 'Onsay heard: hello' }]) &&
-      same(c.json, { session: a.json.session, questions: ['Where to?', 'When?'] }) && none.status === 401 && wrong.status === 401 && /prompt key/.test(wrong.json?.error)
+      prompted.at(-3).prompt === 'and again' && prompted.at(-3).session === a.json.session && !('chat' in prompted.at(-3)) &&
+      same(prompted.at(-3).messages, [said('user', 'hello'), said('assistant', 'Onsay heard: hello'), said('user', 'and again')]) &&
+      same(c.json, { session: a.json.session, questions: ['Where to?', 'When?'], steps: [] }) && d.json.text === 'Onsay heard: Where to? Rome\nWhen? May' &&
+      same(prompted.at(-1).messages.slice(-3), [said('user', 'plan a trip'), said('assistant', 'Where to?\nWhen?'), said('user', 'Where to? Rome\nWhen? May')]) &&
+      none.status === 401 && wrong.status === 401 && /prompt key/.test(wrong.json?.error)
   }],
   ['/onsay: its sessions, the newest first, and one with every turn', async () => {
     const auth = { headers: { authorization: `Bearer ${onsayed.key}` } }
     const [list, one, missing] = [await web('/onsay/sessions', auth), await web(`/onsay/sessions/${onsayed.session}`, auth), await web('/onsay/sessions/nope', auth)]
-    return list.status === 200 && same(list.json[0], { session: onsayed.session, prompt: 'hello' }) && one.json.turns.length === 3 && same(one.json.turns[2], { prompt: 'plan a trip', questions: ['Where to?', 'When?'] }) &&
+    return list.status === 200 && same(list.json[0], { session: onsayed.session, prompt: 'hello' }) && one.json.turns.length === 4 && same(one.json.turns[2], { prompt: 'plan a trip', questions: ['Where to?', 'When?'] }) &&
       missing.status === 404
+  }],
+  ['/onsay: in decision mode a prompt is followed as it runs, its steps and the questions it waits on, the answers go on to Onsay, and its answer carries every step', async () => {
+    const headers = { authorization: `Bearer ${onsayed.key}` }, session = '0193abc4d5e6f7a8b9'
+    const out = web('/onsay', { method: 'POST', body: { prompt: 'pick for me', session, mode: 'decision' }, headers })
+    let live = null
+    await soon(async () => (live = (await web(`/onsay/sessions/${session}/live`, { headers })).json)?.questions)
+    const sent = await web(`/onsay/sessions/${session}/answers`, { method: 'POST', body: { answers: ['The second'] }, headers })
+    const done = await out, after = (await web(`/onsay/sessions/${session}/live`, { headers })).json
+    const again = await web(`/onsay/sessions/${session}/answers`, { method: 'POST', body: { answers: ['The first'] }, headers })
+    return prompted.at(-1).mode === 'decision' && live?.running === true && same(live.steps, [{ text: 'Understanding what you asked', depth: 0 }, { text: 'Found 2 ways to do it', depth: 0 }]) &&
+      same(live.questions, [{ question: 'Which should I do?', choices: ['The first', 'The second', 'None of these'] }]) && sent.status === 200 && done.json?.text === 'you picked: The second' && same(done.json.steps, live.steps) &&
+      done.json.session === session && same(after, { running: false, steps: [], questions: null }) && again.status === 404 && !('mode' in prompted.at(-2))
   }],
   ['/onsay: open to anyone through the proxy by its own default rule, still with its prompt key', async (send) => {
     const ask = (k) => send('/onsay', { prompt: 'from afar' }, { as: undefined, headers: { ...from('198.18.0.9').headers, authorization: `Bearer ${k}` } })
@@ -803,26 +830,37 @@ const answer = async (m, send) => {
   } catch (e) { return { error: e.message, code: 'phrase' } }
 }
 
-// An AI that answers the way OpenAI does, to the test key only, saying which model was asked and the last thing said.
-// Given tools, as agent.ask gives them, it first reaches weather/forecast by its address and asks for one in words, then
-// says what they gave.
+/* An AI that answers the way OpenAI does, to the test key only, saying which model was asked and the last thing said,
+   kept as thought. Asked about the weather, it first reaches weather/forecast by its address and asks for one in words
+   with its tools, then says what they gave; asked to plan a trip, it asks three questions with its questions tool. */
+let thought = {}
 const ai = (q, s) => {
   let body = ''
   q.on('data', (d) => { body += d })
   q.on('end', () => {
     if (q.headers.authorization !== 'Bearer test-key') { s.writeHead(401); return s.end('{"error":{"message":"No auth credentials found"}}') }
-    const ask = JSON.parse(body || '{}')
+    const ask = thought = JSON.parse(body || '{}'), last = ask.messages?.at(-1)?.content
     s.writeHead(200, { 'content-type': 'application/json' })
     const told = (ask.messages || []).filter((m) => m.role === 'tool').map((m) => m.content), tool = (name, args, i) => ({ id: `c${i}`, type: 'function', function: { name, arguments: JSON.stringify(args) } })
-    const message = !ask.tools ? { content: `${ask.model} says: ${ask.messages?.at(-1)?.content}` } : told.length ? { content: `${ask.model} heard: ${told.join(' and ')}` }
-      : { content: null, tool_calls: [tool('use', { address: 'weather/forecast', values: ['Rome', 2] }, 0), tool('lingo', { task: 'something only this device knows' }, 1)] }
+    const message = told.length ? { content: `${ask.model} heard: ${told.join(' and ')}` }
+      : /weather/.test(last) ? { content: null, tool_calls: [tool('use', { address: 'weather/forecast', values: ['Rome', 2] }, 0), tool('lingo', { task: 'something only this device knows' }, 1)] }
+        : /trip/.test(last) ? { content: null, tool_calls: [tool('questions', { questions: [{ question: 'Where to?', choices: ['Rome', 'Oslo'] }, { question: 'When?', choices: [] }, { question: 'Who with?' }] }, 0)] }
+          : { content: `${ask.model} says: ${last}` }
     s.end(JSON.stringify({ choices: [{ message: { role: 'assistant', ...message } }] }))
   })
 }
 
-// A prompt to /onsay answered as Onsay's search does: what it heard, or questions back.
+/* A prompt to /onsay answered as Onsay's search does: what it heard, or questions back. In decision mode, its steps as it
+   goes and the person asked which way, the answer what they picked once their answers come back (chosen). */
+let chosen = () => {}
 const prompt = (m, link) => {
   prompted.push(m)
+  if (m.mode === 'decision') {
+    for (const text of ['Understanding what you asked', 'Found 2 ways to do it']) link.send({ type: 'step', id: m.id, text, depth: 0 })
+    link.send({ type: 'choose', id: m.id, questions: [{ question: 'Which should I do?', choices: ['The first', 'The second', 'None of these'] }] })
+    chosen = (c) => c.id === m.id && link.send({ type: 'answer', id: m.id, text: `you picked: ${c.answers.join(', ')}` })
+    return
+  }
   link.send(/trip/.test(m.prompt) ? { type: 'answer', id: m.id, questions: ['Where to?', 'When?'] } : { type: 'answer', id: m.id, text: `Onsay heard: ${m.prompt}` })
 }
 
@@ -923,7 +961,9 @@ const session = (link) => {
     } else report('catalog: windows set aside where it can\'t load', !!entry('windows')?.error)
     report('catalog: settings are named in its manifest', same(entry('prefs')?.openapi['x-lingo'].settings.map((x) => x.name ?? x), ['units', 'name']) &&
       !entry('memo')?.openapi['x-lingo'].settings)
-    report('catalog: agent is the one AI lingo, ready on every core', has('agent') && ['agent.ask', 'agent.answer'].every((id) => phrase('agent', id)) && !entry('openrouter'))
+    report('catalog: agent is the one AI lingo, ready on every core, with one function to ask it', has('agent') && phrase('agent', 'agent.ask') && !phrase('agent', 'agent.answer') && !entry('openrouter'))
+    report("catalog: a helper whose comment says it is for its lingo's own use is marked x-lingo-internal, and nothing else", phrase('agent', 'agent.described')?.['x-lingo-internal'] === true &&
+      !('x-lingo-internal' in phrase('agent', 'agent.ask')) && !ops('memo').some((o) => 'x-lingo-internal' in o))
     if (has('native')) report('catalog: native is ready, one phrase that calls into Windows', phrase('native', 'native.call') !== undefined)
     report('catalog: a native without its library', /nolibrary\.dll/.test(entry('nolibrary').error))
     report('catalog: a broken one says why', /^broken\.ls line 3: There's no lingo or group called nope here.*use\(/.test(entry('broken').error))
@@ -937,7 +977,7 @@ const session = (link) => {
     report('library: every lingo loads from the .lingo file the build packed, says what it is, and every function says what it does', library.length >= 9 &&
       library.every((l) => has(l) && about(l)) && !silent.length, silent.length ? `\n    silent: ${silent.join(', ')}` : '')
     report('hello: the lingo client, its version, its device key and its catalog, and nothing else', same(Object.keys(hello), ['type', 'token', 'client', 'version', 'key', 'catalog']) &&
-      hello.client === 'lingo-client' && hello.version === '0.10.1' && /^ed25519:[A-Za-z0-9+/]{43}=$/.test(hello.key) && Array.isArray(hello.catalog))
+      hello.client === 'lingo-client' && hello.version === '0.11.0' && /^ed25519:[A-Za-z0-9+/]{43}=$/.test(hello.key) && Array.isArray(hello.catalog))
     report('catalog: onsay, a native lingo, ready, sharing /onsay alone', native('onsay') && ops('onsay').length === 1 && phrase('onsay', 'onsay.serve') !== undefined)
     for (const [name, test, lingo] of WEB_CASES) {
       if (lingo && !has(lingo)) { skipped++; console.log(`  skip  ${name}: this core has no ${lingo}`); continue }
@@ -971,6 +1011,7 @@ const session = (link) => {
     } else if (m.type === 'response') waiting.get(m.id)?.(m)
     else if (m.type === 'lingo' && 'id' in m) answer(m, send).then((a) => link.send({ type: 'lingo', id: m.id, ...a }))
     else if (m.type === 'prompt') prompt(m, link)
+    else if (m.type === 'chosen') chosen(m)
     else if (m.type === 'applied') applied.push(m)
     else if (m.type === 'log') logged.push(...m.entries)
     else if (m.type === 'catalog') catalog = m.catalog

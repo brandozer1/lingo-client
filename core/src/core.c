@@ -33,8 +33,9 @@
 
 /* The request running now, for the checks at each phrase: its caller as the log names them, the lingo and function it
    reached, like agent and agent.ask, its path, what that function's manifest says it needs, the policy in force, and
-   what the person answered this time, [{what, yes}]. lingo is NULL outside a request, at the command line. */
-static struct { const char *caller, *lingo, *fn, *path; val *needs, *policy, *answers; } job;
+   what the person answered this time, [{what, yes}], and its id as JSON, which each lingo(...) and use(...) it asks
+   carries as for. lingo is NULL outside a request, at the command line. */
+static struct { const char *caller, *lingo, *fn, *path, *id; val *needs, *policy, *answers; } job;
 
 /* What each native lingo, by its number, filled with lingo_hook as it loaded, and whether it runs in a lingo client that
    serves, when they are used (lingo.h, section 7). */
@@ -268,13 +269,14 @@ static val *send_(run *r, val **a) {
   return got;
 }
 
-/* lingo(...) and use(...) as a program reaches them: asked of the running native lingo that answers them, which waits,
-   else POSTed to the settings' ask, a web address that answers the same way. */
+/* lingo(...) and use(...) as a program reaches them, in, with for, the request it runs for: asked of the running native
+   lingo that answers them, which waits, else POSTed to the settings' ask, a web address that answers the same way. */
 static val *asked(run *r, buf *in) {
   buf out = { 0 }, why = { 0 };
   size_t k = 1;
   const char *at = text_or(set.all, "ask", NULL);
   val *got = NULL, *answer, *text;
+  if (job.id) { in->n--; buf_str(in, ",\"for\":"); buf_str(in, job.id); buf_chr(in, '}'); }
   while (k < 64 && !(on[k] && hooks[k].ask)) k++;
   if (k < 64 && hooks[k].ask(in->s, in->n, r->stop, &out)) got = json_parse(r->a, out.s ? out.s : "", out.n, NULL);
   else if (at) {
@@ -535,7 +537,9 @@ static const char *understated(arena *a, val *e) {
 
 /* 3. A lingo's whole OpenAPI manifest, as pack writes it: what its openapi.json says, its name, program and route in
    x-lingo, and each function it shares as a path under its route, its words, its values as JSON Schema, x-lingo-function,
-   x-lingo-needs and x-lingo-calls. /name alone is its main, and a lingo with serve(request) shares serve alone, at its route. */
+   x-lingo-needs and x-lingo-calls, and x-lingo-internal on a helper whose comment says it is for the lingo's own use, like
+   "For agent's own use", which Onsay lists nowhere. /name alone is its main, and a lingo with serve(request) shares serve
+   alone, at its route. */
 static val *described(arena *a, val *e) {
   const char *name = text_or(e, "name", ""), *route = route_of(a, e);
   val *given = rec_get(e, "manifest"), *l = rec_get(rec_get(device, "lingos"), name), *fns = shared(a, name);
@@ -577,6 +581,7 @@ static val *described(arena *a, val *e) {
     rec_set(a, op, "x-lingo-function", v_cstr(a, id));
     rec_set(a, op, "x-lingo-needs", rec_get(f, "needs") ? rec_get(f, "needs") : v_list(a));
     rec_set(a, op, "x-lingo-calls", rec_get(f, "lingos") ? rec_get(f, "lingos") : v_num(a, 0));
+    if (strstr(does, "'s own use")) rec_set(a, op, "x-lingo-internal", VBOOL(1));
     rec_set(a, item, serve ? "get" : "post", op);
     rec_set(a, paths, v_text(a, path.s, path.n)->t.s, item);
     buf_free(&path);
@@ -1508,11 +1513,11 @@ void core_serve(const char *text, size_t n, const char *given, buf *out) {
   } else if (!lingo) status = 404, buf_fmt(&error, "There's nothing at %.*s", (int)at, p);
   else {
     // /name alone is name.main, /name/function name.function, and a native's /name/group/function group.function.
-    const char *rest = p + best, *name = rest + (at > best), *was_caller = job.caller, *was_lingo = job.lingo, *was_fn = job.fn, *was_path = job.path;
+    const char *rest = p + best, *name = rest + (at > best), *was_caller = job.caller, *was_lingo = job.lingo, *was_fn = job.fn, *was_path = job.path, *was_id = job.id;
     val *was_needs = job.needs, *was_policy = job.policy, *was_answers = job.answers;
     size_t left = at - best, nl = left ? left - 1 : 0;
     int in = c.here || let_in(a, pol, &c, lingo, v_text(a, rest, left)->t.s, &why);
-    job.caller = c.name, job.lingo = lingo, job.path = v_text(a, p, at)->t.s, job.policy = pol, job.answers = v_list(a);
+    job.caller = c.name, job.lingo = lingo, job.path = v_text(a, p, at)->t.s, job.policy = pol, job.answers = v_list(a), job.id = id.s;
     if (!c.here) decided(NULL, in, why);
     buf_fmt(&call, "%s.serve", lingo);
     if (!in) status = 404, buf_fmt(&error, "There's nothing at %.*s", (int)at, p);
@@ -1582,7 +1587,7 @@ void core_serve(const char *text, size_t n, const char *given, buf *out) {
         }
       }
     }
-    job.caller = was_caller, job.lingo = was_lingo, job.fn = was_fn, job.path = was_path, job.needs = was_needs, job.policy = was_policy, job.answers = was_answers;
+    job.caller = was_caller, job.lingo = was_lingo, job.fn = was_fn, job.path = was_path, job.needs = was_needs, job.policy = was_policy, job.answers = was_answers, job.id = was_id;
   }
 
   serving--;

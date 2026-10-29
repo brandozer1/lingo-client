@@ -159,7 +159,7 @@ fn numbered(name) {
   return n > 0 and n < 1114112 ? std.from_bytes(utf8(n)) : nothing
 }
 
-// A character's number as its UTF-8 bytes, like 233 as [195, 169].
+// A character's number as its UTF-8 bytes, like 233 as [195, 169]. For encode's own use.
 fn utf8(n) {
   if n < 128 {return [n]}
   if n < 2048 {return [192 + math.round(n / 64, 0, "down"), 128 + n % 64]}
