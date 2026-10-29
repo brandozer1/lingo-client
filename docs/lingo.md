@@ -210,6 +210,10 @@ runs, its name and how many values it takes, as below:
   there beside it. The compiler finds it in the folder, so there is nothing to import or list.
 - **Anything else doesn't compile,** and says to use `use(...)`: `There's no lingo or group called notes here. To reach
   one somewhere else, write use("its address"), like use("laptop.brandon/notes/add")`.
+- **Inside a `try`, a group this computer hasn't got compiles,** and fails with `unknown` as the line runs, which the
+  `catch` takes: how a lingo uses what only some computers have, like the Windows lingo's chat, and does without it
+  elsewhere: `try {answers = chat.ask(questions)} catch e {return {questions: questions}}`. A group it has is checked
+  as ever, so a misspelled phrase still doesn't compile.
 
 **`use(address, values)`** reaches anything somewhere else, in one line, and gives back its answer, like `lingo(...)` part
 of the language. It is to Lingo what fetch is to JavaScript: for what is off this computer.
@@ -319,6 +323,14 @@ A lingo's own code may call `lingo(...)` too.
 
 A lingo client with no onsay lingo running asks the web address its settings name as `ask` instead, the same way
 (`core/README.md`, *Settings*). Onsay runs its own library like that.
+
+**A conversation.** A person's message to Onsay is `lingo(words, {prompt: words, messages})`, and a function that takes
+`messages` gets the whole conversation so far: its log in the chat messages OpenAI and OpenRouter take, oldest first,
+ending with what the person just said, `{role: "user", content}`, `{role: "assistant", content, tool_calls: [{id, type:
+"function", function: {name, arguments}}]}` and `{role: "tool", tool_call_id, content}`. Any function may extend it: an
+answer `{text, messages}`, or `{questions, messages}`, is its reply with the chat messages it added this turn, its tool
+calls, their results and its reply, which the onsay lingo keeps in the session for the next message. The `agent` lingo
+works this way, and an agent of anyone's own can too (Onsay's `docs/lingo-function.md`, The conversation).
 
 ## 8. How a function runs
 
@@ -708,6 +720,7 @@ and the catalog, and in their `lingo_phrases` in C.
   | `panel`     | `show`, `hide`: a small window of Onsay's own showing a page of HTML |
   | `input`     | the mouse and keyboard the way a person uses them, through Onsay's own pointer: `cursor`, `click_text`, `click_on`, `type_into`, `type`, `paste`, `shortcut`, `type_lines`, `scroll_to_text`, `wait_for_text`, `copy_all`, `point_text`, `point_on`, `point_at`, `stop_pointing`, `click_in`, `move_in`, `drag_in`, `scroll_in`, `position_in` |
   | `look`      | the screen read: `screenshot`, `elements`, `overview`, `focused`, `page`, `lines`, `buttons`, `fields`, `near`, `find_text`, `open_windows` |
+  | `chat`      | the person's Onsay chat on this computer, for any lingo running for them: `ask`, `say`, `step` |
 
 - **`native`**, Windows only: `native.call(library, function, returns, args)` calls any function in Windows or a DLL by
   its name and layout, needing `run`.
@@ -719,6 +732,14 @@ Conventions that matter in practice:
 - **Onsay's pointer:** every phrase that clicks, moves, drags, scrolls, presses, types, pastes or fills shows it, with
   no asking: his arrow glides there and a click ripples, and where he types it is a text cursor that ticks while the
   keys go in. The Windows app draws it from the lines of JSON the `windows` lingo writes on the lingo client's output.
+- **The chat:** `chat.ask(questions, seconds=120)` asks the person and waits for their answers, so the work goes on with
+  them, the way an AI asks mid-turn: `answers = chat.ask([{question: "Which one?", choices: ["Rome", "Oslo"]}, "When?"])`
+  gives `["Rome", "May"]`, each question text, typed, or `{question, choices}`, picked, a text alone one question. It is
+  `nothing` when nobody answered in time, and fails when no Onsay app is open here, so a lingo that may run anywhere asks
+  inside a `try` (section 6). `chat.say("Found two tables, checking one more")` posts his line in the chat while the
+  work goes on, and `chat.step("Reading the menu")` a step under the message running. The questions wait in the lingo
+  client's questions for the app, `/.lingo/asks`, answered at `/.lingo/answer` (`core/README.md`), and the lines go out
+  as show lines; the Windows app opens the chat for a question, never for a line, so the work keeps the keyboard.
 - **Places:** `input`'s `click_in`, `move_in`, `drag_in`, `scroll_in` and `position_in` take a place in a window,
   wherever it is now, or on the main screen when the window is `nothing`.
 - **New windows:** a window builds its controls a moment after it appears, so wait for one with `controls.wait_for`

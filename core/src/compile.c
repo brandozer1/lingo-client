@@ -84,6 +84,7 @@ typedef struct {
   val *phrases;          // id -> phrase, every phrase the code may use
   const char *own;       // the name of the lingo whose code it is, like agent, for setting(...)
   int scan;              // only read for its listing: calls aren't checked, since what they reach isn't known yet
+  int trying;            // inside a try block: a call to a group this computer hasn't got fails as it runs, unknown, for the catch
   val *settings;         // the names of its own settings it reads, setting("key"), in order
   val *fn_lines;         // each fn's name -> the line it starts on, for the comments above it
   site *calls;           // calls with no dot, settled once every function is known
@@ -394,7 +395,10 @@ static val *bare(ps *p) {
   }
   if (accept(p, "fail")) { GET(e, expr(p)); return mk(a, "fail", 1, e); }
   if (accept(p, "try")) {
-    GET(body, block(p));
+    c->trying++;
+    val *body = block(p);
+    c->trying--;
+    if (!body) return NULL;
     if (!expect(p, "catch", "\"catch\" after the try block")) return NULL;
     GET(n, name(p, "a name for the error, like catch e"));
     GET(caught, block(p));
@@ -467,6 +471,11 @@ static val *phrase_node(cx *c, const char *id, val *args, int line) {
     size_t first = strcspn(id, ".");
     int known = 0;
     for (size_t i = 0; i < c->phrases->r.n && !known; i++) known = !strncmp(c->phrases->r.key[i], id, first + 1);
+    if (!known && c->trying) {
+      val *named = v_rec(a);
+      for (size_t i = 0; i < args->l.n; i++) rec_set(a, named, fmt(a, "a%zu", i), args->l.v[i]);
+      return mk(a, "say", 2, T(a, id), named);
+    }
     if (!known) {
       char *path = fmt(a, "%s", id + first + 1);
       for (char *s = path; *s; s++) if (*s == '.') *s = '/';

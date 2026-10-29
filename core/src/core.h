@@ -21,7 +21,7 @@
 
 #include "lingo.h"
 
-#define CORE_VERSION "0.11.0"
+#define CORE_VERSION "0.12.0"
 #define CORE_LOOK 5   // seconds between looks at the lingos folder
 
 // Where Onsay is, built in: its API, which the onsay lingo talks to, and its resolve endpoint, the one address the lingo

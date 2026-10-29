@@ -29,13 +29,15 @@ the wire*.
   |---------|--------|
   | `POST /onsay` `{prompt, session, mode}` | `{session, text, steps}` or `{session, questions, steps}`, Onsay's answer and every step it took. With no session, a new one. `mode` is `run`, the default, or `decision`, where the person picks every way it runs |
   | `GET /onsay/sessions` | `[{session, prompt}]`, the newest first, each named by its first prompt |
-  | `GET /onsay/sessions/<session>` | `{session, turns}`, each turn `{prompt, text}` or `{prompt, questions}` |
+  | `GET /onsay/sessions/<session>` | `{session, turns}`, each turn `{prompt, text}` or `{prompt, questions}`, and `messages` when its answer added some to the log |
   | `GET /onsay/sessions/<session>/live` | `{running, steps, questions}`: while a prompt of it runs, its newest 100 steps in plain words, each `{text, depth}`, and the questions it waits on the person for, as a prompt's answer has them, or `null` |
   | `POST /onsay/sessions/<session>/answers` `{answers}` | the person's answers to those questions, in order, sent on to Onsay. `{}`, or a 404 when nothing waits |
 
-  A session is the string of its prompts and answers, kept in the store on this computer, and each prompt goes to
-  Onsay with its newest 20 turns as chat messages, `[{role, content}]`, each turn's prompt the user's and its answer, or
-  its questions a line each, the assistant's, ending with the prompt itself (`messages`). An app that follows a prompt
+  A session is the string of its prompts and answers, kept in the store on this computer, each answer with the chat
+  messages it added, when Onsay's answer carried some, like the agent's tool calls and their results. Each prompt goes to
+  Onsay with its newest 20 turns as the whole log, in the chat messages OpenAI and OpenRouter take: each turn's prompt
+  the user's, `{role, content}`, then the messages its answer added, or with none its answer, or its questions a line
+  each, the assistant's, ending with the prompt itself (`messages`). An app that follows a prompt
   as it runs names its session itself, the way the onsay lingo makes one: the time in milliseconds as 12 hex digits,
   then 6 random ones. Onsay sends the steps and questions as they happen (`{type: "step"}` and `{type: "choose"}`),
   and a prompt stopped on this computer is stopped at Onsay too (`{type: "stop"}`). The lingo client answers its requests in turn,

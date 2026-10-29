@@ -15,7 +15,7 @@ and when it has settings, its `openapi.json`. The first lines of each file list 
 | `url` | web addresses taken apart and built again, paths joined, and queries to and from records | `encode`, `text` |
 | `time` | dates and times: reading ISO text, formatting, adding, the time between, how long ago, days, and now in words | `text`, `math` |
 | `request` | web requests, to a web address or an Onsay name, with headers, a query, a body, a timeout and tries again, on `http.send` | `url`, `json`, `text` |
-| `agent` | the library's AI, on the person's own key for Claude, ChatGPT, OpenRouter or any service that answers the way OpenAI does: `ask`, an agent that talks with the person through the whole conversation, uses any lingo on the way and asks one or two short questions when it must, or gives a program one answer | |
+| `agent` | the library's AI, on the person's own key for Claude, ChatGPT, OpenRouter or any service that answers the way OpenAI does: `ask`, an agent that talks with the person through the whole conversation, its log with every tool it used, uses any lingo on the way and asks one or two short questions when it must, in the person's chat where there is one, or gives a program one answer | |
 | `writer` | writes a new lingo from a plain description, or changes one, reviewed and fixed by a second look | `agent`, `json`, `text` |
 
 Each needs every lingo it calls beside it, and those they call: `writer` needs `agent`, `json` and `text`, and

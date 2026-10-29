@@ -720,7 +720,8 @@ void lingo_hook(const lingo_hooks *h) { hooks[loading] = *h; }
 static const char *NEEDS[] = { "net", "store", "files.read", "files.write", "screen.read", "screen.act", "run", NULL };   // the first four routine
 #define ATTACHED 10   // seconds an app counts as open after it last asked for the questions waiting
 
-// The questions waiting for the person's answer, each {id, lingo, need, path, caller}, in the run's arena that waits.
+// The questions waiting for the person's answer, each {id, lingo, caller} and either {need, path}, whether a lingo may,
+// or {questions}, a native lingo's for the chat (lingo_ask), in the run's arena that waits.
 static struct { val *ask; arena *a; volatile int done; } asks[16];
 static int waiting;       // how many wait, the last asked last
 static long questions;    // their ids
@@ -992,9 +993,9 @@ static int granting(arena *a, const char *lingo, const char *grant) {
 
 // 4.
 void may(run *r, const char *need, const char *path) {
-  val *p = job.policy ? job.policy : policy(r->a), *granted, *ask;
+  val *p = job.policy ? job.policy : policy(r->a), *granted, *ask, *got;
   const char *lingo = job.lingo, *what = path ? fmt(r->a, "%s %s", need, path) : need, *said;
-  int k = 0, slot;
+  int k = 0;
   while (NEEDS[k] && strcmp(NEEDS[k], need)) k++;
   if (!has(rec_get(p, "ceiling"), need)) refuse(r, what, "the ceiling", fmt(r->a, "%s needs %s, which this computer never allows", lingo ? lingo : "It", need));
   if (!lingo) return;
@@ -1011,22 +1012,13 @@ void may(run *r, const char *need, const char *path) {
       if (truthy(rec_get(job.answers->l.v[i], "yes"))) return;
       refuse(r, what, "asked: no", fmt(r->a, "The person said no to %s using %s", lingo, what));
     }
-  if (pl_now() - polled > ATTACHED || waiting == 16)
-    refuse(r, what, "no app to ask", fmt(r->a, "%s needs %s here, which takes a yes from the person, and no app is open to ask them. To allow it, grant it: grant %s \"%s\"", lingo, what, lingo, what));
-
   // Asked through the app, which answers once, always or no, waiting up to a minute while other requests are answered.
-  slot = waiting++;
   ask = v_rec(r->a);
-  rec_set(r->a, ask, "id", v_num(r->a, (double)++questions));
-  rec_set(r->a, ask, "lingo", v_cstr(r->a, lingo));
   rec_set(r->a, ask, "need", v_cstr(r->a, need));
   rec_set(r->a, ask, "path", path ? v_cstr(r->a, path) : NOTHING);
-  rec_set(r->a, ask, "caller", v_cstr(r->a, job.caller));
-  asks[slot].ask = ask, asks[slot].a = r->a, asks[slot].done = 0;
-  lingo_wait(&asks[slot].done, r->stop, 60);
-  waiting--;
-  said = text_or(ask, "answer", "");
-  if (*r->stop) fail(r, "stopped", "Stopped by the person");
+  if (!(got = lingo_ask(r, ask, 60)))
+    refuse(r, what, "no app to ask", fmt(r->a, "%s needs %s here, which takes a yes from the person, and no app is open to ask them. To allow it, grant it: grant %s \"%s\"", lingo, what, lingo, what));
+  said = got->k == V_TEXT ? got->t.s : "";
   val *answer = v_rec(r->a);
   rec_set(r->a, answer, "what", v_cstr(r->a, what));
   rec_set(r->a, answer, "yes", VBOOL(strcmp(said, "once") == 0 || strcmp(said, "always") == 0));
@@ -1035,6 +1027,25 @@ void may(run *r, const char *need, const char *path) {
   if (truthy(rec_get(answer, "yes"))) { decided(what, 1, fmt(r->a, "asked: %s", said)); return; }
   if (*said) refuse(r, what, "asked: no", fmt(r->a, "The person said no to %s using %s", lingo, what));
   refuse(r, what, "nobody answered", fmt(r->a, "Nobody answered whether %s may use %s, so it didn't", lingo, what));
+}
+
+/* 4. A question for the person, with its id, the lingo asking and its caller, and waited for in asks until an app
+      answers it, stop is set or seconds pass, while other requests are answered. Its answer, nothing when none came, or
+      NULL when no app is open to ask. */
+val *lingo_ask(run *r, val *question, double seconds) {
+  if (pl_now() - polled > ATTACHED || waiting == 16) return NULL;
+  int slot = waiting++;
+  val *ask = v_rec(r->a);
+  rec_set(r->a, ask, "id", v_num(r->a, (double)++questions));
+  rec_set(r->a, ask, "lingo", v_cstr(r->a, job.lingo ? job.lingo : ""));
+  for (size_t i = 0; i < question->r.n; i++) rec_set(r->a, ask, question->r.key[i], question->r.v[i]);
+  rec_set(r->a, ask, "caller", v_cstr(r->a, job.caller ? job.caller : "this computer"));
+  asks[slot].ask = ask, asks[slot].a = r->a, asks[slot].done = 0;
+  lingo_wait(&asks[slot].done, r->stop, seconds);
+  waiting--;
+  if (*r->stop) fail(r, "stopped", "Stopped by the person");
+  val *answer = rec_get(ask, "answer");
+  return answer ? answer : NOTHING;
 }
 
 ////////// 5. STOPS //////////
@@ -1189,7 +1200,7 @@ static int serving;   // how many requests are being answered, one inside anothe
    NULL with why in words.
      start, stop {lingo}             a lingo running or stopped, kept in home/running.json
      asks                            the questions waiting for the person, and the app asking counts as open to ask
-     answer {id, answer}             once, always or no to one
+     answer {id, answer}             once, always or no to whether a lingo may, or the list of answers to questions
      settings {lingo}                its settings, each with what it is and its value now
      set {lingo, key, value}         one of them changed
      manifest {lingo}                its whole OpenAPI manifest, as the catalog has it, or why it can't load
@@ -1222,13 +1233,18 @@ val *core_control(arena *a, const char *verb, val *v, const char **why) {
     out = v_list(a);
     for (int i = 0; i < waiting; i++) list_push(a, out, v_copy(a, asks[i].ask));
   } else if (!strcmp(verb, "answer")) {
-    val *id = rec_get(v, "id");
-    const char *answer = text_or(v, "answer", "");
+    val *id = rec_get(v, "id"), *answer = rec_get(v, "answer");
+    const char *said = text_or(v, "answer", "");
     int i = 0;
     while (i < waiting && !(id && id->k == V_NUM && rec_get(asks[i].ask, "id")->n == id->n)) i++;
-    if (strcmp(answer, "once") && strcmp(answer, "always") && strcmp(answer, "no")) { *why = "The answer is once, always or no"; return NULL; }
     if (i == waiting) { *why = "That question isn't waiting any more"; return NULL; }
-    rec_set(asks[i].a, asks[i].ask, "answer", v_cstr(asks[i].a, answer));
+    if (rec_get(asks[i].ask, "need") && strcmp(said, "once") && strcmp(said, "always") && strcmp(said, "no")) { *why = "The answer is once, always or no"; return NULL; }
+    if (!rec_get(asks[i].ask, "need") && (!answer || answer->k != V_LIST)) { *why = "The answer is a list, one for each question, in order"; return NULL; }
+    // Read again into the arena of the run that waits, since this request's own, which holds its texts, ends first.
+    buf kept = { 0 };
+    buf_json(&kept, answer);
+    rec_set(asks[i].a, asks[i].ask, "answer", json_parse(asks[i].a, kept.s, kept.n, NULL));
+    buf_free(&kept);
     asks[i].done = 1;
   } else if (!strcmp(verb, "settings") || !strcmp(verb, "set")) {
     list_push(a, values, v_cstr(a, lingo));

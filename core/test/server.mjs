@@ -155,6 +155,8 @@ const signedBy = (device, keyid, method, path, body = '', more = {}) => {
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
 const gives = (want) => (r) => r.status === 200 && same(r.json, want)
 const fails = (status, words) => (r) => r.status === status && words.test(r.json?.error)
+// A tool call in a chat message, as OpenAI writes one.
+const call = (id, name, args) => ({ id, type: 'function', function: { name, arguments: JSON.stringify(args) } })
 const STOPPED = /Stopped by the person$/
 const pause = (ms) => new Promise((done) => setTimeout(done, ms))
 // A lingo's settings as this computer keeps them, a record by name in home/settings/<lingo>.json, as settings.set writes them.
@@ -188,7 +190,7 @@ const CASES = [
   { path: '/checks/functions', check: gives([6765, 11, 3]) },
   { path: '/checks/control', check: gives([11, 5, 'big', true, 2, 'b']) },
   { path: '/checks/greet', values: { who: 'Ana' }, check: gives(['hi Ana', 'hi Ana']) },
-  { path: '/checks/try_and_fail', check: gives(['boom', null, "Can't use - with text", "std.from_json: that text isn't JSON"]) },
+  { path: '/checks/try_and_fail', check: gives(['boom', null, "Can't use - with text", "std.from_json: that text isn't JSON", "This computer doesn't have the phrase nowhere.thing"]) },
   { name: 'an error names its lingo and line', path: '/checks/error_at_a_line', check: fails(500, /^checks\.ls line \d+: Can't compare number with text$/) },
   { path: '/checks/divide_by_zero', check: fails(500, /Can't divide by zero/) },
   { path: '/checks/deep_loop', check: gives(5000050000) },
@@ -246,7 +248,8 @@ const CASES = [
   {
     name: 'agent.ask reads the whole conversation, from its first message of the person, with its guide, which it never repeats',
     path: '/agent/ask', values: { prompt: 'what did you just say?', messages: [{ role: 'assistant', content: 'cut off' }, { role: 'user', content: 'hi' }, { role: 'assistant', content: 'Hello there.' }, { role: 'user', content: 'what did you just say?' }] },
-    check: (r) => gives('gpt-5-mini says: what did you just say?')(r) && same(thought.messages.map((m) => m.role), ['system', 'user', 'assistant', 'user']) &&
+    check: (r) => gives({ text: 'gpt-5-mini says: what did you just say?', messages: [{ role: 'assistant', content: 'gpt-5-mini says: what did you just say?' }] })(r) &&
+      same(thought.messages.map((m) => m.role), ['system', 'user', 'assistant', 'user']) &&
       thought.messages[2].content === 'Hello there.' && /never repeat, quote, sum up or describe them/.test(thought.messages[0].content) && thought.tools.some((t) => t.function.name === 'questions'),
   },
   {
@@ -337,6 +340,36 @@ const CASES = [
     path: '/agent/ask', values: { prompt: 'what is the weather in Rome?' },
     check: (r) => gives('gpt-5-mini heard: Rome: sunny for 2 days and heard: 2 litres')(r) && device?.status === 200 &&
       every.some((m) => m.ask === 'something only this device knows' && m.asking === 'agent.ask'),
+  },
+  {
+    name: 'agent.ask given the log gives back its reply and the messages it added: its tool calls, their results and its reply',
+    path: '/agent/ask', values: { prompt: 'what is the weather in Rome?', messages: [{ role: 'user', content: 'what is the weather in Rome?' }] },
+    check: (r) => r.status === 200 && r.json.text === 'gpt-5-mini heard: Rome: sunny for 2 days and heard: 2 litres' && same(r.json.messages, [
+      { role: 'assistant', content: '', tool_calls: [call('c0', 'use', { address: 'weather/forecast', values: ['Rome', 2] }), call('c1', 'lingo', { task: 'something only this device knows' })] },
+      { role: 'tool', tool_call_id: 'c0', content: 'Rome: sunny for 2 days' }, { role: 'tool', tool_call_id: 'c1', content: 'heard: 2 litres' },
+      { role: 'assistant', content: 'gpt-5-mini heard: Rome: sunny for 2 days and heard: 2 litres' }]),
+  },
+  {
+    name: 'agent.ask continues a log with tool calls: its model reads every call and what it gave, and it adds only its reply',
+    path: '/agent/ask', values: { prompt: 'what did the tool give?', messages: [{ role: 'user', content: 'how is Rome?' }, { role: 'assistant', content: '', tool_calls: [call('t1', 'lingo', { task: 'the weather in Rome' })] },
+      { role: 'tool', tool_call_id: 't1', content: 'sunny' }, { role: 'assistant', content: 'It is sunny.' }, { role: 'user', content: 'what did the tool give?' }] },
+    check: (r) => gives({ text: 'gpt-5-mini heard: sunny', messages: [{ role: 'assistant', content: 'gpt-5-mini heard: sunny' }] })(r) &&
+      same(thought.messages.map((m) => m.role), ['system', 'user', 'assistant', 'tool', 'assistant', 'user']) && thought.messages[2].tool_calls[0].id === 't1',
+  },
+  {
+    name: "agent.ask on Claude: the log in Claude's own shape, a tool's result and the next words one turn, its thinking passed back unchanged, and its answer as chat messages again",
+    before: () => keep('agent', { service: 'claude', claude_key: 'test-key', url: AI }),
+    path: '/agent/ask', values: { prompt: 'what is the weather in Rome?', messages: [{ role: 'user', content: 'hi' }, { role: 'assistant', content: '', tool_calls: [call('t1', 'lingo', { task: 'x' })] },
+      { role: 'tool', tool_call_id: 't1', content: 'one' }, { role: 'user', content: 'what is the weather in Rome?' }] },
+    check: (r) => gives({ text: 'claude heard: Rome: sunny for 2 days', messages: [
+      { role: 'assistant', content: '', tool_calls: [call('tu1', 'use', { address: 'weather/forecast', values: ['Rome', 2] })] },
+      { role: 'tool', tool_call_id: 'tu1', content: 'Rome: sunny for 2 days' }, { role: 'assistant', content: 'claude heard: Rome: sunny for 2 days' }] })(r) &&
+      claudes.length === 2 && /never repeat/.test(claudes[1].system) && same(claudes[1].messages, [
+        { role: 'user', content: [{ type: 'text', text: 'hi' }] },
+        { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'lingo', input: { task: 'x' } }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'one' }, { type: 'text', text: 'what is the weather in Rome?' }] },
+        { role: 'assistant', content: [THINKING, { type: 'tool_use', id: 'tu1', name: 'use', input: { address: 'weather/forecast', values: ['Rome', 2] } }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu1', content: 'Rome: sunny for 2 days' }] }]),
   },
 ]
 
@@ -657,6 +690,34 @@ const WEB_CASES = [
     rmSync(OUTSIDE)
     return gives('out there')(r) && a.seen.length === 1 && a.seen[0].need === 'files.read' && /outside\.txt$/.test(a.seen[0].path)
   }, 'windows'],
+  ["chat.ask: the person's answers, from the app, go back to the lingo asking, in order", async () => {
+    const a = app([['Rome', 'May']])
+    await pause(400)
+    const r = await post('/windows/chat/ask', { questions: [{ question: 'Where to?', choices: ['Rome', 'Oslo'] }, 'When?'] })
+    a.stop()
+    return gives(['Rome', 'May'])(r) && a.seen.length === 1 && same(Object.keys(a.seen[0]), ['id', 'lingo', 'questions', 'caller']) && a.seen[0].lingo === 'windows' &&
+      same(a.seen[0].questions, [{ question: 'Where to?', choices: ['Rome', 'Oslo'] }, 'When?'])
+  }, 'windows'],
+  ['chat.ask: nobody answering in its seconds gives nothing, and an answer that is not a list is refused', async () => {
+    const a = app(['once'])
+    await pause(400)
+    const started = Date.now(), r = await post('/windows/chat/ask', { questions: 'What city?', seconds: 1 })
+    a.stop()
+    return gives(null)(r) && Date.now() - started < 4000 && a.seen.length === 1 && same(a.seen[0].questions, ['What city?'])
+  }, 'windows'],
+  ["agent.ask: its questions are asked in the person's chat with chat.ask, and its model goes on with their answers in the same turn", async () => {
+    keep('agent', { openai_key: 'test-key', url: AI })
+    const a = app([['Rome', 'May']])
+    await pause(400)
+    const r = await post('/agent/ask', { prompt: 'plan a trip', messages: [{ role: 'user', content: 'plan a trip' }] })
+    a.stop()
+    return r.status === 200 && r.json.text === 'gpt-5-mini heard: Where to? Rome\nWhen? May' && same(r.json.messages.map((m) => m.role), ['assistant', 'tool', 'assistant']) &&
+      r.json.messages[1].content === 'Where to? Rome\nWhen? May' && same(a.seen[0]?.questions, [{ question: 'Where to?', choices: ['Rome', 'Oslo'] }, 'When?'])
+  }, 'windows'],
+  ['chat.say and chat.step: a line for the app to draw in the chat, on the output', async () => {
+    const said = command('call', 'chat.say', 'Halfway there'), stepped = command('call', 'chat.step', 'Reading the page')
+    return String(said).includes('{"show":"say","text":"Halfway there"}') && String(stepped).includes('{"show":"step","text":"Reading the page"}')
+  }, 'windows'],
   ['load: a lingo whose openapi.json says less than its code needs is set aside with why', async () => {
     const r = await web('/')
     return r.json.lingos.some((l) => l.name === 'liar' && /liar\.ls: liar\.fetch needs net, which its openapi\.json doesn't say/.test(l.error))
@@ -841,12 +902,29 @@ const ai = (q, s) => {
     if (q.headers.authorization !== 'Bearer test-key') { s.writeHead(401); return s.end('{"error":{"message":"No auth credentials found"}}') }
     const ask = thought = JSON.parse(body || '{}'), last = ask.messages?.at(-1)?.content
     s.writeHead(200, { 'content-type': 'application/json' })
-    const told = (ask.messages || []).filter((m) => m.role === 'tool').map((m) => m.content), tool = (name, args, i) => ({ id: `c${i}`, type: 'function', function: { name, arguments: JSON.stringify(args) } })
+    const told = (ask.messages || []).filter((m) => m.role === 'tool').map((m) => m.content)
     const message = told.length ? { content: `${ask.model} heard: ${told.join(' and ')}` }
-      : /weather/.test(last) ? { content: null, tool_calls: [tool('use', { address: 'weather/forecast', values: ['Rome', 2] }, 0), tool('lingo', { task: 'something only this device knows' }, 1)] }
-        : /trip/.test(last) ? { content: null, tool_calls: [tool('questions', { questions: [{ question: 'Where to?', choices: ['Rome', 'Oslo'] }, { question: 'When?', choices: [] }, { question: 'Who with?' }] }, 0)] }
+      : /weather/.test(last) ? { content: null, tool_calls: [call('c0', 'use', { address: 'weather/forecast', values: ['Rome', 2] }), call('c1', 'lingo', { task: 'something only this device knows' })] }
+        : /trip/.test(last) ? { content: null, tool_calls: [call('c0', 'questions', { questions: [{ question: 'Where to?', choices: ['Rome', 'Oslo'] }, { question: 'When?', choices: [] }, { question: 'Who with?' }] })] }
           : { content: `${ask.model} says: ${last}` }
     s.end(JSON.stringify({ choices: [{ message: { role: 'assistant', ...message } }] }))
+  })
+}
+
+/* Claude, answering the way Anthropic's Messages API does, to the test key only, each request kept in claudes. Asked
+   about the weather, it thinks, then reaches weather/forecast with its tool; given a tool's result, it says what it heard. */
+const claudes = [], THINKING = { type: 'thinking', thinking: '', signature: 'sig-1' }
+const claude = (q, s) => {
+  let body = ''
+  q.on('data', (d) => { body += d })
+  q.on('end', () => {
+    if (q.headers['x-api-key'] !== 'test-key') { s.writeHead(401); return s.end('{"error":{"message":"invalid x-api-key"}}') }
+    const ask = JSON.parse(body || '{}'), last = ask.messages.at(-1).content
+    claudes.push(ask)
+    const told = last.filter((b) => b.type === 'tool_result' && b.tool_use_id === 'tu1').map((b) => b.content)
+    s.writeHead(200, { 'content-type': 'application/json' })
+    s.end(JSON.stringify(told.length ? { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: `claude heard: ${told.join(' and ')}` }] }
+      : { role: 'assistant', stop_reason: 'tool_use', content: [THINKING, { type: 'tool_use', id: 'tu1', name: 'use', input: { address: 'weather/forecast', values: ['Rome', 2] } }] }))
   })
 }
 
@@ -977,7 +1055,7 @@ const session = (link) => {
     report('library: every lingo loads from the .lingo file the build packed, says what it is, and every function says what it does', library.length >= 9 &&
       library.every((l) => has(l) && about(l)) && !silent.length, silent.length ? `\n    silent: ${silent.join(', ')}` : '')
     report('hello: the lingo client, its version, its device key and its catalog, and nothing else', same(Object.keys(hello), ['type', 'token', 'client', 'version', 'key', 'catalog']) &&
-      hello.client === 'lingo-client' && hello.version === '0.11.0' && /^ed25519:[A-Za-z0-9+/]{43}=$/.test(hello.key) && Array.isArray(hello.catalog))
+      hello.client === 'lingo-client' && hello.version === '0.12.0' && /^ed25519:[A-Za-z0-9+/]{43}=$/.test(hello.key) && Array.isArray(hello.catalog))
     report('catalog: onsay, a native lingo, ready, sharing /onsay alone', native('onsay') && ops('onsay').length === 1 && phrase('onsay', 'onsay.serve') !== undefined)
     for (const [name, test, lingo] of WEB_CASES) {
       if (lingo && !has(lingo)) { skipped++; console.log(`  skip  ${name}: this core has no ${lingo}`); continue }
@@ -1038,6 +1116,7 @@ writeFileSync(new URL('running.json', DATA), JSON.stringify(readdirSync(LINGOS).
 
 const server = http.createServer((q, s) => {
   if (q.method === 'POST' && q.url === '/ai/chat/completions') return ai(q, s)
+  if (q.method === 'POST' && q.url === '/ai/messages') return claude(q, s)
   const api = API[`${q.method} ${q.url.replace(/^\/resolve\/.*/, '/resolve')}`]
   if (api) { let body = ''; q.on('data', (d) => { body += d }); return q.on('end', () => api(q, s, body)) }
   const page = PAGES[q.url.replace(/^\/http/, '').split('?')[0]]

@@ -208,6 +208,9 @@ void lingo_hook(const lingo_hooks *hooks);
      lingo_stop     stops the request whose id, as JSON, is id
      lingo_wait     on the job thread: waits until done or stop is set, or seconds pass, answering requests meanwhile
      lingo_done     sets done, and wakes the job thread's wait
+     lingo_ask      on the job thread: a question for the person, a record, waited for in /.lingo/asks until an app
+                    answers it, stop is set or seconds pass. Its answer, nothing when none came, or NULL when no app is
+                    open to ask
      lingo_policy   the account's policy, with its version, kept as the one in force, its grants for this computer by
                     device, its name on the account. NULL with why when its version is older than the one kept. Gives the
                     grants the ceiling clamps, a record by lingo
@@ -218,6 +221,7 @@ void lingo_hand(const char *request, size_t n, const char *caller, void (*answer
 void lingo_stop(const char *id);
 void lingo_wait(volatile int *done, volatile int *stop, double seconds);
 void lingo_done(volatile int *done);
+val *lingo_ask(run *r, val *question, double seconds);
 val *lingo_policy(arena *a, val *account, const char *device, const char **why);
 val *lingo_setting(arena *a, const char *lingo, const char *key);
 int lingo_set(const char *lingo, const char *key, val *value);

@@ -1,8 +1,8 @@
 // windows.c - the Windows lingo, a native DLL (windows.dll) the core loads: windows, controls, files, the clipboard,
-// commands, notifications, Onsay's panel, input (the mouse and keyboard as a person uses them) and look (the screen read).
-// OCR and notifications have no C API, so they go through Windows PowerShell. Positions are physical desktop pixels.
-// What the app draws, Onsay's pointer, its rings and his panel, goes out as a line of JSON on stdout (show), which
-// onsay-desktop's Overlay.cs reads.
+// commands, notifications, Onsay's panel, input (the mouse and keyboard as a person uses them), look (the screen read) and
+// chat (the person's Onsay chat). OCR and notifications have no C API, so they go through Windows PowerShell. Positions are
+// physical desktop pixels. What the app draws, Onsay's pointer, its rings, his panel and lines in the chat, goes out as a
+// line of JSON on stdout (show), which onsay-desktop's Overlay.cs reads.
 //
 // 1. helpers                  text, records, boxes, paths, waiting, PowerShell
 // 2. window                   list, current, open, wait_for, focus, close, resize, move
@@ -13,7 +13,8 @@
 // 7. clipboard/commands/notify
 // 8. input                    the mouse and keyboard the way a person uses them: words on screen, controls by name, places in a window
 // 9. look                     the screen read as text, and a picture of it
-// 10. lingo_phrases()         -> every phrase joined to its function, called by the core on load
+// 10. chat                    ask, say and step: questions for the person in Onsay's chat, waited for, and lines in it
+// 11. lingo_phrases()         -> every phrase joined to its function, called by the core on load
 #define COBJMACROS
 #include <initguid.h>
 #include <windows.h>
@@ -1877,7 +1878,35 @@ static val *look_open_windows(run *r, val **a) {
   return out;
 }
 
-////////// 10. LINGO_PHRASES //////////
+////////// 10. CHAT //////////
+
+/* Questions in the person's Onsay chat here, each text, answered by typing, or {question, choices}, answered by picking
+   one, waited for in the lingo client's questions for the app (lingo_ask), which shows them as one card. A text alone is
+   one question. Their answers in order, or nothing when none came in seconds. */
+static val *chat_ask(run *r, val **a) {
+  val *questions = a[0], *ask = v_rec(r->a), *got;
+  if (questions->k == V_TEXT) { questions = v_list(r->a); list_push(r->a, questions, a[0]); }
+  if (questions->k != V_LIST || !questions->l.n) fail(r, "type", "chat.ask takes questions, each a text or {question, choices}");
+  put(r, ask, "questions", questions);
+  if (!(got = lingo_ask(r, ask, num_or(a[1], 120)))) fail(r, "phrase", "No Onsay app is open on this computer to ask the person");
+  return got;
+}
+
+// A line in the chat, {"show":"say"} or {"show":"step"}, with its text, for the app to draw.
+static val *chat_line(run *r, const char *kind, val *text) {
+  const char *t = str(r, text);
+  buf b = { 0 };
+  buf_fmt(&b, "{\"show\":\"%s\",\"text\":", kind);
+  buf_json_str(&b, t, strlen(t));
+  buf_chr(&b, '}');
+  show(&b);
+  return NOTHING;
+}
+
+static val *chat_say(run *r, val **a) { return chat_line(r, "say", a[0]); }
+static val *chat_step(run *r, val **a) { return chat_line(r, "step", a[0]); }
+
+////////// 11. LINGO_PHRASES //////////
 
 // What windows, controls and files are, written out where a phrase gives one.
 #define WINDOW "{id,app,title,x,y,w,h,focused,minimized}"
@@ -2000,4 +2029,10 @@ LINGO_ENTRY void lingo_phrases(void) {
   phrase_add("look", "screen.read", "find_text(words, window=nothing) -> [{text,x,y,w,h}]: every line on screen with those words in it, and where "
              "it is", look_locate);
   phrase_add("look", "screen.read", "open_windows() -> [{app,title}]: the windows open now, front to back, in brief", look_open_windows);
+
+  phrase_add("chat", "none", "ask(questions, seconds=120) -> [text]?: asks the person questions in Onsay's chat on this computer and waits for "
+             "their answers, in order, so the work goes on with them. Each question is text, answered by typing, or {question, choices}, "
+             "answered by picking one. Nothing when nobody answered in seconds. Fails when no Onsay app is open to ask", chat_ask);
+  phrase_add("chat", "none", "say(text): tells the person something in Onsay's chat on this computer while the work goes on", chat_say);
+  phrase_add("chat", "none", "step(text): shows what is being done now as a step under the person's message in Onsay's chat on this computer", chat_step);
 }

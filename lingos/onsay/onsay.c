@@ -564,16 +564,18 @@ static val *store(run *r, const char *what, val *key, val *value) {
   return phrase_find(what)->fn(r, args);
 }
 
-/* A session's newest TURNS turns, then prompt, as chat messages the way OpenAI and OpenRouter take them, {role,
-   content}: each turn's prompt the user's, and its text, or its questions a line each, the assistant's. */
+/* A session's newest TURNS turns, then prompt, as the whole log in the chat messages OpenAI and OpenRouter take: each
+   turn's prompt the user's, {role, content}, then the messages its answer added, an agent's tool calls and their
+   results among them, or with none its text, or its questions a line each, the assistant's. */
 static val *messages(arena *a, val *turns, val *prompt) {
   val *out = v_list(a);
   for (size_t i = turns->l.n > TURNS ? turns->l.n - TURNS : 0; i <= turns->l.n; i++) {
-    val *t = i < turns->l.n ? turns->l.v[i] : NULL, *asked = rec_get(t, "questions");
+    val *t = i < turns->l.n ? turns->l.v[i] : NULL, *asked = rec_get(t, "questions"), *added = rec_get(t, "messages");
     buf lines = { 0 };
     for (size_t k = 0; asked && asked->k == V_LIST && k < asked->l.n; k++)
       buf_fmt(&lines, "%s%s", k ? "\n" : "", asked->l.v[k]->k == V_TEXT ? asked->l.v[k]->t.s : text_or(asked->l.v[k], "question", ""));
     for (int assistant = 0; assistant < (t ? 2 : 1); assistant++) {
+      if (assistant && added && added->k == V_LIST) { for (size_t k = 0; k < added->l.n; k++) list_push(a, out, added->l.v[k]); continue; }
       val *m = v_rec(a), *said = !t ? prompt : !assistant ? rec_get(t, "prompt") : asked ? v_text(a, lines.s ? lines.s : "", lines.n) : rec_get(t, "text");
       rec_set(a, m, "role", v_cstr(a, assistant ? "assistant" : "user"));
       rec_set(a, m, "content", said ? said : v_cstr(a, ""));
@@ -593,12 +595,13 @@ static val *answer(run *r, int status, const char *error) {
 }
 
 /* Every request to /onsay, each with its prompt key as Authorization: Bearer <key>.
-     POST /onsay {prompt, session, mode}   the prompt sent to Onsay with the session so far as chat messages, answered
+     POST /onsay {prompt, session, mode}   the prompt sent to Onsay with the session so far as its log of chat messages, answered
                                        {session, text, steps} or {session, questions, steps}, steps every step it took.
                                        With no session, a new one. mode: run, the default, or decision, where every pick
                                        is the person's
      GET /onsay/sessions               [{session, prompt}], the newest first, each named by its first prompt
-     GET /onsay/sessions/<id>          {session, turns}: each {prompt, text} or {prompt, questions}
+     GET /onsay/sessions/<id>          {session, turns}: each {prompt, text} or {prompt, questions}, and messages, the
+                                       chat messages its answer added to the log, when it added some
      GET /onsay/sessions/<id>/live     {running, steps, questions}: while a prompt of it runs, its newest steps, each
                                        {text, depth}, and the questions it waits on the person for, or nothing
      POST /onsay/sessions/<id>/answers {answers}   the person's answers to those questions, in order, sent on to Onsay
@@ -698,6 +701,7 @@ static val *serve(run *r, val **v) {
   const char *part = rec_get(got, "questions") ? "questions" : "text";
   rec_set(a, turn, "prompt", prompt);
   rec_set(a, turn, part, rec_get(got, part) ? rec_get(got, part) : NOTHING);
+  if (rec_get(got, "messages") && rec_get(got, "messages")->k == V_LIST) rec_set(a, turn, "messages", rec_get(got, "messages"));
   list_push(a, turns, turn);
   rec_set(a, record, "turns", turns);
   buf_json(&m, record);

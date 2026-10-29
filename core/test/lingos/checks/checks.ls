@@ -113,13 +113,14 @@ fn greet(who, times=2) {
   return out
 }
 
-// Errors caught.
+// Errors caught, a call to a group this computer hasn't got among them, which a try lets it load.
 fn try_and_fail() {
   try {fail "boom"} catch e {a = e}
   try {x = 1 + "a" + []} catch e {b = e}
   try {y = 1 - "a"} catch e {c = e}
   try {from_json("[")} catch e {d = e}
-  return [a, b, c, d]
+  try {nowhere.thing(1)} catch e {f = e}
+  return [a, b, c, d, f]
 }
 
 // An error, with its line.

@@ -155,8 +155,8 @@ answers what the command line prints, or `{error}` with a 400.
 | Route | Values | Answer |
 |-------|--------|--------|
 | `/.lingo/start`, `/.lingo/stop` | `lingo` | `{lingo, running}` |
-| `/.lingo/asks` | | the questions waiting, each `{id, lingo, need, path, caller}`. Asking makes the app count as open for 10 seconds, so an app asks every second or so |
-| `/.lingo/answer` | `id`, `answer`: `once`, `always` or `no` | `null` |
+| `/.lingo/asks` | | the questions waiting, each `{id, lingo, need, path, caller}`, whether a lingo may, or `{id, lingo, questions, caller}`, a native lingo's questions for the person, like the Windows lingo's `chat.ask` (`lingo_ask`). Asking makes the app count as open for 10 seconds, so an app asks every second or so |
+| `/.lingo/answer` | `id`, `answer`: `once`, `always` or `no`, or for questions the list of answers, in order | `null` |
 | `/.lingo/settings`, `/.lingo/set` | `lingo`, and `key` and `value` | as on the command line |
 | `/.lingo/manifest` | `lingo` | its whole manifest |
 | `/.lingo/policy` | | the policy in force, with the files |
@@ -221,6 +221,7 @@ What the lingo client offers it back, from any thread:
 | `lingo_hand(request, n, caller, answered, arg)` | a web request from elsewhere, `{id, method, path, headers, body, base64}`, answered in turn as the port answers one. `caller` is `me` or `ip <address>`, and a signature on it is checked as on the port. `answered` gets `{id, status, headers, body, base64}` |
 | `lingo_stop(id)` | stops the request whose id, as JSON, it is, between two steps or while it waits |
 | `lingo_wait(done, stop, seconds)`, `lingo_done(done)` | waits on the job thread, answering requests meanwhile, until `done` is set from any thread |
+| `lingo_ask(r, question, seconds)` | on the job thread, a question for the person, a record, waited for in `/.lingo/asks` until an app answers it, the run is stopped or `seconds` pass: its answer, `nothing` when none came, or `NULL` when no app is open to ask |
 | `lingo_policy(a, account, device, why)` | keeps the account's policy, with its version, as the one in force, its grants for this computer by `device`. Refused when older than the one kept. Gives the grants the ceiling clamps |
 | `lingo_setting`, `lingo_set` | one of a lingo's settings, as this computer keeps them |
 | `lingo_home` | its home folder, as a whole path, for a file a native lingo keeps there, like the onsay lingo's `sent.log` |
