@@ -1,15 +1,15 @@
 // onsay.c - the onsay lingo, a native library the core loads (onsay.dll, onsay.so), which makes a lingo client Onsay's: its
 // one connection to Onsay, signing in and this device's key, what Onsay signs checked against its key built in, the
-// account's policy kept, decisions sent for the activity feed, and /onsay, where prompts come in. Everything it sends
-// Onsay is kept in home/sent.log for the person to read. See docs/security.md in the onsay repo, The onsay lingo and the
-// wire.
+// account's policy kept, decisions sent for the activity feed, and /onsay, where prompts come in and the agent loop
+// works through each: Onsay decides every step, and the calls run here. Everything it sends Onsay is kept in
+// home/sent.log for the person to read. See docs/security.md in the onsay repo, The onsay lingo and the wire.
 //
 // 1. Onsay          where it is, its public key, checking what it signed, and sent.log
 // 2. Connection     hello, each message from Onsay, the heartbeat and reconnecting, on threads of its own
 // 3. Hooks          lingo(...) and use(...), a signer's key, decisions, and starting and stopping
 // 4. Policy         fetched, checked and handed to the core
-// 5. /onsay         prompts, with the prompt key, and sessions: what a prompt is doing as it runs, and the person's
-//                   answers to what it asks
+// 5. /onsay         prompts, with the prompt key, each worked through as the agent loop, and sessions: the whole log,
+//                   what a prompt is doing as it runs, and the person's answers to what it asks
 // 6. Signing in     sign_in, sign_out and status, from an app through /.lingo/call or from onsay-core <settings> call,
 //                   and the account's devices
 // 7. lingo_phrases
@@ -40,6 +40,7 @@
 #define LOG_MOST (4 << 20)   // bytes sent.log may grow to before it is cut to its newest half
 #define STEPS 100            // the newest steps of a prompt kept while it runs
 #define TURNS 20             // the newest turns of a session sent with a prompt, as chat messages
+#define MOST 8               // the most calls one prompt makes before it stops
 
 #define say(...) (fprintf(stderr, "onsay: " __VA_ARGS__), fputc('\n', stderr))
 
@@ -161,9 +162,11 @@ static val *api(arena *a, const char *method, const char *path, const char *body
 
 ////////// 2. CONNECTION //////////
 
-/* One message sent and its answer waited for: a lingo(...) or a prompt. A prompt's also has its session, the steps Onsay
-   says it takes as it runs, a line of {text, depth} each, and asks, the questions it waits on the person for, as JSON. */
-typedef struct wait { struct wait *next; long id; volatile int done; buf reply; const char *session; buf steps, asks; } wait;
+/* A prompt being worked through (5): its session, its steps, a line of {text, depth} each, its own and those Onsay says
+   as it decides, the questions it waits on the person for, as JSON, and their answers once they come. */
+typedef struct turn { struct turn *next; const char *session; buf steps, asks, answers; volatile int answered; } turn;
+// One message sent and its answer waited for: a lingo(...) or a decision, a decision's with its turn.
+typedef struct wait { struct wait *next; long id; volatile int done; buf reply; turn *turn; } wait;
 
 static pl_gate *lock;                     // keeps everything below, which the connection, the heartbeat and the job thread share
 static pl_link *link_;                    // the open link, after its hello, or NULL
@@ -173,7 +176,24 @@ static char handle[64], device[64];       // this computer's handle and its name
 static unsigned char mine[32];            // this device's public key
 static buf catalog, pending;              // the catalog now, and decisions not sent yet, a line each
 static wait *waits;
+static turn *turns_;
 static long ids;
+
+// One step of a turn, {text, depth}, a line of its steps, its newest STEPS kept. Inside the lock.
+static void step(turn *t, const char *text, double depth) {
+  size_t lines = 0;
+  buf_str(&t->steps, "{\"text\":");
+  buf_json_str(&t->steps, text, strlen(text));
+  buf_str(&t->steps, ",\"depth\":");
+  buf_num(&t->steps, depth);
+  buf_str(&t->steps, "}\n");
+  for (size_t i = 0; i < t->steps.n; i++) lines += t->steps.s[i] == '\n';
+  if (lines > STEPS) {
+    size_t cut = strcspn(t->steps.s, "\n") + 1;
+    memmove(t->steps.s, t->steps.s + cut, t->steps.n - cut);
+    t->steps.n -= cut;
+  }
+}
 
 static int send_(const char *text, size_t n) {
   pl_enter(lock);
@@ -291,36 +311,23 @@ static void heard_(pl_link *l, const char *text, size_t n) {
     buf_json(&j, id ? id : NOTHING);
     lingo_stop(j.s);
     buf_free(&j);
-  } else if ((!strcmp(type, "lingo") || !strcmp(type, "answer")) && id && id->k == V_NUM) {
+  } else if ((!strcmp(type, "lingo") || !strcmp(type, "decision")) && id && id->k == V_NUM) {
     pl_enter(lock);
     for (wait *w = waits; w; w = w->next)
       if ((double)w->id == id->n) { buf_add(&w->reply, text, n); lingo_done(&w->done); }
     pl_leave(lock);
-  } else if ((!strcmp(type, "step") || !strcmp(type, "choose")) && id && id->k == V_NUM) {
-    val *step = v_rec(a);
-    rec_set(a, step, "text", rec_get(m, "text") ? rec_get(m, "text") : NOTHING);
-    rec_set(a, step, "depth", rec_get(m, "depth") ? rec_get(m, "depth") : v_num(a, 0));
+  } else if (!strcmp(type, "step") && id && id->k == V_NUM) {
+    val *depth = rec_get(m, "depth");
     pl_enter(lock);
-    for (wait *w = waits; w; w = w->next) {
-      if ((double)w->id != id->n || !w->session) continue;
-      if (*type == 'c') { w->asks.n = 0; buf_json(&w->asks, rec_get(m, "questions") ? rec_get(m, "questions") : NOTHING); continue; }
-      buf_json(&w->steps, step);
-      buf_chr(&w->steps, '\n');
-      size_t lines = 0;
-      for (size_t i = 0; i < w->steps.n; i++) lines += w->steps.s[i] == '\n';
-      if (lines > STEPS) {
-        size_t cut = strcspn(w->steps.s, "\n") + 1;
-        memmove(w->steps.s, w->steps.s + cut, w->steps.n - cut);
-        w->steps.n -= cut;
-      }
-    }
+    for (wait *w = waits; w; w = w->next)
+      if ((double)w->id == id->n && w->turn) step(w->turn, text_or(m, "text", ""), depth && depth->k == V_NUM ? depth->n : 0);
     pl_leave(lock);
   } else if (!strcmp(type, "policy")) policy_pull();
   else if (!strcmp(type, "pong")) {
     pl_enter(lock);
     ponged = 1;
     pl_leave(lock);
-  } else if (strcmp(type, "lingo") && strcmp(type, "answer")) say("Onsay sent a message this lingo client doesn't know: %s", *type ? type : "not JSON");
+  } else if (strcmp(type, "lingo") && strcmp(type, "decision")) say("Onsay sent a message this lingo client doesn't know: %s", *type ? type : "not JSON");
   arena_free(a);
 }
 
@@ -385,19 +392,12 @@ static void heartbeat(void *arg) {
 
 ////////// 3. HOOKS //////////
 
-// A prompt's steps, kept a line each, as a JSON list, or [] for none.
-static void stepped(buf *out, buf *lines) {
-  buf_chr(out, '[');
-  for (size_t i = 0; lines && i < lines->n; i++) if (lines->s[i] != '\n' || i + 1 < lines->n) buf_chr(out, lines->s[i] == '\n' ? ',' : lines->s[i]);
-  buf_chr(out, ']');
-}
-
 /* A message to Onsay, {"type": type, "id": a new number, ...rest}, rest a JSON record, and its answer by that id waited
    for, answering requests meanwhile. 1 with the whole answer in reply, 0 when Onsay isn't ready, the link closed, stop
-   was set or seconds passed. session is a prompt's, else NULL: its answer gets its steps, and a prompt stopped here is
-   stopped at Onsay too. */
-static int exchange(const char *type, const char *rest, size_t n, volatile int *stop, double seconds, buf *reply, const char *session) {
-  wait w = { .session = session };
+   was set or seconds passed. t is a decision's turn, else NULL: it gets the steps Onsay says, and a decision stopped here
+   is stopped at Onsay too. */
+static int exchange(const char *type, const char *rest, size_t n, volatile int *stop, double seconds, buf *reply, turn *t) {
+  wait w = { .turn = t };
   buf m = { 0 };
   pl_enter(lock);
   int going = ready && link_;
@@ -414,18 +414,12 @@ static int exchange(const char *type, const char *rest, size_t n, volatile int *
   pl_leave(lock);
   int got = w.reply.n > 0;
   if (got) buf_add(reply, w.reply.s, w.reply.n);
-  // A prompt's answer carries every step it took, for an app that couldn't follow all of it as it ran.
-  if (got && session && reply->s[reply->n - 1] == '}') {
-    reply->n--;
-    buf_str(reply, ",\"steps\":");
-    stepped(reply, &w.steps);
-    buf_chr(reply, '}');
-  } else if (!got && session && *stop) {
+  else if (t && *stop) {
     m.n = 0;
     buf_fmt(&m, "{\"type\":\"stop\",\"id\":%ld}", w.id);
     send_(m.s, m.n);
   }
-  buf_free(&m), buf_free(&w.reply), buf_free(&w.steps), buf_free(&w.asks);
+  buf_free(&m), buf_free(&w.reply);
   return got;
 }
 
@@ -594,19 +588,104 @@ static val *answer(run *r, int status, const char *error) {
   return out;
 }
 
+// A turn's steps, kept a line each, as a JSON list, or [] for none.
+static void stepped(buf *out, buf *lines) {
+  buf_chr(out, '[');
+  for (size_t i = 0; lines && i < lines->n; i++) if (lines->s[i] != '\n' || i + 1 < lines->n) buf_chr(out, lines->s[i] == '\n' ? ',' : lines->s[i]);
+  buf_chr(out, ']');
+}
+
+/* The person's answers to questions, each text or {question, choices}, which an app shows from /live and sends in at
+   /answers, waited for 2 minutes: their list, or NULL when none came or the prompt was stopped. */
+static val *asked(run *r, turn *t, val *questions) {
+  val *got = NULL;
+  pl_enter(lock);
+  t->asks.n = t->answers.n = 0, t->answered = 0;
+  buf_json(&t->asks, questions);
+  pl_leave(lock);
+  lingo_wait(&t->answered, r->stop, 120);
+  pl_enter(lock);
+  if (t->answered) got = json_parse(r->a, t->answers.s, t->answers.n, NULL);
+  t->asks.n = 0;
+  pl_leave(lock);
+  return got && got->k == V_LIST ? got : NULL;
+}
+
+// A call handed in to run on this computer, and its answer, the core's. left: nobody waits for it any more.
+typedef struct { buf response; volatile int done, left; } handed;
+
+static void handed_back(void *arg, const char *response, size_t n) {
+  handed *h = arg;
+  if (h->left) { buf_free(&h->response); free(h); return; }
+  buf_add(&h->response, response, n);
+  lingo_done(&h->done);
+}
+
+/* A call of a turn, as me, the account's own, so the person's own rules apply: a lingo on this computer handed in as a
+   request, POST to its path with inputs as its body; anything else through use(...), the way Onsay reaches it, other
+   computers' own rules applying there. Its value, or NULL with why in why. */
+static val *called(run *r, const char *address, val *inputs, buf *why) {
+  static long count;
+  arena *a = r->a;
+  buf here = { 0 }, body = { 0 }, request = { 0 }, reply = { 0 };
+  val *value = NULL;
+  pl_enter(lock);
+  buf_fmt(&here, "%s.%s/", device, handle);
+  pl_leave(lock);
+  buf_json(&body, inputs);
+  if (here.n > 3 && !strncmp(address, here.s, here.n)) {
+    handed *h = calloc(1, sizeof *h);
+    char id[32];
+    snprintf(id, sizeof id, "\"onsay %ld\"", ++count);
+    buf_fmt(&request, "{\"id\":%s,\"method\":\"POST\",\"path\":", id);
+    buf_json_str(&request, address + here.n - 1, strlen(address + here.n - 1));
+    buf_str(&request, ",\"headers\":{\"content-type\":\"application/json\"},\"body\":");
+    buf_json_str(&request, body.s, body.n);
+    buf_str(&request, ",\"base64\":false}");
+    lingo_hand(request.s, request.n, "me", handed_back, h);
+    lingo_wait(&h->done, r->stop, 300);
+    if (!h->done) {
+      h->left = 1;
+      lingo_stop(id);
+      buf_str(why, *r->stop ? "Stopped by the person" : "It took more than 5 minutes, so it was stopped");
+    } else {
+      val *got = json_parse(a, h->response.s, h->response.n, NULL), *status = rec_get(got, "status"), *text = rec_get(got, "body");
+      val *said = text && text->k == V_TEXT ? json_parse(a, text->t.s, text->t.len, NULL) : NULL;
+      if (status && status->k == V_NUM && status->n >= 200 && status->n < 300) value = said ? said : text ? text : NOTHING;
+      else buf_str(why, text_or(said, "error", text && text->k == V_TEXT && text->t.len ? text->t.s : "It answered with an error"));
+      buf_free(&h->response);
+      free(h);
+    }
+  } else {
+    buf_str(&request, "{\"address\":");
+    buf_json_str(&request, address, strlen(address));
+    buf_str(&request, ",\"values\":");
+    buf_add(&request, body.s, body.n);
+    buf_chr(&request, '}');
+    val *got = exchange("lingo", request.s, request.n, r->stop, 300, &reply, NULL) ? json_parse(a, reply.s, reply.n, NULL) : NULL;
+    if (got && !rec_get(got, "error")) value = rec_get(got, "value") ? rec_get(got, "value") : NOTHING;
+    else buf_str(why, got ? text_or(got, "error", "") : *r->stop ? "Stopped by the person" : "This computer isn't connected to Onsay now");
+  }
+  buf_free(&here), buf_free(&body), buf_free(&request), buf_free(&reply);
+  return value;
+}
+
 /* Every request to /onsay, each with its prompt key as Authorization: Bearer <key>.
-     POST /onsay {prompt, session, mode}   the prompt sent to Onsay with the session so far as its log of chat messages, answered
-                                       {session, text, steps} or {session, questions, steps}, steps every step it took.
-                                       With no session, a new one. mode: run, the default, or decision, where every pick
-                                       is the person's
+     POST /onsay {prompt, session, mode}   the prompt worked through with the session so far, answered {session, text,
+                                       steps} or {session, questions, steps}, steps every step it took. With no session,
+                                       a new one. mode: run, the default, or decision, where every pick is the person's
      GET /onsay/sessions               [{session, prompt}], the newest first, each named by its first prompt
      GET /onsay/sessions/<id>          {session, turns}: each {prompt, text} or {prompt, questions}, and messages, the
-                                       chat messages its answer added to the log, when it added some
+                                       chat messages it added to the log, its calls and what they gave, and its reply
      GET /onsay/sessions/<id>/live     {running, steps, questions}: while a prompt of it runs, its newest steps, each
                                        {text, depth}, and the questions it waits on the person for, or nothing
-     POST /onsay/sessions/<id>/answers {answers}   the person's answers to those questions, in order, sent on to Onsay
-   A session is kept in the store as onsay/sessions/<id>, its id the time it began and a few random letters, or one the
-   app made the same way, so it can follow the prompt as it runs. */
+     POST /onsay/sessions/<id>/answers {answers}   the person's answers to those questions, in order
+   A prompt is the agent loop, Onsay's lingo function in the AI's seat: the whole log goes to Onsay, which decides the next
+   step, a call with its inputs or the reply; the call runs here (called), and it and what it gave join the log, until
+   the decision is the reply, at most MOST calls. In decision mode each call is first the person's pick of the closest
+   ways, or None of these, and a value a call needs that nobody gave is asked of them. A call whose answer asks questions
+   ends the prompt with them. A session is kept in the store as onsay/sessions/<id>, its id the time it began and a few
+   random letters, or one the app made the same way, so it can follow the prompt as it runs. */
 static val *serve(run *r, val **v) {
   arena *a = r->a;
   val *q = v[0], *key_ = lingo_setting(a, "onsay", "prompt_key"), *json = rec_get(q, "json"), *out = v_rec(a);
@@ -628,37 +707,31 @@ static val *serve(run *r, val **v) {
   const char *sub = !strncmp(path, "/sessions/", 10) ? strchr(path + 10, '/') : NULL;
   if (sub) {
     const char *session = v_text(a, path + 10, (size_t)(sub - path - 10))->t.s;
-    int live = !strcmp(method, "GET") && !strcmp(sub, "/live"), answers = !strcmp(method, "POST") && !strcmp(sub, "/answers");
+    int live = !strcmp(method, "GET") && !strcmp(sub, "/live"), answers = !strcmp(method, "POST") && !strcmp(sub, "/answers"), waiting = 0;
     val *given = rec_get(json, "answers");
     if (!live && !answers) return answer(r, 404, "A session takes GET /onsay/sessions/<session>/live and POST /onsay/sessions/<session>/answers");
     if (answers && (!given || given->k != V_LIST)) return answer(r, 400, "Send the answers as {\"answers\": [\"...\"]}, one for each question, in order");
     buf said = { 0 };
-    long asked = 0;
     pl_enter(lock);
-    wait *w = waits;
-    while (w && !(w->session && !strcmp(w->session, session))) w = w->next;
+    turn *t = turns_;
+    while (t && strcmp(t->session, session)) t = t->next;
     if (live) {
       buf_str(&said, "{\"running\":");
-      buf_str(&said, w ? "true" : "false");
+      buf_str(&said, t ? "true" : "false");
       buf_str(&said, ",\"steps\":");
-      stepped(&said, w ? &w->steps : NULL);
+      stepped(&said, t ? &t->steps : NULL);
       buf_str(&said, ",\"questions\":");
-      if (w && w->asks.n) buf_add(&said, w->asks.s, w->asks.n); else buf_str(&said, "null");
+      if (t && t->asks.n) buf_add(&said, t->asks.s, t->asks.n); else buf_str(&said, "null");
       buf_chr(&said, '}');
-    } else if (w && w->asks.n) asked = w->id, w->asks.n = 0;
-    pl_leave(lock);
-    if (live) {
-      val *got = json_parse(a, said.s, said.n, NULL);
-      buf_free(&said);
-      return got;
+    } else if ((waiting = t && t->asks.n)) {
+      t->asks.n = t->answers.n = 0;
+      buf_json(&t->answers, given);
+      lingo_done(&t->answered);
     }
-    if (!asked) return answer(r, 404, "Nothing in that session is waiting for an answer");
-    buf_fmt(&said, "{\"type\":\"chosen\",\"id\":%ld,\"answers\":", asked);
-    buf_json(&said, given);
-    buf_chr(&said, '}');
-    send_(said.s, said.n);
+    pl_leave(lock);
+    val *got = live ? json_parse(a, said.s, said.n, NULL) : waiting ? v_rec(a) : answer(r, 404, "Nothing in that session is waiting for an answer");
     buf_free(&said);
-    return v_rec(a);
+    return got;
   }
   const char *id = !strcmp(method, "GET") && !strncmp(path, "/sessions/", 10) ? path + 10 : !strcmp(method, "POST") && !strcmp(path, "/") ? text_or(json, "session", "") : NULL;
   if (!id) return answer(r, 404, "/onsay takes POST /onsay {prompt, session, mode}, GET /onsay/sessions, GET /onsay/sessions/<session>, and its /live and /answers");
@@ -685,32 +758,136 @@ static val *serve(run *r, val **v) {
     rec_set(a, out, "turns", turns);
     return out;
   }
-  val *prompt = rec_get(json, "prompt"), *rest = v_rec(a), *got, *turn = v_rec(a), *record = v_rec(a);
+  val *prompt = rec_get(json, "prompt"), *log, *added = v_list(a), *done = v_rec(a), *record = v_rec(a), *asks = NULL;
   if (!prompt || prompt->k != V_TEXT || !prompt->t.len) return answer(r, 400, "Send the prompt as {\"prompt\": \"...\"}");
-  buf m = { 0 }, reply = { 0 };
-  rec_set(a, rest, "prompt", prompt);
-  rec_set(a, rest, "session", v_cstr(a, id));
-  rec_set(a, rest, "messages", messages(a, turns, prompt));
-  if (!strcmp(text_or(json, "mode", ""), "decision")) rec_set(a, rest, "mode", v_cstr(a, "decision"));
-  buf_json(&m, rest);
-  int answered_ = exchange("prompt", m.s, m.n, r->stop, 300, &reply, id);
-  got = answered_ ? json_parse(a, reply.s, reply.n, NULL) : NULL;
-  buf_free(&m), buf_free(&reply);
-  if (*r->stop) fail(r, "stopped", "Stopped by the person");
-  if (!got) return answer(r, 503, "This computer isn't connected to Onsay now, so it can't answer. Try again in a moment");
-  const char *part = rec_get(got, "questions") ? "questions" : "text";
-  rec_set(a, turn, "prompt", prompt);
-  rec_set(a, turn, part, rec_get(got, part) ? rec_get(got, part) : NOTHING);
-  if (rec_get(got, "messages") && rec_get(got, "messages")->k == V_LIST) rec_set(a, turn, "messages", rec_get(got, "messages"));
-  list_push(a, turns, turn);
+  const char *reply = NULL, *unanswered = "Nobody answered in 2 minutes, so I stopped. Ask again when you're ready.";
+  int choosing = !strcmp(text_or(json, "mode", ""), "decision"), reached = 1;
+  buf m = { 0 };
+  turn t = { .session = id };
+  pl_enter(lock);
+  t.next = turns_, turns_ = &t;
+  pl_leave(lock);
+  log = messages(a, turns, prompt);
+  for (int k = 1; !reply && !asks && !*r->stop; k++) {
+    buf why = { 0 }, said = { 0 }, called_ = { 0 };
+    val *d, *inputs, *value, *missing, *choices, *given;
+    if (k > MOST) { reply = "That needed more steps than I take at once, so I stopped here. Ask again to go on."; break; }
+    buf_str(&m, "{\"messages\":");
+    buf_json(&m, log);
+    buf_str(&m, choosing ? ",\"mode\":\"decision\"}" : "}");
+    d = exchange("decide", m.s, m.n, r->stop, 150, &said, &t) ? json_parse(a, said.s, said.n, NULL) : NULL;
+    m.n = said.n = 0;
+    if (*r->stop) { buf_free(&said); break; }
+    if (!d || d->k != V_REC) { reached = 0, buf_free(&said); break; }
+    if (rec_get(d, "reply")) { reply = text_or(d, "reply", ""); buf_free(&said); break; }
+    // Let me choose: the closest ways as one card, and the one the person picks runs.
+    choices = rec_get(d, "choices");
+    if (choices && choices->k == V_LIST && choices->l.n) {
+      val *card = v_rec(a), *ways = v_list(a), *questions = v_list(a), *picked;
+      size_t n = 0;
+      for (size_t i = 0; i < choices->l.n; i++, m.n = 0) {
+        buf_fmt(&m, "%s, %s", text_or(choices->l.v[i], "does", ""), text_or(choices->l.v[i], "where", ""));
+        list_push(a, ways, v_text(a, m.s, m.n));
+      }
+      list_push(a, ways, v_cstr(a, "None of these"));
+      rec_set(a, card, "question", v_cstr(a, "Which should I do?"));
+      rec_set(a, card, "choices", ways);
+      list_push(a, questions, card);
+      pl_enter(lock);
+      step(&t, "Waiting for you to choose", 0);
+      pl_leave(lock);
+      picked = asked(r, &t, questions);
+      while (picked && picked->l.n && n < choices->l.n && !v_same(ways->l.v[n], picked->l.v[0])) n++;
+      if (*r->stop || !picked || n == choices->l.n) { reply = *r->stop ? NULL : !picked ? unanswered : "Okay, I didn't do any of those. Say it another way and I'll look again."; buf_free(&said); break; }
+      d = choices->l.v[n];
+    }
+    inputs = rec_get(d, "inputs");
+    if (!inputs || (inputs->k != V_REC && inputs->k != V_LIST)) inputs = v_rec(a);
+    // A value the call needs that nobody gave is asked of the person, typed.
+    missing = rec_get(d, "missing");
+    if (missing && missing->k == V_LIST && missing->l.n && inputs->k == V_REC) {
+      val *questions = v_list(a), *typed;
+      for (size_t i = 0; i < missing->l.n; i++, m.n = 0) {
+        buf_str(&m, "What ");
+        for (const char *c = missing->l.v[i]->k == V_TEXT ? missing->l.v[i]->t.s : ""; *c; c++) buf_chr(&m, *c == '_' ? ' ' : *c);
+        buf_str(&m, " should I use?");
+        list_push(a, questions, v_text(a, m.s, m.n));
+      }
+      pl_enter(lock);
+      step(&t, "Waiting for your answer", 0);
+      pl_leave(lock);
+      typed = asked(r, &t, questions);
+      if (*r->stop || !typed) { reply = *r->stop ? NULL : unanswered; buf_free(&said); break; }
+      for (size_t i = 0; i < missing->l.n && i < typed->l.n; i++) {
+        val *x = typed->l.v[i]->k == V_TEXT ? json_parse(a, typed->l.v[i]->t.s, typed->l.v[i]->t.len, NULL) : NULL;
+        if (missing->l.v[i]->k == V_TEXT) rec_set(a, inputs, missing->l.v[i]->t.s, x ? x : typed->l.v[i]);
+      }
+    }
+    const char *address = text_or(d, "call", "");
+    value = rec_get(d, "value");
+    pl_enter(lock);
+    buf_fmt(&m, "Picked: %s", text_or(d, "does", address));
+    step(&t, m.s, 0);
+    m.n = 0;
+    if (!value) { buf_fmt(&m, "Running it %s", text_or(d, "where", "")); step(&t, m.s, 0); m.n = 0; }
+    pl_leave(lock);
+    if (!value) value = called(r, address, inputs, &why);
+    // The call and what it gave join the log, its values but the log itself, which a call that reads it was given.
+    given = inputs;
+    if (inputs->k == V_REC) {
+      given = v_rec(a);
+      for (size_t i = 0; i < inputs->r.n; i++) if (strcmp(inputs->r.key[i], "messages")) rec_set(a, given, inputs->r.key[i], inputs->r.v[i]);
+    }
+    if (!value) buf_fmt(&said, "It failed: %s", why.s ? why.s : "");
+    else if (value->k == V_TEXT) buf_add(&said, value->t.s, value->t.len);
+    else if (rec_get(value, "text") && rec_get(value, "text")->k == V_TEXT) buf_text(&said, rec_get(value, "text"));
+    else buf_json(&said, value);
+    if (value && rec_get(value, "questions") && rec_get(value, "questions")->k == V_LIST) asks = rec_get(value, "questions");
+    buf_str(&called_, "{\"address\":");
+    buf_json_str(&called_, address, strlen(address));
+    buf_str(&called_, ",\"values\":");
+    buf_json(&called_, given);
+    buf_chr(&called_, '}');
+    buf_fmt(&m, "[{\"role\":\"assistant\",\"content\":\"\",\"tool_calls\":[{\"id\":\"call_%zu_%d\",\"type\":\"function\",\"function\":{\"name\":\"use\",\"arguments\":", turns->l.n + 1, k);
+    buf_json_str(&m, called_.s, called_.n);
+    buf_fmt(&m, "}}]},{\"role\":\"tool\",\"tool_call_id\":\"call_%zu_%d\",\"content\":", turns->l.n + 1, k);
+    buf_json_str(&m, said.s ? said.s : "", said.n);
+    buf_str(&m, "}]");
+    val *both = json_parse(a, m.s, m.n, NULL);
+    for (size_t i = 0; i < 2; i++) list_push(a, added, both->l.v[i]), list_push(a, log, both->l.v[i]);
+    m.n = 0;
+    buf_free(&why), buf_free(&said), buf_free(&called_);
+  }
+  pl_enter(lock);
+  for (turn **at = &turns_; *at; at = &(*at)->next) if (*at == &t) { *at = t.next; break; }
+  stepped(&m, &t.steps);
+  pl_leave(lock);
+  rec_set(a, out, "steps", json_parse(a, m.s, m.n, NULL));
+  buf_free(&t.steps), buf_free(&t.asks), buf_free(&t.answers);
+  m.n = 0;
+  if (!reached && !added->l.n) { buf_free(&m); return answer(r, 503, "This computer isn't connected to Onsay now, so it can't answer. Try again in a moment"); }
+  if (!reached) reply = "Onsay stopped answering partway through, so I stopped there. Ask again in a moment.";
+  if (*r->stop) reply = "Okay, I stopped.";
+  // Its reply, or its questions a line each, is Onsay's last word in the log.
+  for (size_t i = 0; asks && i < asks->l.n; i++) buf_fmt(&m, "%s%s", i ? "\n" : "", asks->l.v[i]->k == V_TEXT ? asks->l.v[i]->t.s : text_or(asks->l.v[i], "question", ""));
+  val *last = v_rec(a);
+  rec_set(a, last, "role", v_cstr(a, "assistant"));
+  rec_set(a, last, "content", asks ? v_text(a, m.s ? m.s : "", m.n) : v_cstr(a, reply));
+  list_push(a, added, last);
+  rec_set(a, done, "prompt", prompt);
+  rec_set(a, done, asks ? "questions" : "text", asks ? asks : v_cstr(a, reply));
+  rec_set(a, done, "messages", added);
+  list_push(a, turns, done);
   rec_set(a, record, "turns", turns);
+  m.n = 0;
   buf_json(&m, record);
   store(r, "store.put", where, v_text(a, m.s, m.n));
   buf_free(&m);
-  rec_set(a, out, part, rec_get(turn, part));
-  rec_set(a, out, "steps", rec_get(got, "steps") ? rec_get(got, "steps") : v_list(a));
+  if (*r->stop) fail(r, "stopped", "Stopped by the person");
+  rec_set(a, out, asks ? "questions" : "text", rec_get(done, asks ? "questions" : "text"));
   return out;
 }
+
 
 ////////// 6. SIGNING IN //////////
 

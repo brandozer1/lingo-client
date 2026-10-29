@@ -15,8 +15,8 @@
 // 2. Zips        .lingo files read and made, stored or deflated
 // 3. Signing     what Onsay signs, as Onsay signs it, and requests signed by a device (RFC 9421)
 // 4. Cases       requests and what each must answer
-// 5. Onsay       answers to lingo(...), use(...) and prompts, an AI that answers the way OpenAI does, signing in, the
-//                policy, names resolved, and pages for http.send
+// 5. Onsay       answers to lingo(...) and use(...), a decision for each step of a prompt, an AI that answers the way
+//                OpenAI does, signing in, the policy, names resolved, and pages for http.send
 // 6. Session     hello, ready, the cases in order, the catalog, then a drop the core must come back from
 
 import http from 'node:http'
@@ -745,38 +745,80 @@ const WEB_CASES = [
   ['log: each decision is sent to Onsay for the activity feed', async () =>
     logged.some((l) => l.caller === 'ip 203.0.113.8' && l.lingo === 'memo' && l.allowed === false) && logged.some((l) => l.caller === 'laptop.tester' && l.allowed) &&
     logged.every((l) => ['at', 'caller', 'lingo', 'route', 'need', 'allowed', 'why'].every((k) => k in l))],
-  ['/onsay: a prompt with the prompt key is sent to Onsay, with the whole session as chat messages, and answered with its session', async () => {
+  ['/onsay: a prompt with the prompt key is worked through with Onsay, the whole session going with every decision as chat messages, and answered with its session', async () => {
     const key = (await web('/.lingo/settings?lingo=onsay')).json.find((s) => s.name === 'prompt_key').value
     const ask = (body, k = key) => web('/onsay', { method: 'POST', body, headers: { authorization: `Bearer ${k}` } })
     const a = await ask({ prompt: 'hello' }), b = await ask({ prompt: 'and again', session: a.json?.session }), c = await ask({ prompt: 'plan a trip', session: a.json?.session })
     const d = await ask({ prompt: 'Where to? Rome\nWhen? May', session: a.json?.session })
     const [none, wrong] = [await web('/onsay', { method: 'POST', body: { prompt: 'hi' } }), await ask({ prompt: 'hi' }, 'not-the-key')]
     onsayed = { key, session: a.json?.session }
-    const said = (role, content) => ({ role, content })
+    const said = (role, content) => ({ role, content }), again = decided.find((m) => m.messages.at(-1).content === 'and again')
     return /^[0-9a-f]{48}$/.test(key) && a.status === 200 && a.json.text === 'Onsay heard: hello' && /^[0-9a-f]{18}$/.test(a.json.session) && b.json.session === a.json.session &&
-      prompted.at(-3).prompt === 'and again' && prompted.at(-3).session === a.json.session && !('chat' in prompted.at(-3)) &&
-      same(prompted.at(-3).messages, [said('user', 'hello'), said('assistant', 'Onsay heard: hello'), said('user', 'and again')]) &&
-      same(c.json, { session: a.json.session, questions: ['Where to?', 'When?'], steps: [] }) && d.json.text === 'Onsay heard: Where to? Rome\nWhen? May' &&
-      same(prompted.at(-1).messages.slice(-3), [said('user', 'plan a trip'), said('assistant', 'Where to?\nWhen?'), said('user', 'Where to? Rome\nWhen? May')]) &&
+      same(Object.keys(again ?? {}), ['type', 'id', 'messages']) && same(again.messages, [said('user', 'hello'), said('assistant', 'Onsay heard: hello'), said('user', 'and again')]) &&
+      same(c.json.questions, ['Where to?', 'When?']) && same(c.json.steps.map((s) => s.text), ['Understanding what you asked', 'Picked: Plans a trip', 'Running it on the web']) &&
+      every.at(-1)?.address === 'trip/plan' && d.json.text === 'Onsay heard: Where to? Rome\nWhen? May' &&
+      same(decided.at(-1).messages.slice(-2), [said('assistant', 'Where to?\nWhen?'), said('user', 'Where to? Rome\nWhen? May')]) &&
       none.status === 401 && wrong.status === 401 && /prompt key/.test(wrong.json?.error)
   }],
   ['/onsay: its sessions, the newest first, and one with every turn', async () => {
     const auth = { headers: { authorization: `Bearer ${onsayed.key}` } }
     const [list, one, missing] = [await web('/onsay/sessions', auth), await web(`/onsay/sessions/${onsayed.session}`, auth), await web('/onsay/sessions/nope', auth)]
-    return list.status === 200 && same(list.json[0], { session: onsayed.session, prompt: 'hello' }) && one.json.turns.length === 4 && same(one.json.turns[2], { prompt: 'plan a trip', questions: ['Where to?', 'When?'] }) &&
-      missing.status === 404
+    return list.status === 200 && same(list.json[0], { session: onsayed.session, prompt: 'hello' }) && one.json.turns.length === 4 && one.json.turns[2].prompt === 'plan a trip' &&
+      same(one.json.turns[2].questions, ['Where to?', 'When?']) && missing.status === 404
   }],
-  ['/onsay: in decision mode a prompt is followed as it runs, its steps and the questions it waits on, the answers go on to Onsay, and its answer carries every step', async () => {
-    const headers = { authorization: `Bearer ${onsayed.key}` }, session = '0193abc4d5e6f7a8b9'
-    const out = web('/onsay', { method: 'POST', body: { prompt: 'pick for me', session, mode: 'decision' }, headers })
+  ['/onsay: the agent loop runs the calls Onsay decides on this computer, as me, each joining the log with what it gave, until the reply, and a follow-up carries the whole log', async () => {
+    const headers = { authorization: `Bearer ${onsayed.key}` }, asked = 'remember milk then tell me what you kept'
+    const r = await web('/onsay', { method: 'POST', body: { prompt: asked }, headers }), mine = decided.filter((m) => m.messages.findLast((x) => x.role === 'user').content === asked)
+    const call = (n, fn, values) => ({ id: `call_1_${n}`, type: 'function', function: { name: 'use', arguments: JSON.stringify({ address: `${DEVICE}.${HANDLE}/memo/${fn}`, values }) } })
+    const log = [{ role: 'user', content: asked }, { role: 'assistant', content: '', tool_calls: [call(1, 'remember', { k: 'milk', v: 'oat milk' })] }, { role: 'tool', tool_call_id: 'call_1_1', content: 'null' },
+      { role: 'assistant', content: '', tool_calls: [call(2, 'recall', { k: 'milk' })] }, { role: 'tool', tool_call_id: 'call_1_2', content: 'oat milk' }]
+    const turn = (await web(`/onsay/sessions/${r.json?.session}`, { headers })).json?.turns[0]
+    const next = await web('/onsay', { method: 'POST', body: { prompt: 'what did you keep?', session: r.json?.session }, headers })
+    return r.status === 200 && r.json.text === 'You kept: oat milk' && mine.length === 3 && same(mine[0].messages, log.slice(0, 1)) && same(mine[1].messages, log.slice(0, 3)) && same(mine[2].messages, log) &&
+      same(turn?.messages, [...log.slice(1), { role: 'assistant', content: 'You kept: oat milk' }]) && turn.text === 'You kept: oat milk' &&
+      same(r.json.steps.map((s) => s.text), ['Understanding what you asked', 'Picked: Keeps a thing under a name', 'Running it on this computer', 'Picked: What was kept under a name', 'Running it on this computer']) &&
+      next.json?.text === 'Onsay heard: what did you keep?' && same(decided.at(-1).messages, [...log, { role: 'assistant', content: 'You kept: oat milk' }, { role: 'user', content: 'what did you keep?' }])
+  }],
+  ['/onsay: the loop stops after 8 calls, says so plainly, and keeps every one', async () => {
+    const headers = { authorization: `Bearer ${onsayed.key}` }
+    const r = await web('/onsay', { method: 'POST', body: { prompt: 'go on and on' }, headers }), turn = (await web(`/onsay/sessions/${r.json?.session}`, { headers })).json?.turns[0]
+    return r.status === 200 && r.json.text === 'That needed more steps than I take at once, so I stopped here. Ask again to go on.' && turn?.messages.filter((m) => m.role === 'tool').length === 8 &&
+      decided.filter((m) => m.messages.findLast((x) => x.role === 'user').content === 'go on and on').length === 8
+  }],
+  ['/onsay: a stop ends the loop at once, with the call running inside it on this computer, and what it did is kept', async (send) => {
+    const headers = { authorization: `Bearer ${onsayed.key}` }, session = '0193abc4d5e6f7a8c0'
+    const out = send('/onsay', { prompt: 'spin forever', session }, { headers }), id = `r${next}`
+    await soon(() => decided.at(-1)?.messages.at(-1).content === 'spin forever')
+    await pause(1000)
+    const started = Date.now()
+    current.send({ type: 'stop', id })
+    const r = await out, turn = (await web(`/onsay/sessions/${session}`, { headers })).json?.turns?.[0]
+    return r.status === 500 && /Stopped by the person/.test(r.json?.error) && Date.now() - started < 3000 && turn?.text === 'Okay, I stopped.' && /^It failed: .*[Ss]topped/.test(turn.messages[1]?.content)
+  }],
+  ['/onsay: with Let me choose each call is first a card of the closest ways and None of these, followed at /live with its steps, and the pick runs', async () => {
+    const headers = { authorization: `Bearer ${onsayed.key}` }, session = '0193abc4d5e6f7a8b9', body = { prompt: 'pick for me', session, mode: 'decision' }
+    const card = async () => { let live = null; await soon(async () => (live = (await web(`/onsay/sessions/${session}/live`, { headers })).json)?.questions); return live }
+    const out = web('/onsay', { method: 'POST', body, headers }), live = await card()
+    const sent = await web(`/onsay/sessions/${session}/answers`, { method: 'POST', body: { answers: ['The second, on this computer'] }, headers })
+    const done = await out, after = (await web(`/onsay/sessions/${session}/live`, { headers })).json
+    const again = await web(`/onsay/sessions/${session}/answers`, { method: 'POST', body: { answers: ['The first, on this computer'] }, headers })
+    const refused = web('/onsay', { method: 'POST', body, headers })
+    await card()
+    await web(`/onsay/sessions/${session}/answers`, { method: 'POST', body: { answers: ['None of these'] }, headers })
+    const none = await refused
+    return decided.at(-1).mode === 'decision' && live?.running === true && same(live.steps, [{ text: 'Understanding what you asked', depth: 0 }, { text: 'Waiting for you to choose', depth: 0 }]) &&
+      same(live.questions, [{ question: 'Which should I do?', choices: ['The first, on this computer', 'The second, on this computer', 'None of these'] }]) && sent.status === 200 &&
+      done.json?.text === 'you picked: ["hi Ana","hi Ana"]' && done.json.steps.some((s) => s.text === 'Picked: The second') && done.json.session === session &&
+      same(after, { running: false, steps: [], questions: null }) && again.status === 404 && none.json?.text === "Okay, I didn't do any of those. Say it another way and I'll look again."
+  }],
+  ['/onsay: a value a call needs that nobody gave is asked of the person, and the call runs with what they typed', async () => {
+    const headers = { authorization: `Bearer ${onsayed.key}` }, session = '0193abc4d5e6f7a8c1'
+    const out = web('/onsay', { method: 'POST', body: { prompt: 'recall something', session }, headers })
     let live = null
     await soon(async () => (live = (await web(`/onsay/sessions/${session}/live`, { headers })).json)?.questions)
-    const sent = await web(`/onsay/sessions/${session}/answers`, { method: 'POST', body: { answers: ['The second'] }, headers })
-    const done = await out, after = (await web(`/onsay/sessions/${session}/live`, { headers })).json
-    const again = await web(`/onsay/sessions/${session}/answers`, { method: 'POST', body: { answers: ['The first'] }, headers })
-    return prompted.at(-1).mode === 'decision' && live?.running === true && same(live.steps, [{ text: 'Understanding what you asked', depth: 0 }, { text: 'Found 2 ways to do it', depth: 0 }]) &&
-      same(live.questions, [{ question: 'Which should I do?', choices: ['The first', 'The second', 'None of these'] }]) && sent.status === 200 && done.json?.text === 'you picked: The second' && same(done.json.steps, live.steps) &&
-      done.json.session === session && same(after, { running: false, steps: [], questions: null }) && again.status === 404 && !('mode' in prompted.at(-2))
+    await web(`/onsay/sessions/${session}/answers`, { method: 'POST', body: { answers: ['milk'] }, headers })
+    const done = await out, call = decided.at(-1).messages.findLast((m) => m.tool_calls)?.tool_calls[0]
+    return same(live?.questions, ['What k should I use?']) && done.json?.text === 'you picked: oat milk' && same(JSON.parse(call?.function.arguments ?? '{}').values, { k: 'milk' })
   }],
   ['/onsay: open to anyone through the proxy by its own default rule, still with its prompt key', async (send) => {
     const ask = (k) => send('/onsay', { prompt: 'from afar' }, { as: undefined, headers: { ...from('198.18.0.9').headers, authorization: `Bearer ${k}` } })
@@ -785,7 +827,7 @@ const WEB_CASES = [
   }],
   ['sent.log: every message sent to Onsay kept, a line each with when, every token masked, pings left out', async () => {
     const text = readFileSync(new URL('sent.log', DATA), 'utf8'), lines = text.trim().split('\n').map((l) => JSON.parse(l)), types = new Set(lines.map((l) => l.message.type))
-    return lines.every((l) => !isNaN(Date.parse(l.at))) && ['hello', 'response', 'lingo', 'prompt', 'applied', 'log', 'api'].every((t) => types.has(t)) && !types.has('ping') &&
+    return lines.every((l) => !isNaN(Date.parse(l.at))) && ['hello', 'response', 'lingo', 'decide', 'applied', 'log', 'api'].every((t) => types.has(t)) && !types.has('ping') &&
       lines.find((l) => l.message.type === 'hello').message.token === '(hidden)' && !text.includes(`"token":"${TOKEN}"`)
   }],
   ['the command line: call onsay.sign_in keeps the token Onsay gives and makes the device key, sealed; status says so; sign_out forgets both', async () => {
@@ -868,7 +910,7 @@ const from = (ip) => ({ as: undefined, headers: { host: 'laptop.example.onsay.de
    failed with why. One reaches this computer on the way with a request, memo's recall, run while the program waits.
    asked is the last ask, every each one, device the last request's answer, shown what the command line printed. */
 let asked = {}, device = null, every = [], shown = null, onsayed = {}, named = null
-const prompted = [], applied = [], logged = [], policies = []   // what came to Onsay, and each account policy, the last the one GET /policy gives
+const decided = [], applied = [], logged = [], policies = []   // what came to Onsay, and each account policy, the last the one GET /policy gives
 let current = null   // the link the core is on now
 const LINGO = [
   [/capital of a country/, ({ values }) => ({ France: 'Paris', Japan: 'Tokyo' })[values.country]],
@@ -880,6 +922,7 @@ const LINGO = [
     return `heard: ${device.json}`
   }],
   [/never answered/, () => new Promise(() => {})],
+  [/^trip\/plan$/, () => ({ questions: ['Where to?', 'When?'] })],
 ]
 const answer = async (m, send) => {
   asked = m
@@ -928,18 +971,22 @@ const claude = (q, s) => {
   })
 }
 
-/* A prompt to /onsay answered as Onsay's search does: what it heard, or questions back. In decision mode, its steps as it
-   goes and the person asked which way, the answer what they picked once their answers come back (chosen). */
-let chosen = () => {}
-const prompt = (m, link) => {
-  prompted.push(m)
-  if (m.mode === 'decision') {
-    for (const text of ['Understanding what you asked', 'Found 2 ways to do it']) link.send({ type: 'step', id: m.id, text, depth: 0 })
-    link.send({ type: 'choose', id: m.id, questions: [{ question: 'Which should I do?', choices: ['The first', 'The second', 'None of these'] }] })
-    chosen = (c) => c.id === m.id && link.send({ type: 'answer', id: m.id, text: `you picked: ${c.answers.join(', ')}` })
-    return
-  }
-  link.send(/trip/.test(m.prompt) ? { type: 'answer', id: m.id, questions: ['Where to?', 'When?'] } : { type: 'answer', id: m.id, text: `Onsay heard: ${m.prompt}` })
+/* The next step of a prompt the onsay lingo works through, decided from the whole log it sends, as Onsay's lingo function
+   decides it: a step for the first, then a call on this computer or elsewhere, or the reply, each by the newest thing
+   the person said and what the calls for it gave so far. */
+const decide = (m, link) => {
+  decided.push(m)
+  const at = m.messages.findLastIndex((x) => x.role === 'user'), asked = m.messages[at]?.content ?? '', gave = m.messages.slice(at + 1).filter((x) => x.role === 'tool').map((x) => x.content)
+  const here = (fn, does, inputs = {}, missing = []) => ({ call: `${DEVICE}.${HANDLE}/${fn}`, does, where: 'on this computer', inputs, missing })
+  const first = here('memo/recall', 'The first', { k: 'milk' }), second = here('checks/greet', 'The second', { who: 'Ana' })
+  if (!gave.length) link.send({ type: 'step', id: m.id, text: 'Understanding what you asked', depth: 0 })
+  link.send({ type: 'decision', id: m.id, ...(/remember milk/.test(asked) ? [here('memo/remember', 'Keeps a thing under a name', { k: 'milk', v: 'oat milk' }), here('memo/recall', 'What was kept under a name', { k: 'milk' }), { reply: `You kept: ${gave[1]}` }][gave.length]
+    : /go on and on/.test(asked) ? here('memo/recall', 'What was kept under a name', { k: 'milk' })
+    : /spin forever/.test(asked) ? here('checks/forever', 'Spins until it is stopped')
+    : /plan a trip/.test(asked) ? { call: 'trip/plan', does: 'Plans a trip', where: 'on the web', inputs: {}, missing: [] }
+    : /recall something/.test(asked) && !gave.length ? here('memo/recall', 'What was kept under a name', {}, ['k'])
+    : m.mode === 'decision' && !gave.length ? { ...first, choices: [first, second] }
+    : gave.length ? { reply: `you picked: ${gave[0]}` } : { reply: `Onsay heard: ${asked}` }) })
 }
 
 const json = (s, status, body) => s.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body))
@@ -1055,7 +1102,7 @@ const session = (link) => {
     report('library: every lingo loads from the .lingo file the build packed, says what it is, and every function says what it does', library.length >= 9 &&
       library.every((l) => has(l) && about(l)) && !silent.length, silent.length ? `\n    silent: ${silent.join(', ')}` : '')
     report('hello: the lingo client, its version, its device key and its catalog, and nothing else', same(Object.keys(hello), ['type', 'token', 'client', 'version', 'key', 'catalog']) &&
-      hello.client === 'lingo-client' && hello.version === '0.12.0' && /^ed25519:[A-Za-z0-9+/]{43}=$/.test(hello.key) && Array.isArray(hello.catalog))
+      hello.client === 'lingo-client' && hello.version === '0.13.0' && /^ed25519:[A-Za-z0-9+/]{43}=$/.test(hello.key) && Array.isArray(hello.catalog))
     report('catalog: onsay, a native lingo, ready, sharing /onsay alone', native('onsay') && ops('onsay').length === 1 && phrase('onsay', 'onsay.serve') !== undefined)
     for (const [name, test, lingo] of WEB_CASES) {
       if (lingo && !has(lingo)) { skipped++; console.log(`  skip  ${name}: this core has no ${lingo}`); continue }
@@ -1088,8 +1135,7 @@ const session = (link) => {
       }
     } else if (m.type === 'response') waiting.get(m.id)?.(m)
     else if (m.type === 'lingo' && 'id' in m) answer(m, send).then((a) => link.send({ type: 'lingo', id: m.id, ...a }))
-    else if (m.type === 'prompt') prompt(m, link)
-    else if (m.type === 'chosen') chosen(m)
+    else if (m.type === 'decide') decide(m, link)
     else if (m.type === 'applied') applied.push(m)
     else if (m.type === 'log') logged.push(...m.entries)
     else if (m.type === 'catalog') catalog = m.catalog

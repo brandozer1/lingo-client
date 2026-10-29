@@ -313,8 +313,8 @@ may be worked out while the program runs, like a goal an AI chose: `lingo(goal, 
 It is an ordinary call, made when the program reaches that line. The program asks Onsay, waits, gets back only the
 answer, and goes on. Nothing is added to the computer. Every core compiles `lingo(...)` the same way, as the phrase
 `lingo.run`, and asks Onsay over the onsay lingo's connection, exactly as for `use(...)` (section 6), saying which of its functions
-asks, so it never gets itself as the answer, and which request it runs for, so Onsay answers it as part of that request:
-in its mode, with its steps (Onsay's `docs/lingo-function.md`, Two modes).
+asks, so it never gets itself as the answer, and which request it runs for, so Onsay answers it as part of that request,
+under its limits.
 
 There are two ways to reach a function: name it, with a dotted call here or `use(...)` elsewhere, or ask for it in
 words with `lingo(...)` when you don't know which.
@@ -324,13 +324,14 @@ A lingo's own code may call `lingo(...)` too.
 A lingo client with no onsay lingo running asks the web address its settings name as `ask` instead, the same way
 (`core/README.md`, *Settings*). Onsay runs its own library like that.
 
-**A conversation.** A person's message to Onsay is `lingo(words, {prompt: words, messages})`, and a function that takes
-`messages` gets the whole conversation so far: its log in the chat messages OpenAI and OpenRouter take, oldest first,
-ending with what the person just said, `{role: "user", content}`, `{role: "assistant", content, tool_calls: [{id, type:
-"function", function: {name, arguments}}]}` and `{role: "tool", tool_call_id, content}`. Any function may extend it: an
-answer `{text, messages}`, or `{questions, messages}`, is its reply with the chat messages it added this turn, its tool
-calls, their results and its reply, which the onsay lingo keeps in the session for the next message. The `agent` lingo
-works this way, and an agent of anyone's own can too (Onsay's `docs/lingo-function.md`, The conversation).
+**A conversation.** A person's message to Onsay is not a `lingo(...)` line: the onsay lingo works it through as an agent
+loop, Onsay deciding each step and the onsay lingo running each call (`lingos/onsay/README.md`, *The agent loop*). A
+function the loop calls that takes `messages` gets the whole conversation so far: its log in the chat messages OpenAI
+and OpenRouter take, oldest first, `{role: "user", content}`, `{role: "assistant", content, tool_calls: [{id, type:
+"function", function: {name, arguments}}]}` and `{role: "tool", tool_call_id, content}`, each call of the loop a
+`use` with its address and values. An answer with `text` joins the log as that text, and one with `questions` ends the
+message with them. The `agent` lingo works this way, and an agent of anyone's own can too (Onsay's
+`docs/lingo-function.md`, The loop).
 
 ## 8. How a function runs
 

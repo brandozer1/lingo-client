@@ -7,7 +7,7 @@
 //                    and the hooks of native lingos that run
 // 4. Policy          policy.json and the account's: callers, signatures and access, the ceiling, grants, the root, asks
 //                    and the log
-// 5. Stops           stopping the running request
+// 5. Stops           stopping a running request, and those running inside its wait
 // 6. Calls           one function of a lingo, run
 // 7. Lingo settings  setting(...), settings.get and settings.set, kept on this computer, never on Onsay
 // 8. Control         start, stop, the person's answers, settings, manifests, the policy and call, at /.lingo/ and on the
@@ -1050,9 +1050,11 @@ val *lingo_ask(run *r, val *question, double seconds) {
 
 ////////// 5. STOPS //////////
 
-static pl_gate *gate;             // keeps the two below, which core_stop may set from another thread while a request runs
-static volatile int stopping;     // the running request's stop flag
-static char running[128];         // the running request's id, as JSON, so a stop can name it
+// Each request running, the newest on top, one run inside another's wait: its id, as JSON, so a stop can name it, and
+// its stop flag. gate keeps them, since core_stop may set one from another thread while a request runs.
+typedef struct frame { struct frame *up; char id[128]; volatile int stop; } frame;
+static pl_gate *gate;
+static frame *top;
 
 void core_say(const char *fmt_, ...) {
   va_list ap;
@@ -1063,10 +1065,12 @@ void core_say(const char *fmt_, ...) {
   va_end(ap);
 }
 
-// 5. At once, even while the request runs on another thread.
+// 5. At once, even while the request runs on another thread, with every request running inside its wait.
 void core_stop(const char *id) {
   pl_enter(gate);
-  if (!strcmp(id, running)) stopping = 1;
+  frame *hit = top;
+  while (hit && strcmp(hit->id, id)) hit = hit->up;
+  for (frame *f = top; hit && f != hit->up; f = f->up) f->stop = 1;
   pl_leave(gate);
 }
 
@@ -1573,21 +1577,18 @@ void core_serve(const char *text, size_t n, const char *given, buf *out) {
     }
     if (!error.n) {
       // The request is the running job: a stop with its id ends it, and each lingo(...) it asks says which function asks.
-      char was_running[sizeof running];
       const char *code = NULL, *message = NULL;
       double started = pl_now();
       job.fn = call.s;
       job.needs = said_needs(a, manifest_of(lingo), call.s);
+      frame me = { top, "", 0 };
+      snprintf(me.id, sizeof me.id, "%s", id.s);
       pl_enter(gate);
-      int was_stopping = stopping;
-      memcpy(was_running, running, sizeof running);
-      snprintf(running, sizeof running, "%s", id.s);
-      stopping = 0;
+      top = &me;
       pl_leave(gate);
-      got = core_call(a, call.s, values, &stopping, &code, &message);
+      got = core_call(a, call.s, values, &me.stop, &code, &message);
       pl_enter(gate);
-      memcpy(running, was_running, sizeof running);
-      stopping = was_stopping;
+      top = me.up;
       pl_leave(gate);
       say("%s answered in %.0f ms", call.s, (pl_now() - started) * 1000);
       if (!got) status = !strcmp(code, "unknown") ? 404 : !strcmp(code, "denied") ? 403 : 500, buf_str(&error, message), got = NOTHING;

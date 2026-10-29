@@ -219,7 +219,7 @@ What the lingo client offers it back, from any thread:
 | Word | What it does |
 |------|--------------|
 | `lingo_hand(request, n, caller, answered, arg)` | a web request from elsewhere, `{id, method, path, headers, body, base64}`, answered in turn as the port answers one. `caller` is `me` or `ip <address>`, and a signature on it is checked as on the port. `answered` gets `{id, status, headers, body, base64}` |
-| `lingo_stop(id)` | stops the request whose id, as JSON, it is, between two steps or while it waits |
+| `lingo_stop(id)` | stops the request whose id, as JSON, it is, between two steps or while it waits, with every request running inside its wait |
 | `lingo_wait(done, stop, seconds)`, `lingo_done(done)` | waits on the job thread, answering requests meanwhile, until `done` is set from any thread |
 | `lingo_ask(r, question, seconds)` | on the job thread, a question for the person, a record, waited for in `/.lingo/asks` until an app answers it, the run is stopped or `seconds` pass: its answer, `nothing` when none came, or `NULL` when no app is open to ask |
 | `lingo_policy(a, account, device, why)` | keeps the account's policy, with its version, as the one in force, its grants for this computer by `device`. Refused when older than the one kept. Gives the grants the ceiling clamps |
@@ -300,7 +300,7 @@ requests to Onsay names, resolved by the stand-in, the library, the windows ling
 catalog, packing and loading, running and stopped, access by address, range, route, handle and device, signatures
 that check out and those that don't, blocks, the account policy pushed, fetched, kept and refused when older, what the
 ceiling clamped, grants, the ceiling, the root, the person's answers through an app, the decision log and its lines
-sent on, `/onsay` and its sessions, `sent.log`, signing in and out from the command line and from an app, the control
+sent on, `/onsay`, its agent loop (calls run here, the step limit, a stop, Let me choose and a value asked for) and its sessions, `sent.log`, signing in and out from the command line and from an app, the control
 routes, every command, `call` asking `lingo(...)` and `use(...)` of its settings' `ask`, a bare core with no onsay lingo
 on port 6971, and coming back after a dropped connection and a statement that doesn't check out.
 

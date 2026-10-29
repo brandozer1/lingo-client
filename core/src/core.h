@@ -9,7 +9,8 @@
 // 4. core_serve(request, n, caller, out)  -> a web request, {id, method, path, headers, body, base64}, answered by the
 //                                            lingo at its route, {id, status, headers, body, base64} in out. caller is
 //                                            NULL for one to the port, its ip in it, or one lingo_hand was given
-// 5. core_stop(id)                        -> stops the request running now when its id, as JSON, is id. From any thread
+// 5. core_stop(id)                        -> stops the request running whose id, as JSON, is id, with every request
+//                                            running inside its wait. From any thread
 // 6. core_control(a, verb, values, why)   -> start, stop, the settings, the policy and call, for the command line
 // 7. core_pack(folder, to)                -> a folder of a lingo's files made into its .lingo file
 //    core_say(fmt)                        -> a line on stderr, the lingo client's log
@@ -21,7 +22,7 @@
 
 #include "lingo.h"
 
-#define CORE_VERSION "0.12.0"
+#define CORE_VERSION "0.13.0"
 #define CORE_LOOK 5   // seconds between looks at the lingos folder
 
 // Where Onsay is, built in: its API, which the onsay lingo talks to, and its resolve endpoint, the one address the lingo

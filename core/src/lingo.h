@@ -205,7 +205,7 @@ void lingo_hook(const lingo_hooks *hooks);
      lingo_hand     a web request from elsewhere, {id, method, path, headers, body, base64} as JSON, answered in turn as
                     the port answers one, its caller "me", the account's own call, or "ip <address>". answered gets
                     {id, status, headers, body, base64}, on the job thread
-     lingo_stop     stops the request whose id, as JSON, is id
+     lingo_stop     stops the request whose id, as JSON, is id, with every request running inside its wait
      lingo_wait     on the job thread: waits until done or stop is set, or seconds pass, answering requests meanwhile
      lingo_done     sets done, and wakes the job thread's wait
      lingo_ask      on the job thread: a question for the person, a record, waited for in /.lingo/asks until an app
