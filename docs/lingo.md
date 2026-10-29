@@ -712,6 +712,9 @@ Conventions that matter in practice:
 - **Paths:** write them with `/`, as in `"~/notes/today.txt"`, so text never needs escapes. A path may start with `~`
   (home) or `downloads`, `desktop` or `documents`, which are found through Windows even when they've been moved. Any
   other path that doesn't start at a drive starts at the person's home.
+- **Onsay's pointer:** every phrase that clicks, moves, drags, scrolls, presses, types, pastes or fills shows it, with
+  no asking: his arrow glides there and a click ripples, and where he types it is a text cursor that ticks while the
+  keys go in. The Windows app draws it from the lines of JSON the `windows` lingo writes on the lingo client's output.
 - **Places:** `input`'s `click_in`, `move_in`, `drag_in`, `scroll_in` and `position_in` take a place in a window,
   wherever it is now, or on the main screen when the window is `nothing`.
 - **New windows:** a window builds its controls a moment after it appears, so wait for one with `controls.wait_for`

@@ -546,8 +546,9 @@ static void *pattern(IUIAutomationElement *e, PATTERNID id, REFIID iid) {
 }
 
 static void click(run *r, int x, int y, int right, int times);
-static void glide(run *r, int x, int y, double seconds);
+static void glide(run *r, int x, int y, double seconds, int text);
 static void show_press(int right, int times);
+static void typing(run *r, IUIAutomationElement *e);
 static void type_text(run *r, const char *text);
 static void press_keys(run *r, const char *combo);
 
@@ -617,14 +618,21 @@ static int act(IUIAutomationElement *e) {
   return 0;
 }
 
+// The middle of a control on screen, 0 when it has no place there.
+static int middle(IUIAutomationElement *e, POINT *p) {
+  RECT rc = { 0 };
+  IUIAutomationElement_get_CurrentBoundingRectangle(e, &rc);
+  *p = (POINT){ (rc.left + rc.right) / 2, (rc.top + rc.bottom) / 2 };
+  return rc.right > rc.left && rc.bottom > rc.top;
+}
+
 // The hand goes to it and presses it: its own action where it has one, a click in its middle where it doesn't.
 static void press_element(run *r, IUIAutomationElement *e) {
-  RECT rc;
-  IUIAutomationElement_get_CurrentBoundingRectangle(e, &rc);
-  int x = (rc.left + rc.right) / 2, y = (rc.top + rc.bottom) / 2;
-  glide(r, x, y, 0);
+  POINT p;
+  middle(e, &p);
+  glide(r, p.x, p.y, 0, 0);
   if (act(e)) show_press(0, 1);
-  else click(r, x, y, 0, 1);
+  else click(r, p.x, p.y, 0, 1);
 }
 
 static val *ui_press(run *r, val **a) { press_element(r, element(r, a[0])); return NOTHING; }
@@ -632,6 +640,7 @@ static val *ui_press(run *r, val **a) { press_element(r, element(r, a[0])); retu
 static val *ui_fill(run *r, val **a) {
   IUIAutomationElement *e = element(r, a[0]);
   const char *text = str(r, a[1]);
+  typing(r, e);
   IUIAutomationValuePattern *v = pattern(e, UIA_ValuePatternId, &IID_IUIAutomationValuePattern);
   BOOL locked = TRUE;
   if (v) IUIAutomationValuePattern_get_CurrentIsReadOnly(v, &locked);
@@ -651,8 +660,12 @@ static val *ui_fill(run *r, val **a) {
 }
 
 static val *ui_toggle(run *r, val **a) {
-  IUIAutomationTogglePattern *t = pattern(element(r, a[0]), UIA_TogglePatternId, &IID_IUIAutomationTogglePattern);
+  IUIAutomationElement *e = element(r, a[0]);
+  IUIAutomationTogglePattern *t = pattern(e, UIA_TogglePatternId, &IID_IUIAutomationTogglePattern);
   if (!t) fail(r, "phrase", "that control can't toggle");
+  POINT p;
+  if (middle(e, &p)) glide(r, p.x, p.y, 0, 0);
+  show_press(0, 1);
   IUIAutomationTogglePattern_Toggle(t);
   IUIAutomationTogglePattern_Release(t);
   return NOTHING;
@@ -701,8 +714,11 @@ static val *ui_choose(run *r, val **a) {
 }
 
 static val *ui_scroll(run *r, val **a) {
-  IUIAutomationScrollPattern *s = pattern(element(r, a[0]), UIA_ScrollPatternId, &IID_IUIAutomationScrollPattern);
+  IUIAutomationElement *e = element(r, a[0]);
+  IUIAutomationScrollPattern *s = pattern(e, UIA_ScrollPatternId, &IID_IUIAutomationScrollPattern);
   if (!s) fail(r, "phrase", "that control can't scroll");
+  POINT p;
+  if (middle(e, &p)) glide(r, p.x, p.y, 0, 0);
   int amount = (int)num_of(r, a[1], NULL);
   for (int i = 0; i < abs(amount) * 3; i++) IUIAutomationScrollPattern_Scroll(s, ScrollAmount_NoAmount, amount > 0 ? ScrollAmount_SmallDecrement : ScrollAmount_SmallIncrement);
   IUIAutomationScrollPattern_Release(s);
@@ -897,14 +913,21 @@ static void show_press(int right, int times) {
   show(&b);
 }
 
+// Typing now, for the text cursor to tick. Sent again every moment it goes on.
+static void show_type(void) {
+  buf b = { 0 };
+  buf_str(&b, "{\"show\":\"type\"}");
+  show(&b);
+}
+
 static void wait_ms(run *r, double ms) {
   if (*r->stop) fail(r, "stopped", "Stopped by the person");
   Sleep((DWORD)(ms > 0 ? ms : 0));
 }
 
-// To x, y over seconds, or at a hand's pace (90 ms + 0.18 ms a pixel) when 0. A random bend makes a curve the app draws
-// from the same numbers. Starts at the real mouse the first time, and always in real mode.
-static void glide(run *r, int x, int y, double seconds) {
+// To x, y over seconds, or at a hand's pace (90 ms + 0.18 ms a pixel) when 0, as a text cursor when text. A random bend
+// makes a curve the app draws from the same numbers. Starts at the real mouse the first time, and always in real mode.
+static void glide(run *r, int x, int y, double seconds, int text) {
   if (real_mode || !hand_known) {
     POINT p;
     GetCursorPos(&p);
@@ -916,8 +939,8 @@ static void glide(run *r, int x, int y, double seconds) {
   double bend = span < 1 ? 0 : (rand() / (double)RAND_MAX * 2 - 1) * 0.1 * span, one = span > 1 ? span : 1;
   double cx = fx + dx / 2 - dy / one * bend, cy = fy + dy / 2 + dx / one * bend;
   buf b = { 0 };
-  buf_fmt(&b, "{\"show\":\"glide\",\"from\":[%d,%d],\"to\":[%d,%d],\"ms\":%d,\"bend\":%.2f,\"real\":%s}", fx, fy, x, y, (int)ms, bend,
-          real_mode ? "true" : "false");
+  buf_fmt(&b, "{\"show\":\"glide\",\"from\":[%d,%d],\"to\":[%d,%d],\"ms\":%d,\"bend\":%.2f,\"real\":%s,\"text\":%s}", fx, fy, x, y, (int)ms,
+          bend, real_mode ? "true" : "false", text ? "true" : "false");
   show(&b);
   hand_x = x, hand_y = y;
   // Steps follow the clock, not the sleeps, so the real mouse stays in step with the drawn arrow.
@@ -979,7 +1002,7 @@ static void virtual_click(run *r, int x, int y, int right, int times) {
 }
 
 static void click(run *r, int x, int y, int right, int times) {
-  glide(r, x, y, 0);
+  glide(r, x, y, 0, 0);
   show_press(right, times);
   if (!real_mode) { virtual_click(r, x, y, right, times); return; }
   wait_ms(r, 30);
@@ -994,18 +1017,18 @@ static int at(run *r, val *v) { return (int)num_of(r, v, NULL); }
 
 // Held down at the start, carried to the end and let go. Virtually, the window under the start gets it all as messages.
 static void drag(run *r, int x1, int y1, int x2, int y2) {
-  glide(r, x1, y1, 0);
+  glide(r, x1, y1, 0, 0);
   show_press(0, 0);
   if (real_mode) {
     mouse(MOUSEEVENTF_LEFTDOWN, 0);
-    glide(r, x2, y2, 0);
+    glide(r, x2, y2, 0, 0);
     mouse(MOUSEEVENTF_LEFTUP, 0);
     return;
   }
   LPARAM inside;
   HWND h = window_at(r, x1, y1, &inside);
   PostMessageW(h, WM_LBUTTONDOWN, MK_LBUTTON, inside);
-  glide(r, x2, y2, 0);
+  glide(r, x2, y2, 0, 0);
   for (int i = 1; i <= 10; i++) {
     POINT p = { x1 + (x2 - x1) * i / 10, y1 + (y2 - y1) * i / 10 };
     ScreenToClient(h, &p);
@@ -1018,7 +1041,7 @@ static void drag(run *r, int x1, int y1, int x2, int y2) {
 
 
 static void wheel(run *r, int x, int y, int amount) {
-  glide(r, x, y, 0);
+  glide(r, x, y, 0, 0);
   if (real_mode) { mouse(MOUSEEVENTF_WHEEL, (DWORD)(amount * WHEEL_DELTA)); return; }
   LPARAM inside;
   HWND h = window_at(r, x, y, &inside);
@@ -1077,10 +1100,35 @@ static val *panel_hide(run *r, val **a) {
   return NOTHING;
 }
 
+// The pointer turns into a text cursor where the keys go: the middle of e when given, else Windows' caret in the front
+// window, else the middle of the control with the keyboard, else where it is. Typing keeps it ticking (show_type).
+static void typing(run *r, IUIAutomationElement *e) {
+  POINT p;
+  GUITHREADINFO g = { .cbSize = sizeof g };
+  int found = e && middle(e, &p);
+  if (!found && GetGUIThreadInfo(GetWindowThreadProcessId(GetForegroundWindow(), NULL), &g) && g.hwndCaret) {
+    p = (POINT){ g.rcCaret.left, (g.rcCaret.top + g.rcCaret.bottom) / 2 };
+    found = ClientToScreen(g.hwndCaret, &p);
+  }
+  if (!found) {
+    IUIAutomationElement *focused = NULL;
+    uia_start(r);
+    found = SUCCEEDED(IUIAutomation_GetFocusedElement(uia, &focused)) && focused && middle(focused, &p);
+    if (focused) IUIAutomationElement_Release(focused);
+  }
+  if (!found && hand_known) p = (POINT){ hand_x, hand_y };
+  else if (!found) GetCursorPos(&p);
+  glide(r, p.x, p.y, 0, 1);
+  show_type();
+}
+
 // Each character as Unicode input. A new line is Enter, because apps listen for the key, not the character.
 static void type_text(run *r, const char *text) {
+  typing(r, NULL);
   wchar_t *w = win_wide(text);
+  double ticked = pl_now();
   for (wchar_t *c = w; *c; c++) {
+    if (pl_now() - ticked > 0.3) show_type(), ticked = pl_now();
     if (*c == L'\r') continue;
     if (*c == L'\n') { key(VK_RETURN, 0); key(VK_RETURN, 1); }
     else {
@@ -1459,6 +1507,7 @@ static val *input_type_into(run *r, val **a) {
 static val *input_paste(run *r, val **a) {
   val *was = clip_get(r, a);
   clip_set(r, a);
+  typing(r, NULL);
   press_keys(r, "ctrl+v");
   nap(r, 0.2);
   clip_set(r, &was);
@@ -1580,7 +1629,7 @@ static val *input_click_in(run *r, val **a) {
 
 static val *input_move_in(run *r, val **a) {
   POINT p = place(r, ready(r, a[0]), a[1], a[2]);
-  glide(r, p.x, p.y, num_or(a[3], 0));
+  glide(r, p.x, p.y, num_or(a[3], 0), 0);
   return point_val(r, p);
 }
 
