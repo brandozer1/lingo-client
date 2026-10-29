@@ -252,6 +252,11 @@ const CASES = [
   { name: 'http: a timeout', path: '/checks/http_slow', values: { base: HTTP }, check: fails(500, /http\.send: /) },
   { name: 'http: nothing at that address', path: '/checks/http_nowhere', check: (r) => r.status === 200 && /^http\.send: /.test(r.json) },
   { name: 'request: a GET with a query, tried again after a 503', path: '/checks/request_busy', values: { base: HTTP }, check: gives([200, true, { tries: 3 }]) },
+  { name: 'names: an Onsay name, with https:// or without, is sent where Onsay resolves it, what followed it after', path: '/checks/http_get', values: { base: 'https://pages.tester' }, check: gives([200, 'yes', 'hello ?x=1']) },
+  { name: 'names: a POST to an Onsay name', path: '/checks/http_post', values: { base: 'Pages.tester' }, check: gives([201, { method: 'POST', name: 'Ada', type: 'text/plain', body: 'héllo' }]) },
+  { name: 'names: an Onsay name with nowhere to go says so', path: '/checks/http_nowhere', values: { address: 'nobody.tester/x' }, check: (r) => r.status === 200 && /^http.send: There's no computer or route called nobody.tester$/.test(r.json) },
+  { name: 'names: a name on the web is never asked of Onsay, https:// left off', path: '/checks/http_nowhere', values: { address: 'nowhere.invalid-but.com/x' }, check: (r) => r.status === 200 && /^http.send: /.test(r.json) && !resolved.includes('nowhere.invalid-but.com') },
+  { name: 'names: the request lingo reaches an Onsay name', path: '/checks/request_busy', values: { base: 'pages.tester' }, check: gives([200, true, { tries: 4 }]) },
   // text, list, math and time, from ../lingo-library, written in Lingo on the core's floor.
   { path: '/checks/texts_library', check: gives(['HÉLLO, WÖRLD', 'héllo, wörld', ['Héllo', 'wörld'], 'a-b', 'HéLLo, wörLd', true, 'cba', 'x', ['a', 'b', 'c'], ['a', 'b'], '1x', 'x y']) },
   { path: '/checks/cases', check: gives(['ÇA VA, ØRE, ŁÓDŹ, Ÿ Ÿ, ΑΛΦΑ, ПРИВЕТ, ЁЁ', 'ça va, øre, łódź, ÿ ÿ, αλφα, привет, ёё', ['a', 'b', ''], 'bbbbbb', '', '[1];{"a":2}']) },
@@ -440,6 +445,11 @@ const WEB_CASES = [
     command('share', 'memo', 'james')
     const after = await ask()
     return before.status === 404 && after.status === 200 && after.json === '2 litres' && decisions().some((d) => d.caller === 'phone.james' && d.why === 'rule: james')
+  }],
+  ['signed: a request sent to an Onsay name through the proxy, signed over the address it was sent to, checks out as the proxy passes it on', async (send) => {
+    const at = '/proxy/laptop.tester/memo/recall?k=milk'
+    const r = await send('/memo/recall?k=milk', undefined, { as: undefined, headers: signedBy('laptop', 'laptop.tester', 'GET', at, '', { 'x-forwarded-uri': at }) })
+    return r.status === 200 && r.json === '2 litres'
   }],
   ["signed: a signature that doesn't check out, a nonce used twice, a body changed, and a key whose statement doesn't check out, are each a 401", async (send) => {
     const headers = signedBy('laptop', 'laptop.tester', 'GET', '/memo/recall?k=milk')
@@ -819,7 +829,8 @@ const prompt = (m, link) => {
 const json = (s, status, body) => s.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body))
 // Onsay's API: signing in, as Onsay does it, a code to show, then the token once the person pressed Connect, here at
 // once, or turned down for a computer called refused; the account's policy, signed; its computers; and names resolved,
-// each device with its key and Onsay's statement on it.
+// each device with its key and Onsay's statement on it, and pages.tester, whose web address is the pages for http.send.
+const resolved = []   // every name the lingo client asked /resolve about
 const API = {
   'POST /connect': (q, s, body) => { named = JSON.parse(body).name; json(s, 201, { url: 'http://127.0.0.1:8787/connect', code: 'TEST-CODE', poll: 'p1' }) },
   'POST /connect/poll': (q, s) => json(s, 200, named === 'refused' ? { status: 'error', error: 'The code was turned down' }
@@ -835,6 +846,8 @@ const API = {
   'POST /ask': (q, s, body) => answer(JSON.parse(body)).then((a) => json(s, 200, a)),
   'GET /resolve': (q, s) => {
     const name = q.url.split('/').pop(), [device, handle] = name.split('.'), key = DEVICES[device]
+    resolved.push(name)
+    if (name === 'pages.tester') return json(s, 200, { name, kind: 'address', target: HTTP, address: HTTP })
     if (!key || !handle) return json(s, 404, { error: `There's no computer or route called ${name}` })
     const card = { name: device, key: publicOf(key), added: ADDED }
     json(s, 200, { name, kind: 'computer', online: true, devices: [{ ...card, statement: sign({ ...card, device, handle, name: undefined }, device === 'tablet' ? DEVICES.tablet : ONSAY) }] })
@@ -924,7 +937,7 @@ const session = (link) => {
     report('library: every lingo loads from the .lingo file the build packed, says what it is, and every function says what it does', library.length >= 9 &&
       library.every((l) => has(l) && about(l)) && !silent.length, silent.length ? `\n    silent: ${silent.join(', ')}` : '')
     report('hello: the lingo client, its version, its device key and its catalog, and nothing else', same(Object.keys(hello), ['type', 'token', 'client', 'version', 'key', 'catalog']) &&
-      hello.client === 'lingo-client' && hello.version === '0.9.1' && /^ed25519:[A-Za-z0-9+/]{43}=$/.test(hello.key) && Array.isArray(hello.catalog))
+      hello.client === 'lingo-client' && hello.version === '0.10.0' && /^ed25519:[A-Za-z0-9+/]{43}=$/.test(hello.key) && Array.isArray(hello.catalog))
     report('catalog: onsay, a native lingo, ready, sharing /onsay alone', native('onsay') && ops('onsay').length === 1 && phrase('onsay', 'onsay.serve') !== undefined)
     for (const [name, test, lingo] of WEB_CASES) {
       if (lingo && !has(lingo)) { skipped++; console.log(`  skip  ${name}: this core has no ${lingo}`); continue }

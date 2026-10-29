@@ -21,6 +21,7 @@
 // request's stop is kept behind one gate.
 #include "core.h"
 #include "platform.h"
+#include "tlds.h"   // TLDS, the web's top level domains as one text, " aaa aarp ... ", made by build.ps1 from tlds.txt
 #include <ctype.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -216,10 +217,39 @@ static val *keys(run *r, val **a) {
   return l.out;
 }
 
+/* A web address as a lingo wrote it, made the one to send, by the one rule every Onsay repo keeps (onsay's
+   server/lib/names.js web): a host is on the web when it is an IP, localhost, or a name with a dot ending in one of the
+   web's top level domains, like example.com, and is itself, http:// or https:// left off when it likes, http for an IP.
+   Any other, like laptop.brandon, is an Onsay name: Onsay's resolve endpoint (ONSAY and RESOLVE, core.h) gives its web
+   address, and what followed the name goes on after it. NULL, with why, when it has none. */
+static const char *reached(arena *a, const char *url, buf *why) {
+  size_t s = strspn(url, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+.-"), n, dots = 0, digits = 1;
+  const char *rest = s && !strncmp(url + s, "://", 3) ? url + s + 3 : url;
+  char host[256], word[80];
+  if ((n = strcspn(rest, "/?#")) >= sizeof host || !n) return url;
+  for (size_t i = 0; i <= n; i++) host[i] = i < n ? (char)tolower((unsigned char)rest[i]) : 0;
+  char *port = strrchr(host, ':'), *last = strrchr(host, '.');
+  if (port && host[0] != '[' && strspn(port + 1, "0123456789") == strlen(port + 1)) *port = 0;
+  for (const char *c = host; *c; c++) if (*c == '.') dots++; else if (!isdigit((unsigned char)*c)) digits = 0;
+  int ip = host[0] == '[' || !strcmp(host, "localhost") || (digits && dots == 3);
+  snprintf(word, sizeof word, " %s ", last ? last + 1 : "");
+  if (ip || (last && strlen(last) < 70 && strstr(TLDS, word))) return rest != url ? url : fmt(a, "%s://%s", ip ? "http" : "https", url);
+  buf at = { 0 };
+  buf_fmt(&at, "%s%s%s", ONSAY, RESOLVE, host);
+  val *got = pl_http(a, "GET", at.s, v_rec(a), "", 0, 30, why), *text = rec_get(got, "text");
+  val *said = text && text->k == V_TEXT ? json_parse(a, text->t.s, text->t.len, NULL) : NULL;
+  const char *address = said && said->k == V_REC ? text_or(said, "address", NULL) : NULL;
+  buf_free(&at);
+  if (!address && got) buf_fmt(why, "%s", said && said->k == V_REC ? text_or(said, "error", "") : "");
+  if (!address && got && !why->n) buf_fmt(why, "%s has nowhere to send a request yet", host);
+  return address ? fmt(a, "%s%s", address, rest + n) : NULL;
+}
+
 // http.send: one web request, made by the computer itself (pl_http), its method a word and each header one whole line.
 static val *send_(run *r, val **a) {
   buf method = { 0 }, url = { 0 }, body = { 0 }, why = { 0 };
   val *headers = v_rec(r->a), *got = NULL;
+  const char *to;
   buf_text(&method, a[0]), buf_text(&url, a[1]), buf_text(&body, a[3]);
   buf_chr(&method, 0), buf_chr(&url, 0);   // so neither is ever empty of bytes
   for (size_t i = 0; method.s[i]; i++) if (method.s[i] >= 'a' && method.s[i] <= 'z') method.s[i] -= 32;
@@ -231,7 +261,7 @@ static val *send_(run *r, val **a) {
     else rec_set(r->a, headers, a[2]->r.key[i], value);
   }
   double seconds = a[4]->k == V_NUM && a[4]->n > 0 && a[4]->n < 3600 ? a[4]->n : 30;
-  if (!why.n) got = pl_http(r->a, method.s, url.s, headers, body.s ? body.s : "", body.n, seconds, &why);
+  if (!why.n && (to = reached(r->a, url.s, &why))) got = pl_http(r->a, method.s, to, headers, body.s ? body.s : "", body.n, seconds, &why);
   val *problem = v_text(r->a, why.s ? why.s : "", why.n);
   buf_free(&method), buf_free(&url), buf_free(&body), buf_free(&why);
   if (!got) fail(r, "phrase", "%s", problem->t.s);
@@ -250,7 +280,7 @@ static val *asked(run *r, buf *in) {
   else if (at) {
     val *headers = v_rec(r->a);
     rec_set(r->a, headers, "content-type", v_cstr(r->a, "application/json"));
-    if ((answer = pl_http(r->a, "POST", at, headers, in->s, in->n, set.ms / 1000, &why)) && (text = rec_get(answer, "text")) && text->k == V_TEXT)
+    if ((at = reached(r->a, at, &why)) && (answer = pl_http(r->a, "POST", at, headers, in->s, in->n, set.ms / 1000, &why)) && (text = rec_get(answer, "text")) && text->k == V_TEXT)
       got = json_parse(r->a, text->t.s, text->t.len, NULL);
   }
   const char *problem = why.n ? v_text(r->a, why.s, why.n)->t.s : "This lingo client isn't connected to Onsay";

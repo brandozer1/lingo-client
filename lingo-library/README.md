@@ -14,7 +14,7 @@ and when it has settings, its `openapi.json`. The first lines of each file list 
 | `encode` | base64, web address parts as %XX, HTML entities and hex, on UTF-8 bytes | `text`, `math` |
 | `url` | web addresses taken apart and built again, paths joined, and queries to and from records | `encode`, `text` |
 | `time` | dates and times: reading ISO text, formatting, adding, the time between, how long ago, days, and now in words | `text`, `math` |
-| `request` | web requests with headers, a query, a body, a timeout and tries again, on `http.send` | `url`, `json`, `text` |
+| `request` | web requests, to a web address or an Onsay name, with headers, a query, a body, a timeout and tries again, on `http.send` | `url`, `json`, `text` |
 | `agent` | the library's AI, on the person's own key for Claude, ChatGPT, OpenRouter or any service that answers the way OpenAI does: `ask`, an agent that talks with the person and uses any lingo on the way, and `answer`, one answer for a program | |
 | `writer` | writes a new lingo from a plain description, or changes one, reviewed and fixed by a second look | `agent`, `json`, `text` |
 

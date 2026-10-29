@@ -2,7 +2,7 @@
 
 The lingo client in C: a small program that runs lingos, built for Windows and Linux. It runs the lingos in its
 computer's lingos folder and answers on its port, 6969, each running lingo at its own route, for whoever its policy lets
-in: this computer always, anyone else only by an access rule. Bare, it knows nothing beyond its port. A native lingo can
+in: this computer always, anyone else only by an access rule. Bare, it knows nothing beyond its port, and where Onsay says where an Onsay name goes (*Names*). A native lingo can
 connect it to more through its hooks (*Hooks*): the onsay lingo (`../lingos/onsay`) connects it to Onsay, so Onsay and
 the person's other devices can reach its lingos, and its lingos can ask Onsay with `lingo(...)` and `use(...)`. It has no
 screen of its own: the Windows app (onsay-desktop) ships `bin/onsay-core.exe` and `bin/lingos`, and on a Linux server
@@ -30,7 +30,7 @@ One JSON file, given as the first argument.
 | `lingos` | the lingos folder, `home/lingos` when left out |
 | `port` | where it answers, 6969 when left out: on 127.0.0.1 alone, so the firewall never asks, until a rule written in the policy lets in `public` or an `ip`, then on every address the computer has, opened again within 5 seconds of a change |
 | `steps`, `ms` | the most one request may take, in steps and milliseconds |
-| `ask` | a web address that answers `lingo(...)` and `use(...)` when no running native lingo does, at the command line too: each is POSTed there as JSON, as the `ask` hook is given it, and answered the same way (*Hooks*). Left out, they fail. Onsay runs its own library this way |
+| `ask` | a web address or an Onsay name (*Names*) that answers `lingo(...)` and `use(...)` when no running native lingo does, at the command line too: each is POSTed there as JSON, as the `ask` hook is given it, and answered the same way (*Hooks*). Left out, they fail. Onsay runs its own library this way |
 
 What it keeps in `home`:
 
@@ -164,6 +164,18 @@ answers what the command line prints, or `{error}` with a 400.
 | `/.lingo/grant`, `/.lingo/ungrant`, `/.lingo/ceiling` | `lingo` and `need`; `needs`, a list | the policy in force |
 | `/.lingo/call` | `fn`, and `values`, a list | the function's value |
 
+## Names
+
+Every web address the lingo client is given, to `http.send`, so to `request`, and as the `ask` setting, may name a host
+on the web or an Onsay name, told apart by the one rule every Onsay program keeps: a host is on the web when it is an
+IP, `localhost`, or a name with a dot ending in one of the web's top level domains (`src/tlds.txt`), like
+`example.com`. Any other, like `laptop.brandon` or `brandon`, is an Onsay name, and the lingo client asks Onsay's
+resolve endpoint, `https://api.onsay.dev/resolve/<name>` (`ONSAY` and `RESOLVE` in `src/core.h`, the only place it
+is written), for its web address, then sends the request there, what followed the name after it. Today that is the free
+proxy, `https://api.onsay.dev/proxy/laptop.brandon`. `http://` or `https://` may be left off, `https` for a name and
+`http` for an IP. A signed request is signed over the address it is sent to, so it checks out as the proxy passes it
+on (`x-forwarded-uri`, *Who may do what*).
+
 ## Requests
 
 Each running lingo answers at its route: `/<name>`, or the `route` its `openapi.json`'s `x-lingo` names. A request
@@ -248,7 +260,8 @@ the lingo's own functions when its `openapi.json`'s `x-lingo` says `keep` (`../d
 | `src/run.c` | the runner, and its step, time and memory limits |
 | `src/phrase.c` | the table of phrases this computer has |
 | `src/std.c` | the core lingo's `std` group: reaching inside values and converting them |
-| `src/core.h`, `src/core.c` | the engine: settings, the floor phrases `compute`, `store`, `http` and `settings`, `lingo(...)` and `use(...)` asked of a native lingo, `.lingo` files and folders, their manifests, running and stopped, the catalog and the hooks, the policy, callers, signatures and every check, the control verbs, this computer's keys, stops, requests answered at their routes, and pack |
+| `src/core.h`, `src/core.c` | the engine: where Onsay is, settings, the floor phrases `compute`, `store`, `http` and `settings`, Onsay names resolved, `lingo(...)` and `use(...)` asked of a native lingo, `.lingo` files and folders, their manifests, running and stopped, the catalog and the hooks, the policy, callers, signatures and every check, the control verbs, this computer's keys, stops, requests answered at their routes, and pack |
+| `src/tlds.txt` | the web's top level domains, IANA's list, the same file Onsay keeps, made into `obj/tlds.h` by `build.ps1` for telling a name on the web from an Onsay name (*Names*) |
 | `src/sign.c` | SHA-256, base64, and Ed25519 on Monocypher |
 | `src/monocypher.c`, `src/monocypher-ed25519.c` and their `.h` | Ed25519, by Loup Vaillant and others, as it comes (`../NOTICE`) |
 | `src/zip.c` | a file read out of a `.lingo` file, stored or deflated, and one made |
@@ -281,8 +294,8 @@ test key. The test core's home is `test/data`, made fresh each run, with a lingo
 broken one made by the stand-in, all running under a policy it writes, the onsay lingo signed in. Every case is a
 request, down the onsay lingo's connection, signed by Onsay as the account's own or passed on from an address or a
 signed device, or to its port, 6970, or a command: the language and the core's phrases (`test/lingos/checks/checks.ls`),
-limits and stops, settings, `lingo(...)` and `use(...)` asked of the stand-in while it reaches this computer, the
-library, the windows lingo for real (`test/lingos/desk/desk.ls`), which may read the screen but never act on it, the
+limits and stops, settings, `lingo(...)` and `use(...)` asked of the stand-in while it reaches this computer, web
+requests to Onsay names, resolved by the stand-in, the library, the windows lingo for real (`test/lingos/desk/desk.ls`), which may read the screen but never act on it, the
 catalog, packing and loading, running and stopped, access by address, range, route, handle and device, signatures
 that check out and those that don't, blocks, the account policy pushed, fetched, kept and refused when older, what the
 ceiling clamped, grants, the ceiling, the root, the person's answers through an app, the decision log and its lines

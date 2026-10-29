@@ -8,7 +8,7 @@
 #   bin/linux-x64/onsay-core    the lingo client for Linux, and bin/linux-arm64/onsay-core. glibc 2.28 or later, and
 #                               libcurl, which it loads as it starts, so it builds here with nothing of Linux's installed.
 #                               Beside each, lingos/onsay.lingo, the onsay lingo for Linux
-# What is only made on the way, like win64.o and the native lingos' folders before they are packed, goes in obj/.
+# What is only made on the way, like win64.o, tlds.h and the native lingos' folders before they are packed, goes in obj/.
 $zig = (Get-Command zig -ErrorAction SilentlyContinue).Source
 if (-not $zig) { $zig = Get-ChildItem "$env:LOCALAPPDATA\zig" -Recurse -Filter zig.exe -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName }
 if (-not $zig) { Write-Error "zig wasn't found. Get it from ziglang.org/download"; exit 1 }
@@ -18,7 +18,11 @@ Remove-Item -Recurse -Force "$here/bin/lingos", "$here/bin/test/lingos", "$here/
 New-Item -ItemType Directory -Force "$here/bin/test/lingos", "$here/bin/lingos", "$here/obj/lingos/windows", "$here/obj/lingos/native", "$here/obj/lingos/onsay", "$here/obj/test/onsay" | Out-Null
 function src($names) { $names | ForEach-Object { "$here/src/$_.c" } }
 function build($what) { & $zig cc @flags @what | Out-Host; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }
-$flags = "-std=c11", "-O2", "-Wall", "-Wextra", "-Wno-unused-parameter"
+# The web's top level domains (src/tlds.txt, IANA's list, the same file Onsay keeps) as one C text, " aaa aarp ... ", for
+# core.c's rule telling a name on the web from an Onsay name.
+$tlds = Get-Content "$here/src/tlds.txt" | Where-Object { $_ -and -not $_.StartsWith("#") } | ForEach-Object { $_.ToLower() }
+Set-Content "$here/obj/tlds.h" "#define TLDS `" $($tlds -join ' ') `""
+$flags = "-std=c11", "-O2", "-Wall", "-Wextra", "-Wno-unused-parameter", "-I$here/obj"
 $win = "-target", "x86_64-windows-gnu"
 
 $both = "value", "run", "phrase", "std", "compile", "zip", "puff", "sign", "monocypher", "monocypher-ed25519", "core", "host"

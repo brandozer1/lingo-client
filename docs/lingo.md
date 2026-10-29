@@ -669,6 +669,15 @@ back, and fails when it takes longer than its timeout. Windows makes it with Win
 and certificates work as they do for every other program. Most lingos use `request` (`lingo-library/request/request.ls`),
 built on it, or `use(...)` for one plain request.
 
+**Onsay names work wherever web addresses do.** A web address given to `http.send`, so to `request`, may name a host on
+the web or an Onsay name, told apart by one rule every Onsay program keeps: a host is on the web when it is an IP,
+`localhost`, or a name with a dot ending in one of the web's top level domains (IANA's list), like `example.com`. Any
+other, like `laptop.brandon` or `brandon`, is an Onsay name: the lingo client asks Onsay where it goes, at
+`https://api.onsay.dev/resolve/laptop.brandon`, and sends the request to the web address it gives, what followed the
+name after it. So `request.get("laptop.brandon/weather/now")` reaches that computer's `weather` lingo through the free
+proxy, as anyone on the web would, when it is open to them. `http://` or `https://` may be left off. A name with nowhere to go fails with why:
+`There's no computer or route called nobody.brandon`. `use(...)` reads both kinds the same way, through Onsay.
+
 Everything else is a library lingo in the same lingos folder, called by its dotted name: `text` (`split`, `join`,
 `replace`, `trim`, `lower`, `upper` and more), `list` (`sort`, `reverse`), `math` (`round` to the nearest, up or down,
 `min`, `max`), `time` (dates, like `time.difference(a, b, "days")`) and the rest of `lingo-library/`. Whether text

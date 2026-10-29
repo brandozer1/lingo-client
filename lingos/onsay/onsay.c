@@ -21,17 +21,16 @@
 
 ////////// 1. ONSAY //////////
 
-// Where Onsay is, built in, never a setting, and its public key, as /.well-known/onsay-key gives it: every statement,
-// request and policy Onsay signs is checked against it, never against a key only told over the wire. The release key is
-// set here when Onsay's is fixed; until then a release trusts nothing Onsay signs. The test build talks to
-// core/test/server.mjs, which signs with the test key.
+// Where Onsay is, built in, never a setting: its live connection here, and its API and resolve endpoint in core.h (ONSAY
+// and RESOLVE). And its public key, as /.well-known/onsay-key gives it: every statement, request and policy Onsay signs
+// is checked against it, never against a key only told over the wire. The release key is set here when Onsay's is
+// fixed; until then a release trusts nothing Onsay signs. The test build talks to core/test/server.mjs, which signs with
+// the test key.
 #ifdef TEST
 #define LIVE "ws://127.0.0.1:8787/live"
-#define API "http://127.0.0.1:8787"
 #define ONSAY_KEY "ed25519:6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw="
 #else
 #define LIVE "wss://api.onsay.dev/live"
-#define API "https://api.onsay.dev"
 #define ONSAY_KEY "ed25519:JAyqe6gpH0e2k51yjygP66uAo92x0ebK8q3w+y/B4Tw="
 #endif
 #define BEAT 20       // seconds between pings
@@ -146,7 +145,7 @@ static val *api(arena *a, const char *method, const char *path, const char *body
     rec_set(a, headers, "authorization", v_text(a, bearer.s, bearer.n));
     buf_free(&bearer);
   }
-  buf_fmt(&url, "%s%s", API, path);
+  buf_fmt(&url, "%s%s", ONSAY, path);
   val *got = pl_http(a, method, url.s, headers, body ? body : "", body ? strlen(body) : 0, 30, error), *text = rec_get(got, "text");
   buf_free(&url);
   if (got) {
@@ -405,7 +404,7 @@ static val *key(arena *a, const char *keyid) {
   if (k == 32) {
     buf path = { 0 }, error = { 0 };
     double status = 0;
-    buf_fmt(&path, "/resolve/%s", keyid);
+    buf_fmt(&path, RESOLVE "%s", keyid);
     val *said = api(a, "GET", path.s, NULL, &status, &error), *devices = rec_get(said, "devices");
     for (size_t i = 0; status == 200 && devices && devices->k == V_LIST && i < devices->l.n && k == 32; i++) {
       val *d = devices->l.v[i], *statement = v_rec(a);

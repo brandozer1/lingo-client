@@ -21,8 +21,17 @@
 
 #include "lingo.h"
 
-#define CORE_VERSION "0.9.1"
+#define CORE_VERSION "0.10.0"
 #define CORE_LOOK 5   // seconds between looks at the lingos folder
+
+// Where Onsay is, built in: its API, which the onsay lingo talks to, and its resolve endpoint, the one address the lingo
+// client asks where an Onsay name goes (../../docs/lingo.md, section 15). The test build asks test/server.mjs.
+#ifdef TEST
+#define ONSAY "http://127.0.0.1:8787"
+#else
+#define ONSAY "https://api.onsay.dev"
+#endif
+#define RESOLVE "/resolve/"   // on ONSAY, then the name
 
 typedef struct {
   val *all;                           // the whole file, as read

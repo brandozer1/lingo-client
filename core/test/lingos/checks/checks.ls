@@ -225,9 +225,9 @@ fn http_moved(base) {return http.send("GET", base + "/moved").text}
 // http.send ends on time.
 fn http_slow(base) {http.send("GET", base + "/slow", nothing, nothing, 1)}
 
-// http.send where nothing answers.
-fn http_nowhere() {
-  try {http.send("GET", "http://127.0.0.1:1/")} catch e {return e}
+// http.send where nothing answers, or to a name with nowhere to send it.
+fn http_nowhere(address="http://127.0.0.1:1/") {
+  try {http.send("GET", address)} catch e {return e}
 }
 
 // request tries again after a 503.
