@@ -22,18 +22,10 @@
 
 ////////// 1. ONSAY //////////
 
-// Where Onsay is, built in, never a setting: its live connection here, and its API and resolve endpoint in core.h (ONSAY
-// and RESOLVE). And its public key, as /.well-known/onsay-key gives it: every statement, request and policy Onsay signs
-// is checked against it, never against a key only told over the wire. The release key is set here when Onsay's is
-// fixed; until then a release trusts nothing Onsay signs. The test build talks to core/test/server.mjs, which signs with
-// the test key.
-#ifdef TEST
-#define LIVE "ws://127.0.0.1:8787/live"
-#define ONSAY_KEY "ed25519:6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw="
-#else
-#define LIVE "wss://api.onsay.dev/live"
-#define ONSAY_KEY "ed25519:JAyqe6gpH0e2k51yjygP66uAo92x0ebK8q3w+y/B4Tw="
-#endif
+// Where Onsay is, built in, never a setting: its API, its resolve endpoint and its public key, in core.h (ONSAY, RESOLVE
+// and ONSAY_KEY). Every statement, request and policy Onsay signs is checked against that
+// key, never against a key only told over the wire. Its live connection is its API's address with ws for http, like
+// wss://api.onsay.dev/live.
 #define BEAT 20       // seconds between pings
 #define SILENT 60     // seconds without a word before the link is taken as dead
 #define FRESH 300     // seconds a signature, or a key looked up, holds
@@ -339,7 +331,10 @@ static void connection(void *arg) {
     buf error = { 0 }, hello = { 0 };
     if (!on || !token || token->k != V_TEXT || !token->t.len) { arena_free(a); wait_ = 1; continue; }
     if (!key_of("device", 1, mine)) { say("This computer couldn't make or keep its key, so it can't sign in"); arena_free(a); continue; }
-    pl_link *l = pl_connect(LIVE, &error);
+    buf live = { 0 };
+    buf_fmt(&live, "ws%s/live", ONSAY + strlen("http"));   // https://x is wss://x/live, http://x ws://x/live
+    pl_link *l = pl_connect(live.s, &error);
+    buf_free(&live);
     if (!l) say("%s. Trying again in %.0f seconds", error.s ? error.s : "It couldn't connect to Onsay", wait_);
     buf_free(&error);
     if (l) {

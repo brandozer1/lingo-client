@@ -25,12 +25,15 @@
 #define CORE_VERSION "0.14.0"
 #define CORE_LOOK 5   // seconds between looks at the lingos folder
 
-// Where Onsay is, built in: its API, which the onsay lingo talks to, and its resolve endpoint, the one address the lingo
-// client asks where an Onsay name goes (../../docs/lingo.md, section 15). The test build asks test/server.mjs.
+/* Where Onsay is, built in: its API, which the onsay lingo talks to and whose resolve endpoint the lingo client asks where
+   an Onsay name goes (../../docs/lingo.md, section 15), and its public key, which everything Onsay signs is checked
+   against (onsay.c). The test build asks test/server.mjs, which signs with the test key. */
 #ifdef TEST
 #define ONSAY "http://127.0.0.1:8787"
+#define ONSAY_KEY "ed25519:6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw="
 #else
 #define ONSAY "https://api.onsay.dev"
+#define ONSAY_KEY "ed25519:JAyqe6gpH0e2k51yjygP66uAo92x0ebK8q3w+y/B4Tw="
 #endif
 #define RESOLVE "/resolve/"   // on ONSAY, then the name
 
