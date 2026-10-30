@@ -332,7 +332,7 @@ static void connection(void *arg) {
     if (!on || !token || token->k != V_TEXT || !token->t.len) { arena_free(a); wait_ = 1; continue; }
     if (!key_of("device", 1, mine)) { say("This computer couldn't make or keep its key, so it can't sign in"); arena_free(a); continue; }
     buf live = { 0 };
-    buf_fmt(&live, "ws%s/live", ONSAY + strlen("http"));   // https://x is wss://x/live, http://x ws://x/live
+    buf_fmt(&live, "ws%s/live", &ONSAY[strlen("http")]);   // https://x is wss://x/live, http://x ws://x/live
     pl_link *l = pl_connect(live.s, &error);
     buf_free(&live);
     if (!l) say("%s. Trying again in %.0f seconds", error.s ? error.s : "It couldn't connect to Onsay", wait_);

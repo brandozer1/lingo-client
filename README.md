@@ -18,7 +18,8 @@ Apache 2.0 licensed and made to be built on: add lingos, or wrap it in your own 
 |--------|------------|
 | `core/` | The lingo client: its settings, its policy and who may call, its command line, its hooks for native lingos, and building and testing it. See its README |
 | `lingos/` | The native lingos it ships, in C: `onsay` (its connection to Onsay, signing in and `/onsay`, see its README), `windows` (Windows itself) and `native` (any Windows function, by its layout) |
-| `lingo-library/` | The standard lingos, written in Lingo, for any computer: `text`, `request`, `agent` and more. See its README |
+| `lingos/standard/` | The standard functions built into the language, written in Lingo: `text`, `list`, `json`, `request` and more |
+| `lingo-library/` | Lingos that aren't built in: `agent`, the one that ships, and `writer`. See its README |
 | `docs/` | `lingo.md`: the language, and what a lingo and its `.lingo` file are |
 
 ## Download

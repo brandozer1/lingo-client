@@ -364,6 +364,20 @@ typedef struct { const char *name; const char *manifest; lingo_entry entry; } bu
 #include "builtins.h"
 #define BUILTIN "built in"   // what a built-in lingo's from and program say
 
+/* The standard functions every lingo can call with nothing to install, like text.split, list.sort and request.get, from
+   ../lingos/standard: each group's name and its Lingo code (standard.h, made by build.ps1). They compile with every lingo
+   and run as part of the lingo calling them, under its permissions, and are no app: no route, no catalog entry, no switch. */
+typedef struct { const char *name; const char *code; } standard;
+#include "standard.h"
+
+// Whether name is a group of standard functions.
+static int is_standard(const char *name) {
+  for (size_t i = 0; i < sizeof STANDARD / sizeof *STANDARD; i++) {
+    if (!strcmp(STANDARD[i].name, name)) return 1;
+  }
+  return 0;
+}
+
 // The built-in lingo of that name, or NULL.
 static const builtin *builtin_of(const char *name) {
   for (size_t i = 0; i < sizeof BUILTINS / sizeof *BUILTINS; i++) {
@@ -645,7 +659,7 @@ static int load(const char *extra) {
       if (e && more && !strcmp(text_or(e, "name", ""), text_or(more, "name", ""))) continue;
     }
     if (!e) continue;
-    if (!rec_get(e, "error") && builtin_of(text_or(e, "name", ""))) set_aside(a, e, "a lingo built into this program is already called that");
+    if (!rec_get(e, "error") && (builtin_of(text_or(e, "name", "")) || is_standard(text_or(e, "name", "")))) set_aside(a, e, "something built into this program is already called that");
     else if (!rec_get(e, "error") && entry_of(text_or(e, "name", ""))) set_aside(a, e, "another lingo here is already called that");
     rec_set(a, e, "running", VBOOL(has(running, text_or(e, "name", ""))));
     list_push(a, found, e);
@@ -684,6 +698,13 @@ static int load(const char *extra) {
     rec_set(a, one, "name", v_cstr(a, natives[i]));
     rec_set(a, one, "phrases", native_phrases(a, i));
     list_push(a, offered, one);
+  }
+  for (size_t i = 0; i < sizeof STANDARD / sizeof *STANDARD; i++) {
+    val *e = v_rec(a);
+    rec_set(a, e, "name", v_cstr(a, STANDARD[i].name));
+    rec_set(a, e, "file", v_cstr(a, fmt(a, "%s.ls", STANDARD[i].name)));
+    rec_set(a, e, "code", v_cstr(a, STANDARD[i].code));
+    list_push(a, stacked, e);
   }
   for (size_t i = 0; i < found->l.n; i++) if (!rec_get(found->l.v[i], "error") && rec_get(found->l.v[i], "code")) list_push(a, stacked, found->l.v[i]);
 

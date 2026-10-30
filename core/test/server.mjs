@@ -34,7 +34,7 @@ const AI = `http://127.0.0.1:${PORT}/ai`        // and its AI, for agent
 const WEB = 6970, BARE = 6971, CLOSED = 6973, SERVED = 6974   // the test core's port, and the bare, the closed and the signing in cores', below
 const CORE = fileURLToPath(new URL('..', import.meta.url)), EXE = fileURLToPath(new URL('../bin/test/onsay-core.exe', import.meta.url))
 const DATA = new URL('./data/', import.meta.url), SETTINGS = new URL('settings/', DATA), LINGOS = new URL('lingos/', DATA), BUILT = new URL('../bin/', import.meta.url)
-const LIBRARY = new URL('../../lingo-library/', import.meta.url), HOME = fileURLToPath(DATA).replace(/[\\/]$/, '')
+const HOME = fileURLToPath(DATA).replace(/[\\/]$/, '')
 // What the test core may do: everything but act on the screen, the ceiling, and grants for the lingos that read the
 // screen, run commands and reach files outside its home. Anyone may reach page, and with no account policy, the
 // defaults let 192.0.2.60 reach memo.
@@ -270,7 +270,8 @@ const CASES = [
   { name: 'names: an Onsay name with nowhere to go says so', path: '/checks/http_nowhere', values: { address: 'nobody.tester/x' }, check: (r) => r.status === 200 && /^http.send: There's no computer or route called nobody.tester$/.test(r.json) },
   { name: 'names: a name on the web is never asked of Onsay, https:// left off', path: '/checks/http_nowhere', values: { address: 'nowhere.invalid-but.com/x' }, check: (r) => r.status === 200 && /^http.send: /.test(r.json) && !resolved.includes('nowhere.invalid-but.com') },
   { name: 'names: the request lingo reaches an Onsay name', path: '/checks/request_busy', values: { base: 'pages.tester' }, check: gives([200, true, { tries: 4 }]) },
-  // text, list, math and time, from ../lingo-library, written in Lingo on the core's floor.
+  // The standard functions, from ../lingos/standard, written in Lingo on the core's floor.
+  { path: '/checks/list_basics', check: gives([6, 0, [1, 2, 3], [1, 2, 3, 4], 1, null, 3, ['laptop.brandon', '/weather/now']]) },
   { path: '/checks/texts_library', check: gives(['HÉLLO, WÖRLD', 'héllo, wörld', ['Héllo', 'wörld'], 'a-b', 'HéLLo, wörLd', true, 'cba', 'x', ['a', 'b', 'c'], ['a', 'b'], '1x', 'x y']) },
   { path: '/checks/cases', check: gives(['ÇA VA, ØRE, ŁÓDŹ, Ÿ Ÿ, ΑΛΦΑ, ПРИВЕТ, ЁЁ', 'ça va, øre, łódź, ÿ ÿ, αλφα, привет, ёё', ['a', 'b', ''], 'bbbbbb', '', '[1];{"a":2}']) },
   { path: '/checks/sorts', check: gives([[1, 2, 3], ['a', 'b', 'c'], [{ n: 1, k: 'y' }, { n: 2, k: 'x' }, { n: 2, k: 'z' }], [], ['B', 'C', 'a'], [3, 2, 1], [], 'bña']) },
@@ -340,6 +341,16 @@ const CASES = [
     path: '/agent/ask', values: { prompt: 'what is the weather in Rome?' },
     check: (r) => gives('gpt-5-mini heard: Rome: sunny for 2 days and heard: 2 litres')(r) && device?.status === 200 &&
       every.some((m) => m.ask === 'something only this device knows' && m.asking === 'agent.ask'),
+  },
+  {
+    lingo: 'windows',
+    name: "agent.ask: its own tools work on this computer with no trip to Onsay: write, edit, refused when the words are there twice, search and read",
+    path: '/agent/ask', values: { prompt: 'work on the notes' },
+    check: (r) => {
+      const said = r.json ?? ''
+      return r.status === 200 && said.includes('Written and That didn') && said.includes('2 times') && said.includes('Replaced 2') && /agent-notes\.txt:2: three/.test(said) && said.endsWith('one\nthree\nthree') &&
+        thought.tools.some((t) => t.function.name === 'run') && thought.tools.some((t) => t.function.name === 'click')
+    },
   },
   {
     name: 'agent.ask given the log gives back its reply and the messages it added: its tool calls, their results and its reply',
@@ -951,6 +962,12 @@ const ai = (q, s) => {
     const told = (ask.messages || []).filter((m) => m.role === 'tool').map((m) => m.content)
     const message = told.length ? { content: `${ask.model} heard: ${told.join(' and ')}` }
       : /weather/.test(last) ? { content: null, tool_calls: [call('c0', 'use', { address: 'weather/forecast', values: ['Rome', 2] }), call('c1', 'lingo', { task: 'something only this device knows' })] }
+        : /work on the notes/.test(last) ? { content: null, tool_calls: [
+          call('c0', 'write', { path: `${HOME}/agent-notes.txt`, text: 'one\ntwo\ntwo' }),
+          call('c1', 'edit', { path: `${HOME}/agent-notes.txt`, find: 'two', with: 'three' }),
+          call('c2', 'edit', { path: `${HOME}/agent-notes.txt`, find: 'two', with: 'three', all: true }),
+          call('c3', 'search', { folder: HOME, words: 'THREE', pattern: 'agent-notes*' }),
+          call('c4', 'read', { path: `${HOME}/agent-notes.txt` })] }
         : /trip/.test(last) ? { content: null, tool_calls: [call('c0', 'questions', { questions: [{ question: 'Where to?', choices: ['Rome', 'Oslo'] }, { question: 'When?', choices: [] }, { question: 'Who with?' }] })] }
           : { content: `${ask.model} says: ${last}` }
     s.end(JSON.stringify({ choices: [{ message: { role: 'assistant', ...message } }] }))
@@ -1100,12 +1117,11 @@ const session = (link) => {
       (has('windows') ? /already a part of windows/ : /no lingo or group called pointer/).test(entry('input').error))
     report('catalog: a folder with no openapi.json and no program is not a lingo', !entry('notalingo'))
     report('catalog: a .lingo file that is not a zip says so', /isn't a \.lingo file/.test(entry('notazip').error))
-    const library = readdirSync(LIBRARY).filter((f) => existsSync(new URL(`${f}/${f}.ls`, LIBRARY)))
-    const silent = library.flatMap((l) => ops(l).filter((o) => !o.description).map((o) => o['x-lingo-function']))
-    report('library: every lingo loads from the .lingo file the build packed, says what it is, and every function says what it does', library.length >= 9 &&
-      library.every((l) => has(l) && about(l)) && !silent.length, silent.length ? `\n    silent: ${silent.join(', ')}` : '')
+    const shipped = readdirSync(new URL('lingos/', BUILT))
+    report('the build ships one lingo, the agent, and it says what each function does', same(shipped, ['agent.lingo']) && about('agent') && !ops('agent').some((o) => !o.description))
+    report('standard functions are no app: no entry in the catalog, and nothing to install', !['text', 'list', 'math', 'json', 'url', 'request', 'time', 'encode'].some((g) => entry(g)))
     report('hello: the lingo client, its version, its device key and its catalog, and nothing else', same(Object.keys(hello), ['type', 'token', 'client', 'version', 'key', 'catalog']) &&
-      hello.client === 'lingo-client' && hello.version === '0.14.0' && /^ed25519:[A-Za-z0-9+/]{43}=$/.test(hello.key) && Array.isArray(hello.catalog))
+      hello.client === 'lingo-client' && hello.version === '0.16.0' && /^ed25519:[A-Za-z0-9+/]{43}=$/.test(hello.key) && Array.isArray(hello.catalog))
     report('catalog: onsay, built in, ready, sharing /onsay alone', builtIn('onsay') && ops('onsay').length === 1 && phrase('onsay', 'onsay.serve') !== undefined)
     for (const [name, test, lingo] of WEB_CASES) {
       if (lingo && !has(lingo)) { skipped++; console.log(`  skip  ${name}: this core has no ${lingo}`); continue }

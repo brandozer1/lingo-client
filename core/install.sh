@@ -1,12 +1,12 @@
 #!/bin/sh
-# install.sh - puts the lingo client on a Linux server: the program, with onsay built in, its folder and settings, and a
+# install.sh - puts the lingo client on a Linux server: the program, with onsay built in, the agent, its folder and settings, and a
 # service that keeps it running. It answers its own lingos on port 6969, with no Onsay account until it is signed in.
 #
 #   curl -fsSL https://github.com/brandozer1/lingo-client/releases/latest/download/install.sh | sh
 #                                             downloads the latest release and installs it
 #   curl -fsSL .../install.sh | sh -s -- --sign-in
 #                                             the same, signed in to Onsay
-#   sh install.sh ./bin/linux-x64/onsay-core  installs one already here, like from a checkout
+#   sh install.sh ./bin/linux-x64/onsay-core  installs one already here, like from a checkout, with ../lingos/agent.lingo
 #
 #   --sign-in   signs it in to Onsay from any device's browser, so Onsay can reach its lingos: onsay-core core.json call
 #               onsay.sign_in, which can be run any time after
@@ -39,14 +39,18 @@ else curl -fsSL "$ONSAY_DOWNLOAD/onsay-core-linux-$arch" -o "$bin/onsay-core.new
 chmod 755 "$bin/onsay-core.new"
 mv "$bin/onsay-core.new" "$bin/onsay-core"
 
-# An onsay.lingo an older install put here: onsay is built in now, and a lingo with its name would be set aside.
-rm -f "$home/lingos/onsay.lingo"
+# What an older install put here: onsay and the helpers are built in now, and a lingo with one of their names is set aside.
+for old in onsay encode json list math request text time url writer; do rm -f "$home/lingos/$old.lingo"; done
+
+# The agent, the one lingo that ships, at /agent.
+if [ -n "$from" ]; then cp "$(dirname "$from")/../lingos/agent.lingo" "$home/lingos/agent.lingo"
+else curl -fsSL "$ONSAY_DOWNLOAD/agent.lingo" -o "$home/lingos/agent.lingo"; fi
 
 # Its settings, see core/README.md: its folder, which holds its lingos, its policy and everything it keeps. Its onsay
 # keeps its sign in as its own setting.
 settings="$home/core.json"
 [ -f "$settings" ] || printf '{"home": "%s"}\n' "$home" > "$settings"
-"$bin/onsay-core" "$settings" start onsay > /dev/null
+"$bin/onsay-core" "$settings" start agent > /dev/null
 if [ -n "$signin" ] && ! grep -q '"token":"' "$home/settings/onsay.json" 2> /dev/null; then "$bin/onsay-core" "$settings" call onsay.sign_in > /dev/null; fi
 
 # A service that starts it with the server and starts it again if it stops.

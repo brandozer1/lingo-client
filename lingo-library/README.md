@@ -1,25 +1,16 @@
 # Lingo library
 
-The standard lingos, written in Lingo for any computer. The language is only its syntax and `lingo(...)`, `use(...)`
-and `setting(...)`, and the core every computer has gives only what Lingo can't write for itself, so splitting, case,
-rounding, sorting, dates, web requests and AI are written here. Each is a folder of its name: its code, `<name>.ls`,
-and when it has settings, its `openapi.json`. The first lines of each file list its functions.
+Lingos written in Lingo that aren't part of the language. `agent` is the one that ships with every install. The basics,
+like splitting, sorting, JSON, dates and web requests, are standard functions built into the lingo client
+(`../lingos/standard/`). Each lingo here is a folder of its name: its code, `<name>.ls`, and when it has settings, its
+`openapi.json`. The first lines of each file list its functions.
 
 | Lingo | What it is for | Calls |
 |-------|----------------|-------|
-| `text` | splitting, joining, replacing, trimming, case, padding, slugs, templates, words and lines | |
-| `list` | sorting, records by a part, and reversing | |
-| `math` | rounding to the nearest, up or down, to places, and min and max | |
-| `json` | JSON read with a fallback, written with an indent, a value at a path, deep merging, and a value's kind | `text` |
-| `encode` | base64, web address parts as %XX, HTML entities and hex, on UTF-8 bytes | `text`, `math` |
-| `url` | web addresses taken apart and built again, paths joined, and queries to and from records | `encode`, `text` |
-| `time` | dates and times: reading ISO text, formatting, adding, the time between, how long ago, days, and now in words | `text`, `math` |
-| `request` | web requests, to a web address or an Onsay name, with headers, a query, a body, a timeout and tries again, on `http.send` | `url`, `json`, `text` |
-| `agent` | the library's AI, on the person's own key for Claude, ChatGPT, OpenRouter or any service that answers the way OpenAI does: `ask`, an agent that talks with the person through the whole conversation, its log with every tool it used, uses any lingo on the way and asks one or two short questions when it must, in the person's chat where there is one, or gives a program one answer | |
+| `agent` | the library's AI: Onsay's own, free to start and metered on the account, or the person's own key for Claude, ChatGPT, OpenRouter or any service that answers the way OpenAI does: `ask`, an agent that talks with the person through the whole conversation, its log with every tool it used, uses any lingo on the way and asks one or two short questions when it must, in the person's chat where there is one, or gives a program one answer | |
 | `writer` | writes a new lingo from a plain description, or changes one, reviewed and fixed by a second look | `agent`, `json`, `text` |
 
-Each needs every lingo it calls beside it, and those they call: `writer` needs `agent`, `json` and `text`, and
-`request` needs `url`, `json`, `encode`, `text` and `math`. The simplest is to put them all there.
+`writer` needs `agent` beside it.
 
 ## Putting them on a computer
 

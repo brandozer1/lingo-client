@@ -2,11 +2,11 @@
 #   bin/onsay-core.exe          the lingo client for Windows, with onsay, windows and native built in
 #   bin/onsay-core.lib          what it shares with native lingos, to build their libraries against
 #   bin/test/onsay-core.exe     the same, its onsay talking to test/server.mjs. Same file name, since a native library binds to it
-#   bin/lingos/                 each lingo of ../lingo-library as a .lingo file, packed by the lingo client itself
+#   bin/lingos/                 agent.lingo, the one lingo that ships, packed by the lingo client itself
 #   bin/linux-x64/onsay-core    the lingo client for Linux, with onsay built in, and bin/linux-arm64/onsay-core. glibc 2.28
 #                               or later, and libcurl, which it loads as it starts, so it builds here with nothing of
 #                               Linux's installed
-# What is only made on the way, like win64.o, tlds.h and builtins.h, goes in obj/.
+# What is only made on the way, like win64.o, tlds.h, builtins.h and standard.h, goes in obj/.
 $zig = (Get-Command zig -ErrorAction SilentlyContinue).Source
 if (-not $zig) { $zig = Get-ChildItem "$env:LOCALAPPDATA\zig" -Recurse -Filter zig.exe -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName }
 if (-not $zig) { Write-Error "zig wasn't found. Get it from ziglang.org/download"; exit 1 }
@@ -23,6 +23,15 @@ function build($what) { & $zig cc @flags @what | Out-Host; if ($LASTEXITCODE -ne
 $tlds = Get-Content "$here/src/tlds.txt" | Where-Object { $_ -and -not $_.StartsWith("#") } | ForEach-Object { $_.ToLower() }
 Set-Content "$here/obj/tlds.h" "#define TLDS `" $($tlds -join ' ') `""
 
+# A file's words as one C text. ? is escaped too, so ?? in Lingo is never read as a C trigraph.
+function ctext($path) {
+  return [IO.File]::ReadAllText($path) -replace '\\', '\\' -replace '"', '\"' -replace '\?', '\?' -replace "`r?`n", '\n'
+}
+
+# The standard functions, as obj/standard.h for core.c's STANDARD: each file of ../lingos/standard by its name, in Lingo.
+$rows = foreach ($file in Get-ChildItem "$lingos/standard" -Filter *.ls) { "  { `"$($file.BaseName)`", `"$(ctext $file.FullName)`" }," }
+[IO.File]::WriteAllLines("$here/obj/standard.h", @("// standard.h - made by build.ps1: the standard functions.", "static const standard STANDARD[] = {") + $rows + "};")
+
 # The lingos built into the lingo client for one platform, as obj/<platform>/builtins.h for core.c's BUILTINS: each one's
 # name, its openapi.json as C text, and <name>_lingo, the function in its C that adds its phrases.
 function builtins($platform, $names) {
@@ -30,8 +39,7 @@ function builtins($platform, $names) {
   foreach ($name in $names) { $lines += "void ${name}_lingo(void);" }
   $lines += "static const builtin BUILTINS[] = {"
   foreach ($name in $names) {
-    $json = (Get-Content -Raw "$lingos/$name/openapi.json") -replace '\\', '\\' -replace '"', '\"' -replace "`r?`n", '\n'
-    $lines += "  { `"$name`", `"$json`", ${name}_lingo },"
+    $lines += "  { `"$name`", `"$(ctext "$lingos/$name/openapi.json")`", ${name}_lingo },"
   }
   $lines += "};"
   Set-Content "$here/obj/$platform/builtins.h" $lines
@@ -63,12 +71,9 @@ foreach ($arch in @{ x64 = "x86_64"; arm64 = "aarch64" }.GetEnumerator()) {
 }
 Get-ChildItem "$here/bin", "$here/obj" -Recurse -Include *.pdb, *.lib -Exclude onsay-core.lib | Remove-Item
 
-# Every lingo of ../lingo-library packed into bin/lingos by the lingo client, with ../lingo-library as its lingos folder,
-# so what each reaches in the others counts.
+# The agent, the one lingo that ships, packed into bin/lingos by the lingo client.
 $slash = $here -replace '\\', '/'
 Set-Content "$here/obj/pack.json" "{`"home`": `"$slash/obj/home`", `"lingos`": `"$slash/../lingo-library`"}"
-foreach ($folder in Get-ChildItem "$here/../lingo-library" -Directory) {
-  & "$here/bin/onsay-core.exe" "$here/obj/pack.json" pack $folder.FullName "$here/bin/lingos" 2>$null
-  if ($LASTEXITCODE -ne 0) { Write-Error "$($folder.Name) couldn't be packed. To see why: bin/onsay-core.exe obj/pack.json pack $($folder.FullName)"; exit 1 }
-}
+& "$here/bin/onsay-core.exe" "$here/obj/pack.json" pack "$here/../lingo-library/agent" "$here/bin/lingos" 2>$null
+if ($LASTEXITCODE -ne 0) { Write-Error "agent couldn't be packed. To see why: bin/onsay-core.exe obj/pack.json pack ../lingo-library/agent"; exit 1 }
 Write-Output "built bin/onsay-core.exe, bin/test/onsay-core.exe, bin/linux-x64, bin/linux-arm64 and bin/lingos"

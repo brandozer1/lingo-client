@@ -206,7 +206,9 @@ runs, its name and how many values it takes, as below:
 - **A group the core or a native lingo has,** like `std.length(x)`, `store.get(key)`, `http.send(...)` or the Windows
   lingo's `files.read(path)` and `window.list()`. A file is reached by its path, as text, through `files`:
   `files.read("~/notes/today.txt")`.
-- **A lingo in the same lingos folder,** by its name: `text.slug(title)` calls the function `slug` of the lingo `text`,
+- **A standard function,** with nothing to install or import: `text.split(s, ",")`, `list.sort(rows, "price")`,
+  `json.get(v, "a.b")`, `request.get(address)` (section 15).
+- **A lingo in the same lingos folder,** by its name: `notes.add(title)` calls the function `add` of the lingo `notes`,
   there beside it. The compiler finds it in the folder, so there is nothing to import or list.
 - **Anything else doesn't compile,** and says to use `use(...)`: `There's no lingo or group called notes here. To reach
   one somewhere else, write use("its address"), like use("laptop.brandon/notes/add")`.
@@ -664,7 +666,7 @@ Keyword spellings are not worth shortening: words like `return` and `continue` a
 
 Every lingo client has one lingo of its own, `core`, on any computer, never listed in its catalog. It is the floor:
 only what Lingo truly can't write for itself, each phrase called with its group, like `std.length(x)`. Anything Lingo
-can write in a few lines is a lingo instead, written in Lingo on this floor (`lingo-library/`).
+can write in a few lines is a standard function instead, written in Lingo on this floor (`lingos/standard/`).
 
 | Phrase | Why it is in the core |
 |--------|-----------------------|
@@ -684,7 +686,7 @@ can write in a few lines is a lingo instead, written in Lingo on this floor (`li
 
 `http.send` gives `{status, headers, text}`, its headers a record by lower case name, redirects followed, at most 4 MB
 back, and fails when it takes longer than its timeout. Windows makes it with WinHTTP and Linux with libcurl, so proxies
-and certificates work as they do for every other program. Most lingos use `request` (`lingo-library/request/request.ls`),
+and certificates work as they do for every other program. Most lingos use `request` (`lingos/standard/request.ls`),
 built on it, or `use(...)` for one plain request.
 
 **Onsay names work wherever web addresses do.** A web address given to `http.send`, so to `request`, may name a host on
@@ -696,16 +698,28 @@ name after it. So `request.get("laptop.brandon/weather/now")` reaches that compu
 proxy, as anyone on the web would, when it is open to them. `http://` or `https://` may be left off. A name with nowhere to go fails with why:
 `There's no computer or route called nobody.brandon`. `use(...)` reads both kinds the same way, through Onsay.
 
-Everything else is a library lingo in the same lingos folder, called by its dotted name: `text` (`split`, `join`,
-`replace`, `trim`, `lower`, `upper` and more), `list` (`sort`, `reverse`), `math` (`round` to the nearest, up or down,
-`min`, `max`), `time` (dates, like `time.difference(a, b, "days")`) and the rest of `lingo-library/`. Whether text
-holds a part is the operator `in`. What is around a `lingo(...)`, the computer and its time, goes with it, so no phrase
+**The standard functions** are built into the lingo client on every computer, written in Lingo on this floor
+(`lingos/standard/`). They are part of the language: nothing to install or import, no app, no route, no entry in the
+catalog, and they run as part of the lingo calling them, under its permissions.
+
+| Group | Functions |
+|-------|-----------|
+| `text` | `split`, `join`, `replace`, `trim`, `lower`, `upper`, `pad`, `truncate`, `slug`, `case`, `template`, `words`, `lines`, `repeat`, `starts_with`, `ends_with` |
+| `list` | `sort`, `reverse`, `sum`, `unique`, `flatten`, `index_of` |
+| `math` | `round`, `min`, `max`, `abs` |
+| `json` | `parse`, `stringify`, `get`, `merge`, `kind` |
+| `url` | `parse`, `build`, `join`, `to_query`, `from_query` |
+| `request` | `send`, `get`, `post`, `put`, `patch`, `delete`, to a web address or an Onsay name |
+| `time` | `parse`, `format`, `add`, `difference`, `ago`, `start_of_day`, `day_of_week`, `now_in_words` |
+| `encode` | `base64`, `from_base64`, `url`, `from_url`, `html`, `from_html`, `hex`, `from_hex` |
+
+A lingo in the folder can't take one of these names. Whether text or a list holds something is the operator `in`. What is around a `lingo(...)`, the computer and its time, goes with it, so no phrase
 says what the computer is.
 
 ## 16. The Windows lingos
 
 The lingo client for Windows has two native lingos built in, from `lingos/`, beside onsay, which every computer has
-(`lingos/onsay/README.md`). The Windows app ships the lingos of `lingo-library` too, `agent` among them. Their phrases,
+(`lingos/onsay/README.md`). The one lingo every install ships is `agent`, from `lingo-library`. Their phrases,
 with what each gives, does and needs, are in the catalog, and in `windows_lingo` and `native_lingo` in their C.
 
 - **`windows`**, Windows itself:
@@ -714,7 +728,7 @@ with what each gives, does and needs, are in the catalog, and in `windows_lingo`
   |-------------|----------------------------------------------------------------------|
   | `window`    | `list`, `current`, `open`, `wait_for`, `focus`, `close`, `resize`, `move` |
   | `controls`  | `find`, `list`, `read`, `press`, `fill`, `toggle`, `pick`, `scroll`, `wait_for` |
-  | `files`     | `read`, `write`, `add_to`, `exists`, `list`, `find`, `copy`, `move`, `delete`, `make_folder` |
+  | `files`     | `read`, `write`, `add_to`, `edit`, `exists`, `list`, `find`, `search`, `copy`, `move`, `delete`, `make_folder` |
   | `clipboard` | `read`, `write`                                                      |
   | `commands`  | `run`, `running`, `stop`                                             |
   | `notify`    | `show`                                                               |

@@ -279,8 +279,8 @@ the lingo's own functions when its `openapi.json`'s `x-lingo` says `keep` (`../d
 
 ```
 ./build.ps1                                 bin/onsay-core.exe and bin/test/onsay-core.exe, with onsay, windows and native
-                                            built in, bin/onsay-core.lib, bin/lingos (every lingo of ../lingo-library,
-                                            each a .lingo file packed by the lingo client itself), and
+                                            built in, bin/onsay-core.lib, bin/lingos (agent.lingo, the one lingo that
+                                            ships, packed by the lingo client itself), and
                                             bin/linux-x64/onsay-core and bin/linux-arm64/onsay-core, with onsay built in,
                                             for glibc 2.28 or later, all built on Windows with zig, one download, no
                                             installer

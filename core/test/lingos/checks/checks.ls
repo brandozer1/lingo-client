@@ -300,3 +300,9 @@ fn use_by_name() {
 
 // use(...) with its values in a list.
 fn use_in_order() {return use("weather/forecast", ["Rome", 2])}
+
+// The array and number basics, and a web address with an Onsay name taken apart.
+fn list_basics() {
+  place = url.parse("https://laptop.brandon/weather/now")
+  return [list.sum([1, 2, 3]), list.sum([]), list.unique([1, 2, 1, 3]), list.flatten([1, [2, 3], [4]]), list.index_of(["a", "b"], "b"), list.index_of([], "b"), math.abs(-3), [place.host, place.path]]
+}

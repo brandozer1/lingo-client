@@ -22,7 +22,7 @@
 
 #include "lingo.h"
 
-#define CORE_VERSION "0.14.0"
+#define CORE_VERSION "0.16.0"
 #define CORE_LOOK 5   // seconds between looks at the lingos folder
 
 /* Where Onsay is, built in: its API, which the onsay lingo talks to and whose resolve endpoint the lingo client asks where

@@ -9,7 +9,7 @@
 // 3. controls                 find, list, read, press, fill, toggle, pick, scroll, wait_for
 // 4. screen                   a picture of it, and its words by OCR
 // 5. pointer and keys         Onsay's pointer (virtual or real), clicks, drags, the wheel, rings, his panel, and typing
-// 6. files                    read, write, add_to, exists, list, find, copy, move, delete, make_folder
+// 6. files                    read, write, add_to, edit, exists, list, find, search, copy, move, delete, make_folder
 // 7. clipboard/commands/notify
 // 8. input                    the mouse and keyboard the way a person uses them: words on screen, controls by name, places in a window
 // 9. look                     the screen read as text, and a picture of it
@@ -1287,6 +1287,95 @@ static val *listing(run *r, val **a, int deep) {
 static val *fs_list(run *r, val **a) { return listing(r, a, 0); }
 static val *fs_find(run *r, val **a) { return listing(r, a, 1); }
 
+/* files.search: every line holding the words, in any case, in the text files of a folder and the folders inside it,
+   leaving out .git and node_modules, files over SEARCH_MOST bytes and files that aren't text. */
+#define SEARCH_MOST 5000000
+#define SEARCH_LINE 300
+static val *fs_search(run *r, val **a) {
+  const char *words = str(r, a[1]);
+  size_t n = strlen(words);
+  if (!n) fail(r, "phrase", "files.search needs the words to look for");
+  double most = num_of(r, a[3], "most");
+  val *where[2] = { a[0], a[2] };
+  val *found = listing(r, where, 1), *out = v_list(r->a);
+  for (size_t i = 0; i < found->l.n && out->l.n < most && !*r->stop; i++) {
+    val *f = found->l.v[i];
+    const char *path = text_or(f, "path", "");
+    if (truthy(rec_get(f, "folder")) || rec_get(f, "size")->n > SEARCH_MOST) continue;
+    if (strstr(path, "\\.git\\") || strstr(path, "\\node_modules\\")) continue;
+    buf b = { 0 };
+    if (!pl_read(path, &b) || !b.n || memchr(b.s, 0, b.n < 8000 ? b.n : 8000)) { buf_free(&b); continue; }
+    int number = 0;
+    for (char *line = b.s, *end = b.s + b.n; line < end && out->l.n < most;) {
+      char *stop = memchr(line, '\n', end - line);
+      size_t len = stop ? (size_t)(stop - line) : (size_t)(end - line);
+      number++;
+      int has = 0;
+      for (size_t k = 0; k + n <= len && !has; k++) has = !_strnicmp(line + k, words, n);
+      if (has) {
+        val *hit = v_rec(r->a);
+        put(r, hit, "path", v_cstr(r->a, path));
+        put_num(r, hit, "line", number);
+        size_t shown = len && line[len - 1] == '\r' ? len - 1 : len;
+        put(r, hit, "text", v_text(r->a, line, shown > SEARCH_LINE ? SEARCH_LINE : shown));
+        list_push(r->a, out, hit);
+      }
+      line += len + 1;
+    }
+    buf_free(&b);
+  }
+  return out;
+}
+
+// Text with each lone new line written the way Windows files write it, \r\n.
+static const char *with_crlf(run *r, const char *text) {
+  buf b = { 0 };
+  for (const char *c = text; *c; c++) {
+    if (*c == '\n' && (c == text || c[-1] != '\r')) buf_chr(&b, '\r');
+    buf_chr(&b, *c);
+  }
+  const char *out = v_text(r->a, b.s ? b.s : "", b.n)->t.s;
+  buf_free(&b);
+  return out;
+}
+
+// How many times what is in the text.
+static int times_in(const char *text, const char *what) {
+  int count = 0;
+  for (const char *at = strstr(text, what); at; at = strstr(at + strlen(what), what)) count++;
+  return count;
+}
+
+/* files.edit: exact words in a file replaced by others. Words that are there more than once are refused unless all is
+   set, so the wrong place is never changed. Words of several lines also match a file that ends its lines \r\n. */
+static val *fs_edit(run *r, val **a) {
+  val *p = path_of(r, a[0], "files.write");
+  const char *find = str(r, a[1]), *with = str(r, a[2]);
+  if (!*find) fail(r, "phrase", "files.edit needs the words to replace");
+  buf b = { 0 };
+  if (!pl_read(p->t.s, &b)) win_fail(r, "read", p->t.s);
+  const char *text = v_text(r->a, b.s ? b.s : "", b.n)->t.s;
+  buf_free(&b);
+  if (!times_in(text, find) && strchr(find, '\n')) { find = with_crlf(r, find); with = with_crlf(r, with); }
+  int count = times_in(text, find);
+  if (!count) fail(r, "phrase", "those words aren't in %s", p->t.s);
+  if (count > 1 && !truthy(a[3])) fail(r, "phrase", "those words are in %s %d times: give more of what is around them, or all as true", p->t.s, count);
+  buf out = { 0 };
+  const char *from = text;
+  for (const char *at = strstr(from, find); at; at = strstr(from, find)) {
+    buf_add(&out, from, at - from);
+    buf_str(&out, with);
+    from = at + strlen(find);
+  }
+  buf_str(&out, from);
+  int ok = pl_write(p->t.s, out.s ? out.s : "", out.n);
+  buf_free(&out);
+  if (!ok) win_fail(r, "write", p->t.s);
+  val *rec = v_rec(r->a);
+  put_num(r, rec, "replaced", count);
+  return rec;
+}
+
 // Into to if it is a folder, otherwise as to, with the folders above it made.
 static void copy_or_move(run *r, val **a, int move) {
   val *from = path_of(r, a[0], move ? "files.write" : "files.read"), *to = path_of(r, a[1], "files.write");
@@ -1942,9 +2031,13 @@ void windows_lingo(void) {
   phrase_add("files", "files.read", "read(path) -> text", fs_read);
   phrase_add("files", "files.write", "write(path, text): replaces it", fs_write);
   phrase_add("files", "files.write", "add_to(path, text)", fs_append);
+  phrase_add("files", "files.read, files.write", "edit(path, find, with, all=false) -> {replaced}: exact words in a file replaced by others, refused when they "
+             "are there more than once unless all is true", fs_edit);
   phrase_add("files", "files.read", "exists(path) -> bool", fs_exists);
   phrase_add("files", "files.read", "list(folder, pattern=\"*\") -> [" FILE_ "]", fs_list);
   phrase_add("files", "files.read", "find(folder, pattern=\"*\") -> [" FILE_ "]: every folder inside too", fs_find);
+  phrase_add("files", "files.read", "search(folder, words, pattern=\"*\", most=100) -> [{path,line,text}]: every line holding those words, in any case, in the "
+             "text files of a folder and every folder inside, or those whose names match pattern", fs_search);
   phrase_add("files", "files.write", "copy(from, to): into to if it is a folder", fs_copy);
   phrase_add("files", "files.write", "move(from, to): into to if it is a folder", fs_move);
   phrase_add("files", "files.write", "delete(path): to the Recycle Bin", fs_delete);
