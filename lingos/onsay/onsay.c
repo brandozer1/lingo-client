@@ -765,7 +765,7 @@ static val *serve(run *r, val **v) {
   log = messages(a, turns, prompt);
   for (int k = 1; !reply && !asks && !*r->stop; k++) {
     buf why = { 0 }, said = { 0 }, called_ = { 0 };
-    val *d, *inputs, *value, *missing, *choices, *given;
+    val *d, *inputs, *value, *choices, *given;
     if (k > MOST) { reply = "That needed more steps than I take at once, so I stopped here. Ask again to go on."; break; }
     buf_str(&m, "{\"messages\":");
     buf_json(&m, log);
@@ -798,26 +798,6 @@ static val *serve(run *r, val **v) {
     }
     inputs = rec_get(d, "inputs");
     if (!inputs || (inputs->k != V_REC && inputs->k != V_LIST)) inputs = v_rec(a);
-    // A value the call needs that nobody gave is asked of the person, typed.
-    missing = rec_get(d, "missing");
-    if (missing && missing->k == V_LIST && missing->l.n && inputs->k == V_REC) {
-      val *questions = v_list(a), *typed;
-      for (size_t i = 0; i < missing->l.n; i++, m.n = 0) {
-        buf_str(&m, "What ");
-        for (const char *c = missing->l.v[i]->k == V_TEXT ? missing->l.v[i]->t.s : ""; *c; c++) buf_chr(&m, *c == '_' ? ' ' : *c);
-        buf_str(&m, " should I use?");
-        list_push(a, questions, v_text(a, m.s, m.n));
-      }
-      pl_enter(lock);
-      step(&t, "Waiting for your answer", 0);
-      pl_leave(lock);
-      typed = asked(r, &t, questions);
-      if (*r->stop || !typed) { reply = *r->stop ? NULL : unanswered; buf_free(&said); break; }
-      for (size_t i = 0; i < missing->l.n && i < typed->l.n; i++) {
-        val *x = typed->l.v[i]->k == V_TEXT ? json_parse(a, typed->l.v[i]->t.s, typed->l.v[i]->t.len, NULL) : NULL;
-        if (missing->l.v[i]->k == V_TEXT) rec_set(a, inputs, missing->l.v[i]->t.s, x ? x : typed->l.v[i]);
-      }
-    }
     const char *address = text_or(d, "call", "");
     value = rec_get(d, "value");
     pl_enter(lock);

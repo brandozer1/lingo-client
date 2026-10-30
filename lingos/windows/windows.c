@@ -2011,7 +2011,7 @@ void windows_lingo(void) {
 
   phrase_add("window", "screen.read", "list() -> [" WINDOW "]: front to back", win_list);
   phrase_add("window", "screen.read", "current() -> " WINDOW ": the one in front, never Onsay's own chat", win_front);
-  phrase_add("window", "screen.act", "open(target) -> " WINDOW "?: an app, file, folder or web address", win_open);
+  phrase_add("window", "screen.act", "open(target) -> " WINDOW "?: opens an app, file, folder or web address, like notepad, target being its name or path", win_open);
   phrase_add("window", "screen.read", "wait_for(match, seconds=10) -> " WINDOW ": match {app} or {title}, part of the text is enough", win_wait);
   phrase_add("window", "screen.act", "focus(id)", win_focus);
   phrase_add("window", "screen.act", "close(id)", win_close);

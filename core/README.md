@@ -300,7 +300,7 @@ requests to Onsay names, resolved by the stand-in, the library, the windows ling
 catalog, packing and loading, running and stopped, access by address, range, route, handle and device, signatures
 that check out and those that don't, blocks, the account policy pushed, fetched, kept and refused when older, what the
 ceiling clamped, grants, the ceiling, the root, the person's answers through an app, the decision log and its lines
-sent on, `/onsay`, its agent loop (calls run here, the step limit, a stop, Let me choose and a value asked for) and its sessions, `sent.log`, signing in and out from the command line and from an app, the control
+sent on, `/onsay`, its agent loop (calls run here, the step limit, a stop and Let me choose) and its sessions, `sent.log`, signing in and out from the command line and from an app, the control
 routes, every command, `call` asking `lingo(...)` and `use(...)` of its settings' `ask`, a bare core with no onsay lingo
 on port 6971, and coming back after a dropped connection and a statement that doesn't check out.
 

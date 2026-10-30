@@ -38,7 +38,7 @@ the wire*.
   1. The whole log goes to Onsay, `{type: "decide", id, messages, mode}`: the session's newest 20 turns in the chat
      messages OpenAI and OpenRouter take, each turn's prompt the user's, `{role, content}`, then the messages its loop
      added, then this prompt and what its calls have given so far.
-  2. Onsay sends back one decision: `{call, does, where, inputs, missing}`, or `{reply}`.
+  2. Onsay sends back one decision: `{call, does, where, inputs}`, or `{reply}`.
   3. The call runs here, as `me`, so this computer's own rules apply: a lingo on this computer, an address starting with
      its own name like `laptop.brandon/`, is handed in as a request, `POST` to its path with `inputs` as its body; any
      other address goes through `use(...)`, as Onsay reaches it. The call joins the log as
@@ -50,8 +50,7 @@ the wire*.
 
   In list mode each call is first a card at `/live`, "Which should I do?" with each of the decision's `choices` as
   "what it does, where" and "None of these", which ends the prompt with "Okay, I didn't do any of those. Say it another
-  way and I'll look again.", and the pick runs. A value a call needs that nobody gave, its `missing`, is asked of the
-  person first, "What city should I use?", the answer read as JSON when it is JSON. A card waits 2 minutes. A call whose
+  way and I'll look again.", and the pick runs. A card waits 2 minutes. A call whose
   answer has `questions` ends the prompt with them, and their answers come as the next prompt, a line each. A decision
   that carries `value`, a lingo Onsay's library wrote and ran for it, joins the log without running again.
 

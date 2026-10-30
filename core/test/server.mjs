@@ -827,15 +827,6 @@ const WEB_CASES = [
       done.json?.text === 'you picked: ["hi Ana","hi Ana"]' && done.json.steps.some((s) => s.text === 'Picked: The second') && done.json.session === session &&
       same(after, { running: false, steps: [], questions: null }) && again.status === 404 && none.json?.text === "Okay, I didn't do any of those. Say it another way and I'll look again."
   }],
-  ['/onsay: a value a call needs that nobody gave is asked of the person, and the call runs with what they typed', async () => {
-    const headers = { authorization: `Bearer ${onsayed.key}` }, session = '0193abc4d5e6f7a8c1'
-    const out = web('/onsay', { method: 'POST', body: { prompt: 'recall something', session }, headers })
-    let live = null
-    await soon(async () => (live = (await web(`/onsay/sessions/${session}/live`, { headers })).json)?.questions)
-    await web(`/onsay/sessions/${session}/answers`, { method: 'POST', body: { answers: ['milk'] }, headers })
-    const done = await out, call = decided.at(-1).messages.findLast((m) => m.tool_calls)?.tool_calls[0]
-    return same(live?.questions, ['What k should I use?']) && done.json?.text === 'you picked: oat milk' && same(JSON.parse(call?.function.arguments ?? '{}').values, { k: 'milk' })
-  }],
   ['/onsay: open to anyone through the proxy by its own default rule, still with its prompt key', async (send) => {
     const ask = (k) => send('/onsay', { prompt: 'from afar' }, { as: undefined, headers: { ...from('198.18.0.9').headers, authorization: `Bearer ${k}` } })
     const [a, b] = [await ask(onsayed.key), await ask('wrong')]
@@ -997,14 +988,13 @@ const claude = (q, s) => {
 const decide = (m, link) => {
   decided.push(m)
   const at = m.messages.findLastIndex((x) => x.role === 'user'), asked = m.messages[at]?.content ?? '', gave = m.messages.slice(at + 1).filter((x) => x.role === 'tool').map((x) => x.content)
-  const here = (fn, does, inputs = {}, missing = []) => ({ call: `${DEVICE}.${HANDLE}/${fn}`, does, where: 'on this computer', inputs, missing })
+  const here = (fn, does, inputs = {}) => ({ call: `${DEVICE}.${HANDLE}/${fn}`, does, where: 'on this computer', inputs })
   const first = here('memo/recall', 'The first', { k: 'milk' }), second = here('checks/greet', 'The second', { who: 'Ana' })
   if (!gave.length) link.send({ type: 'step', id: m.id, text: 'Understanding what you asked', depth: 0 })
   link.send({ type: 'decision', id: m.id, ...(/remember milk/.test(asked) ? [here('memo/remember', 'Keeps a thing under a name', { k: 'milk', v: 'oat milk' }), here('memo/recall', 'What was kept under a name', { k: 'milk' }), { reply: `You kept: ${gave[1]}` }][gave.length]
     : /go on and on/.test(asked) ? here('memo/recall', 'What was kept under a name', { k: 'milk' })
     : /spin forever/.test(asked) ? here('checks/forever', 'Spins until it is stopped')
-    : /plan a trip/.test(asked) ? { call: 'trip/plan', does: 'Plans a trip', where: 'on the web', inputs: {}, missing: [] }
-    : /recall something/.test(asked) && !gave.length ? here('memo/recall', 'What was kept under a name', {}, ['k'])
+    : /plan a trip/.test(asked) ? { call: 'trip/plan', does: 'Plans a trip', where: 'on the web', inputs: {} }
     : m.mode === 'list' && !gave.length ? { ...first, choices: [first, second] }
     : gave.length ? { reply: `you picked: ${gave[0]}` } : { reply: `Onsay heard: ${asked}` }) })
 }
@@ -1121,7 +1111,7 @@ const session = (link) => {
     report('the build ships one lingo, the agent, and it says what each function does', same(shipped, ['agent.lingo']) && about('agent') && !ops('agent').some((o) => !o.description))
     report('standard functions are no app: no entry in the catalog, and nothing to install', !['text', 'list', 'math', 'json', 'url', 'request', 'time', 'encode'].some((g) => entry(g)))
     report('hello: the lingo client, its version, its device key and its catalog, and nothing else', same(Object.keys(hello), ['type', 'token', 'client', 'version', 'key', 'catalog']) &&
-      hello.client === 'lingo-client' && hello.version === '0.16.0' && /^ed25519:[A-Za-z0-9+/]{43}=$/.test(hello.key) && Array.isArray(hello.catalog))
+      hello.client === 'lingo-client' && hello.version === '0.16.1' && /^ed25519:[A-Za-z0-9+/]{43}=$/.test(hello.key) && Array.isArray(hello.catalog))
     report('catalog: onsay, built in, ready, sharing /onsay alone', builtIn('onsay') && ops('onsay').length === 1 && phrase('onsay', 'onsay.serve') !== undefined)
     for (const [name, test, lingo] of WEB_CASES) {
       if (lingo && !has(lingo)) { skipped++; console.log(`  skip  ${name}: this core has no ${lingo}`); continue }
