@@ -377,7 +377,7 @@ code calling them can't tell them apart:
 
 - **Lingo:** written in Lingo, its code a `.ls` file, on top of other lingos, its listing made from its code. See
   section 11.
-- **Native:** a library built for the computer, like `windows.dll`, its phrases added as it loads (`core/README.md`).
+- **Native:** a library built for the computer, like `notes.dll`, its phrases added as it loads (`core/README.md`).
 
 **What a model reads.** The onsay lingo tells Onsay what every running lingo shares, its catalog: each lingo's whole
 manifest (section 11), every function with what it does and its values as JSON Schema. A native phrase says what it
@@ -543,8 +543,9 @@ as JSON when it isn't. A lingo without `serve` is called function by function, `
 JSON record by name, `{"k": "milk"}`, or a list in order, or `GET /memo/recall?k=milk`, answered with the function's
 value as JSON (`core/README.md`, *Requests*).
 
-**A native lingo** is its library and its `openapi.json`, like `windows.lingo` holding `windows.dll`, which adds its
-phrases as it loads (`core/README.md`). Its paths are made from those phrases. A folder with neither an `openapi.json`
+**A native lingo** is its library and its `openapi.json`, like `notes.lingo` holding `notes.dll`, which adds its
+phrases as it loads (`core/README.md`). The lingos built into the lingo client, onsay everywhere and windows and native
+on Windows, are native lingos compiled into it: never in the lingos folder, always running, `built in` as their program. Its paths are made from those phrases. A folder with neither an `openapi.json`
 nor a program isn't a lingo and is left alone.
 
 **Loading.** The lingo client compiles every lingo in its folder when it loads it, so a broken one is set aside with
@@ -703,10 +704,9 @@ says what the computer is.
 
 ## 16. The Windows lingos
 
-The Windows app ships two native lingos for Windows, built from `lingos/` into `windows.lingo` and `native.lingo`, beside
-the onsay lingo, which every computer has (`lingos/onsay/README.md`), and the lingos of `lingo-library`, `agent` among
-them. Their phrases, with what each gives, does and needs, are in their `openapi.json`
-and the catalog, and in their `lingo_phrases` in C.
+The lingo client for Windows has two native lingos built in, from `lingos/`, beside onsay, which every computer has
+(`lingos/onsay/README.md`). The Windows app ships the lingos of `lingo-library` too, `agent` among them. Their phrases,
+with what each gives, does and needs, are in the catalog, and in `windows_lingo` and `native_lingo` in their C.
 
 - **`windows`**, Windows itself:
 

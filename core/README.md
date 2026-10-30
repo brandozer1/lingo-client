@@ -278,12 +278,12 @@ the lingo's own functions when its `openapi.json`'s `x-lingo` says `keep` (`../d
 ## Build and test
 
 ```
-./build.ps1                                 bin/onsay-core.exe, bin/onsay-core.lib, bin/test/onsay-core.exe, bin/lingos
-                                            (onsay, windows, native and every lingo of ../lingo-library, each a .lingo
-                                            file packed by the lingo client itself), bin/test/lingos/onsay.lingo, and
-                                            bin/linux-x64/onsay-core and bin/linux-arm64/onsay-core, for glibc 2.28 or
-                                            later, each with lingos/onsay.lingo, all built on Windows with zig, one
-                                            download, no installer
+./build.ps1                                 bin/onsay-core.exe and bin/test/onsay-core.exe, with onsay, windows and native
+                                            built in, bin/onsay-core.lib, bin/lingos (every lingo of ../lingo-library,
+                                            each a .lingo file packed by the lingo client itself), and
+                                            bin/linux-x64/onsay-core and bin/linux-arm64/onsay-core, with onsay built in,
+                                            for glibc 2.28 or later, all built on Windows with zig, one download, no
+                                            installer
 node test/server.mjs                        a stand-in for Onsay, then in another terminal:
 bin/test/onsay-core.exe test/onsay.json     runs every test, each result shown on the stand-in's side
 sh install.sh ./bin/linux-x64/onsay-core    on a Linux server: installs that one. With nothing after it, it downloads it

@@ -33,8 +33,6 @@ jobs:
           Compress-Archive -Path core\bin\onsay-core.exe, core\bin\lingos -DestinationPath release\lingo-client-windows-x64.zip
           Copy-Item core\bin\linux-x64\onsay-core release\onsay-core-linux-x64
           Copy-Item core\bin\linux-arm64\onsay-core release\onsay-core-linux-arm64
-          Copy-Item core\bin\linux-x64\lingos\onsay.lingo release\onsay-linux-x64.lingo
-          Copy-Item core\bin\linux-arm64\lingos\onsay.lingo release\onsay-linux-arm64.lingo
           Copy-Item core\install.sh release\
         shell: pwsh
       - uses: softprops/action-gh-release@v2

@@ -4,8 +4,8 @@
 //
 //   node test/server.mjs          then, in another terminal:   bin/test/onsay-core.exe test/onsay.json
 // The test core's home is test/data, made fresh each run: its lingos folder holds the test lingos (test/lingos) as
-// folders, memo packed into memo.lingo, every .lingo file the build made (bin/lingos), the onsay lingo's test build
-// (bin/test/lingos), and a deflated one and a broken one made here. Each are running, as running.json says, under the
+// folders, memo packed into memo.lingo, every .lingo file the build made (bin/lingos), and a deflated one and a broken one
+// made here. Its onsay, built in, is the test build, which talks to this server. Each are running, as running.json says, under the
 // policy.json written here, the onsay lingo signed in with the token written into its settings. Each case is a request,
 // sent down the connection as Onsay sends one for this computer's own account, signed, or as its proxy passes one on, or
 // to the port, or a command, and what the answer must be. A case about a lingo the core hasn't got, like windows, is
@@ -626,11 +626,16 @@ const WEB_CASES = [
       recall['x-lingo-function'] === 'memo.recall' && same(recall['x-lingo-needs'], ['store']) && recall.summary === 'What was kept under that name.' &&
       same(recall.requestBody.content['application/json'].schema, { type: 'object', properties: { k: {} }, required: ['k'] })
   }],
-  ['pack: windows, a native lingo, its paths made from its phrases', async () => {
-    const m = JSON.parse(unzip(readFileSync(fileURLToPath(new URL('../bin/lingos/windows.lingo', import.meta.url))))['openapi.json'])
+  ['windows, built in: its manifest made from its phrases', async () => {
+    const m = command('manifest', 'windows')
     const type = m.paths['/windows/input/type']?.post
-    return same(type?.['x-lingo-needs'], ['screen.act']) && type['x-lingo-function'] === 'input.type' && m['x-lingo'].program === 'windows.dll'
+    return same(type?.['x-lingo-needs'], ['screen.act']) && type['x-lingo-function'] === 'input.type' && m['x-lingo'].program === 'built in'
   }, 'windows'],
+  ['a built-in lingo always runs: stopping it is refused, saying why', async () => {
+    let why = ''
+    try { execFileSync(EXE, ['test/onsay.json', 'stop', 'onsay'], { cwd: CORE, encoding: 'utf8', stdio: ['ignore', 'ignore', 'pipe'] }) } catch (e) { why = e.stderr }
+    return /onsay is built into this program, so it always runs/.test(why)
+  }],
   ['pack: a serve lingo shares serve alone, at its route', async () => {
     command('pack', 'test/lingos/page', 'test/data/packed')
     const m = JSON.parse(unzip(readFileSync(new URL('packed/page.lingo', DATA)))['openapi.json'])
@@ -649,7 +654,7 @@ const WEB_CASES = [
     try { execFileSync(EXE, ['test/onsay.json', 'manifest', 'broken'], { cwd: CORE, encoding: 'utf8', stdio: ['ignore', 'ignore', 'pipe'] }) } catch (e) { why = e.stderr }
     return m.paths?.['/memo/recall']?.post['x-lingo-function'] === 'memo.recall' && m['x-lingo'].route === '/memo' && /broken\.ls line 3: There's no lingo or group called nope/.test(why)
   }],
-  ['the command line: with no onsay lingo running, call asks lingo(...) and use(...) of the address its settings name as ask', async () => {
+  ['the command line: call asks lingo(...) and use(...) of the address its settings name as ask, never Onsay\'s connection', async () => {
     writeFileSync(new URL('asking.json', DATA), JSON.stringify({ home: 'test/data', ask: `http://127.0.0.1:${PORT}/ask` }))
     const call = (...args) => new Promise((done) => {
       let out = '', err = ''
@@ -858,8 +863,7 @@ const WEB_CASES = [
     return same(signed, { url: 'http://127.0.0.1:8787/connect', code: 'TEST-CODE' }) && quick && done && status.signing_in === false &&
       status.running === true && status.failed === null && /^ed25519:/.test(status.key) && out === null && after.signed_in === false && after.key === null
   }],
-  ['signing in from an app with the onsay lingo stopped never waits, says why one failed, and devices says to sign in first', async () => {
-    writeFileSync(new URL('served/running.json', DATA), '[]')
+  ['signing in from an app never waits, says why one failed, and devices says to sign in first', async () => {
     const core = spawn(EXE, ['test/data/served.json'], { cwd: CORE, stdio: 'ignore' })
     const call = async (fn, values = []) => (await web('/.lingo/call', { port: SERVED, method: 'POST', body: { fn, values } })).json
     let r = { status: 0 }
@@ -868,13 +872,12 @@ const WEB_CASES = [
     const ended = await soon(async () => (await call('onsay.status'))?.signing_in === false)
     const status = await call('onsay.status'), devices = await web('/.lingo/call', { port: SERVED, method: 'POST', body: { fn: 'onsay.devices' } })
     core.kill()
-    return signed?.code === 'TEST-CODE' && quick && ended && status.running === false && status.signed_in === false &&
+    return signed?.code === 'TEST-CODE' && quick && ended && status.signed_in === false &&
       status.failed === "Signing in didn't finish: The code was turned down" && devices.status === 400 && /Sign in to see your devices$/.test(devices.json?.error)
   }],
-  ['bare: with no onsay lingo it runs on its own, answers its port, its own limits hold, and lingo(...) says it is not connected', async () => {
+  ['bare: not signed in to Onsay, it runs on its own, answers its port, its own limits hold, and lingo(...) says it is not connected', async () => {
     const lingos = new URL('barelingos/', DATA), home = new URL('bare/', DATA)
     cpSync(LINGOS, lingos, { recursive: true })
-    rmSync(new URL('onsay.lingo', lingos))
     mkdirSync(home, { recursive: true })
     writeFileSync(new URL('running.json', home), JSON.stringify(readdirSync(lingos).map((n) => n.replace(/\.lingo$/, ''))))
     writeFileSync(new URL('bare.json', DATA), JSON.stringify({ home: 'test/data/bare', lingos: 'test/data/barelingos', port: BARE, steps: 1000000000, ms: 300 }))
@@ -1069,7 +1072,7 @@ const session = (link) => {
     const entry = (name) => catalog.find((l) => l.name === name), about = (lingo) => entry(lingo)?.openapi?.info?.description
     const ops = (lingo) => Object.values(entry(lingo)?.openapi?.paths ?? {}).flatMap((item) => Object.values(item))
     const phrase = (lingo, id) => ops(lingo).find((o) => o['x-lingo-function'] === id), schema = (o) => o?.requestBody?.content?.['application/json']?.schema
-    const native = (lingo) => /\.(dll|so)$/.test(entry(lingo)?.openapi?.['x-lingo']?.program ?? '')
+    const builtIn = (lingo) => entry(lingo)?.openapi?.['x-lingo']?.program === 'built in'
     const recall = phrase('memo', 'memo.recall')
     report('catalog: a Lingo lingo from a .lingo file, its whole manifest made from its code, never the code', same(Object.keys(entry('memo') ?? {}), ['name', 'openapi']) &&
       about('memo') === "things to remember, kept in Onsay's own storage on this device." && ops('memo').length === 4 && entry('memo').openapi.openapi === '3.1.0' &&
@@ -1078,7 +1081,7 @@ const session = (link) => {
     report('catalog: core, every computer\'s floor, is never listed', !entry('core'))
     if (has('windows')) {
       const click = phrase('windows', 'input.click_text'), ids = ops('windows').map((o) => o['x-lingo-function'])
-      report('catalog: windows, a native lingo from its .lingo file, with what it is', native('windows') && about('windows')?.length > 0)
+      report('catalog: windows, built into the lingo client, with what it is', builtIn('windows') && about('windows')?.length > 0)
       report('windows: each phrase says what it gives and does, with its values', click?.description.startsWith('-> {x,y,text}: rings and clicks') &&
         same(schema(click), { type: 'object', properties: { words: {}, window: { default: null }, nth: { default: 0 } }, required: ['words'] }))
       report('windows: one layer, input and look, the low level groups gone', ['look.screenshot', 'input.type', 'input.point_at', 'input.cursor'].every((id) => ids.includes(id)) &&
@@ -1102,8 +1105,8 @@ const session = (link) => {
     report('library: every lingo loads from the .lingo file the build packed, says what it is, and every function says what it does', library.length >= 9 &&
       library.every((l) => has(l) && about(l)) && !silent.length, silent.length ? `\n    silent: ${silent.join(', ')}` : '')
     report('hello: the lingo client, its version, its device key and its catalog, and nothing else', same(Object.keys(hello), ['type', 'token', 'client', 'version', 'key', 'catalog']) &&
-      hello.client === 'lingo-client' && hello.version === '0.13.0' && /^ed25519:[A-Za-z0-9+/]{43}=$/.test(hello.key) && Array.isArray(hello.catalog))
-    report('catalog: onsay, a native lingo, ready, sharing /onsay alone', native('onsay') && ops('onsay').length === 1 && phrase('onsay', 'onsay.serve') !== undefined)
+      hello.client === 'lingo-client' && hello.version === '0.14.0' && /^ed25519:[A-Za-z0-9+/]{43}=$/.test(hello.key) && Array.isArray(hello.catalog))
+    report('catalog: onsay, built in, ready, sharing /onsay alone', builtIn('onsay') && ops('onsay').length === 1 && phrase('onsay', 'onsay.serve') !== undefined)
     for (const [name, test, lingo] of WEB_CASES) {
       if (lingo && !has(lingo)) { skipped++; console.log(`  skip  ${name}: this core has no ${lingo}`); continue }
       const started = Date.now()
@@ -1148,7 +1151,7 @@ const session = (link) => {
 // person puts lingos in a computer's lingos folder, every one of them running.
 rmSync(DATA, { recursive: true, force: true })
 mkdirSync(LINGOS, { recursive: true })
-for (const from of [new URL('./lingos/', import.meta.url), new URL('lingos/', BUILT), new URL('test/lingos/', BUILT)])
+for (const from of [new URL('./lingos/', import.meta.url), new URL('lingos/', BUILT)])
   for (const name of readdirSync(from)) if (name !== 'memo') cpSync(new URL(name, from), new URL(name, LINGOS), { recursive: true })
 keep('onsay', { token: TOKEN })
 writeFileSync(new URL('squeezed.lingo', LINGOS), deflated({

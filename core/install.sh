@@ -1,13 +1,12 @@
 #!/bin/sh
-# install.sh - puts the lingo client on a Linux server: the program, the onsay lingo, its folder and settings, and a
+# install.sh - puts the lingo client on a Linux server: the program, with onsay built in, its folder and settings, and a
 # service that keeps it running. It answers its own lingos on port 6969, with no Onsay account until it is signed in.
 #
 #   curl -fsSL https://github.com/brandozer1/lingo-client/releases/latest/download/install.sh | sh
 #                                             downloads the latest release and installs it
 #   curl -fsSL .../install.sh | sh -s -- --sign-in
 #                                             the same, signed in to Onsay
-#   sh install.sh ./bin/linux-x64/onsay-core  installs one already here, like from a checkout, with lingos/onsay.lingo
-#                                             beside it
+#   sh install.sh ./bin/linux-x64/onsay-core  installs one already here, like from a checkout
 #
 #   --sign-in   signs it in to Onsay from any device's browser, so Onsay can reach its lingos: onsay-core core.json call
 #               onsay.sign_in, which can be run any time after
@@ -40,12 +39,11 @@ else curl -fsSL "$ONSAY_DOWNLOAD/onsay-core-linux-$arch" -o "$bin/onsay-core.new
 chmod 755 "$bin/onsay-core.new"
 mv "$bin/onsay-core.new" "$bin/onsay-core"
 
-# The onsay lingo, which connects it to Onsay once it is signed in (../lingos/onsay/README.md).
-if [ -n "$from" ]; then cp "$(dirname "$from")/lingos/onsay.lingo" "$home/lingos/onsay.lingo"
-else curl -fsSL "$ONSAY_DOWNLOAD/onsay-linux-$arch.lingo" -o "$home/lingos/onsay.lingo"; fi
+# An onsay.lingo an older install put here: onsay is built in now, and a lingo with its name would be set aside.
+rm -f "$home/lingos/onsay.lingo"
 
-# Its settings, see core/README.md: its folder, which holds its lingos, its policy and everything it keeps. The onsay
-# lingo runs, and keeps its sign in as its own setting.
+# Its settings, see core/README.md: its folder, which holds its lingos, its policy and everything it keeps. Its onsay
+# keeps its sign in as its own setting.
 settings="$home/core.json"
 [ -f "$settings" ] || printf '{"home": "%s"}\n' "$home" > "$settings"
 "$bin/onsay-core" "$settings" start onsay > /dev/null

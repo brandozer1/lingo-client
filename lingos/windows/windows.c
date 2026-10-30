@@ -1,4 +1,4 @@
-// windows.c - the Windows lingo, a native DLL (windows.dll) the core loads: windows, controls, files, the clipboard,
+// windows.c - the Windows lingo, built into the lingo client for Windows (build.ps1): windows, controls, files, the clipboard,
 // commands, notifications, Onsay's panel, input (the mouse and keyboard as a person uses them), look (the screen read) and
 // chat (the person's Onsay chat). OCR and notifications have no C API, so they go through Windows PowerShell. Positions are
 // physical desktop pixels. What the app draws, Onsay's pointer, its rings, his panel and lines in the chat, goes out as a
@@ -1913,7 +1913,8 @@ static val *chat_step(run *r, val **a) { return chat_line(r, "step", a[0]); }
 #define CONTROL "{id,role,name,value,x,y,w,h,enabled,focused,can}"
 #define FILE_ "{name,path,size,folder,changed}"
 
-LINGO_ENTRY void lingo_phrases(void) {
+// Called once as the lingo client starts (core.c, BUILTINS).
+void windows_lingo(void) {
   // Every position is a real pixel, on every monitor, whatever its scale.
   typedef BOOL(WINAPI * aware_fn)(HANDLE);
   aware_fn aware = (aware_fn)(void *)GetProcAddress(GetModuleHandleW(L"user32.dll"), "SetProcessDpiAwarenessContext");

@@ -1,4 +1,4 @@
-// onsay.c - the onsay lingo, a native library the core loads (onsay.dll, onsay.so), which makes a lingo client Onsay's: its
+// onsay.c - the onsay lingo, built into the lingo client on every computer (build.ps1), which makes it Onsay's: its
 // one connection to Onsay, signing in and this device's key, what Onsay signs checked against its key built in, the
 // account's policy kept, decisions sent for the activity feed, and /onsay, where prompts come in and the agent loop
 // works through each: Onsay decides every step, and the calls run here. Everything it sends Onsay is kept in
@@ -1052,9 +1052,10 @@ static val *devices(run *r, val **v) {
   return out;
 }
 
-////////// 7. LINGO_PHRASES //////////
+////////// 7. ITS PHRASES //////////
 
-LINGO_ENTRY void lingo_phrases(void) {
+// Called once as the lingo client starts (core.c, BUILTINS).
+void onsay_lingo(void) {
   static const lingo_hooks hooks = { "public", running, decided, ask, key };
   lock = pl_gate_new(), logging = pl_gate_new();
   lingo_hook(&hooks);

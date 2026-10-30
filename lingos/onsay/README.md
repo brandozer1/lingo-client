@@ -1,7 +1,7 @@
 # The onsay lingo
 
-What makes a lingo client Onsay's, as a native lingo, `onsay.lingo`, shipped with every Onsay distribution and removable
-like any other lingo. With it stopped or gone the lingo client runs bare. It has no screen: an app, like Onsay Desktop,
+What makes a lingo client Onsay's, built into it on every computer (`../../core/build.ps1`), so it is always there and
+always runs. Until it is signed in it connects to nothing, and the lingo client runs bare. It has no screen: an app, like Onsay Desktop,
 shows what it does. How it talks to Onsay is the contract in the onsay repo's `docs/security.md`, *The onsay lingo and
 the wire*.
 
@@ -90,6 +90,5 @@ onsay-core core.json call onsay.sign_out         this computer forgets its sign 
 | `onsay.c` | the library: the connection, the checks, the policy, `/onsay`, `sent.log` and signing in, against `../../core/src/lingo.h` and `platform.h` |
 | `openapi.json` | what it is, and its two settings |
 
-`../../core/build.ps1` builds it into `bin/lingos/onsay.lingo` for Windows, `bin/linux-x64/lingos/onsay.lingo` and
-`bin/linux-arm64/lingos/onsay.lingo`, and a test build, `bin/test/lingos/onsay.lingo`, which talks to
-`core/test/server.mjs` and trusts its test key.
+`../../core/build.ps1` builds it into the lingo client for every platform, and into the test build,
+`bin/test/onsay-core.exe`, as one that talks to `core/test/server.mjs` and trusts its test key.

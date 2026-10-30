@@ -67,7 +67,7 @@ void pl_context(buf *out);
 
 void pl_random(void *to, size_t n);   // bytes no one can guess, for keys
 
-// A native lingo's library, like windows.dll, loaded and kept: its lingo_phrases, or NULL with why in error.
+// A native lingo's library, like notes.dll, loaded and kept: its lingo_phrases, or NULL with why in error.
 lingo_entry pl_library(const char *path, buf *error);
 
 // One web request, for http.send: method a word in capitals, url whole with no #, headers a record of text, each a whole

@@ -344,10 +344,11 @@ static void floor_phrases(void) {
 
 ////////// 3. LINGOS //////////
 
-/* Core is the only lingo built in. Every other is a .lingo file in the lingos folder, a zip of its openapi.json and its
-   program, or the same files in a folder of its name, as a lingo is written: its program is <name>.ls, in Lingo, or a
-   native library, <name>.dll or <name>.so. One that can't load is set aside with its reason, and the rest still load.
-   A lingo is running, its routes answering and in the catalog, or stopped, as home/running.json says. */
+/* Core, and the lingos built into this program for its platform (BUILTINS), are always there and always running. Every
+   other is a .lingo file in the lingos folder, a zip of its openapi.json and its program, or the same files in a folder
+   of its name, as a lingo is written: its program is <name>.ls, in Lingo, or a native library, <name>.dll or <name>.so.
+   One that can't load is set aside with its reason, and the rest still load. A lingo from the folder is running, its
+   routes answering and in the catalog, or stopped, as home/running.json says. */
 static arena *library;
 static val *device;                  // the compiler's instance of every lingo that loaded
 static val *found;                   // every lingo read: {name, from, manifest, program, file and code or library,
@@ -355,6 +356,21 @@ static val *found;                   // every lingo read: {name, from, manifest,
 static val *catalog;                 // every running lingo, with its manifest or why it can't load
 static unsigned long long looked;    // a fingerprint of the lingos folder and running.json when they were last read
 #define FNV 14695981039346656037ULL
+
+/* The lingos built into this program, each from ../lingos/<name>: its name, its openapi.json as text, and the function
+   in its C that adds its phrases. builtins.h is made by build.ps1 for each platform: onsay everywhere, and windows and
+   native on Windows. Each is never read from the lingos folder, always runs, and can't be stopped. */
+typedef struct { const char *name; const char *manifest; lingo_entry entry; } builtin;
+#include "builtins.h"
+#define BUILTIN "built in"   // what a built-in lingo's from and program say
+
+// The built-in lingo of that name, or NULL.
+static const builtin *builtin_of(const char *name) {
+  for (size_t i = 0; i < sizeof BUILTINS / sizeof *BUILTINS; i++) {
+    if (!strcmp(BUILTINS[i].name, name)) return &BUILTINS[i];
+  }
+  return NULL;
+}
 
 // Every native lingo by its number, core first, by its name. A library is loaded once and kept, since its phrases are in
 // the table from then on: a changed one is used after a restart.
@@ -600,6 +616,18 @@ static int load(const char *extra) {
   arena *a = library = arena_new();
   val *names = look(a, &looked), *stacked = v_list(a), *offered = v_list(a), *running = home_json(a, "running.json"), *more = NULL;
   found = v_list(a);
+
+  // The built-in lingos first, so one in the folder with the same name is set aside.
+  for (size_t i = 0; i < sizeof BUILTINS / sizeof *BUILTINS; i++) {
+    val *e = v_rec(a);
+    rec_set(a, e, "name", v_cstr(a, BUILTINS[i].name));
+    rec_set(a, e, "from", v_cstr(a, BUILTIN));
+    rec_set(a, e, "program", v_cstr(a, BUILTIN));
+    rec_set(a, e, "manifest", json_parse(a, BUILTINS[i].manifest, strlen(BUILTINS[i].manifest), NULL));
+    rec_set(a, e, "running", VBOOL(1));
+    list_push(a, found, e);
+  }
+
   if (extra) {
     buf path = { 0 };
     buf_str(&path, extra);
@@ -617,7 +645,8 @@ static int load(const char *extra) {
       if (e && more && !strcmp(text_or(e, "name", ""), text_or(more, "name", ""))) continue;
     }
     if (!e) continue;
-    if (!rec_get(e, "error") && entry_of(text_or(e, "name", ""))) set_aside(a, e, "another lingo here is already called that");
+    if (!rec_get(e, "error") && builtin_of(text_or(e, "name", ""))) set_aside(a, e, "a lingo built into this program is already called that");
+    else if (!rec_get(e, "error") && entry_of(text_or(e, "name", ""))) set_aside(a, e, "another lingo here is already called that");
     rec_set(a, e, "running", VBOOL(has(running, text_or(e, "name", ""))));
     list_push(a, found, e);
   }
@@ -627,14 +656,19 @@ static int load(const char *extra) {
   for (size_t i = 0; i < found->l.n; i++) {
     val *e = found->l.v[i];
     const char *name = text_or(e, "name", ""), *path = text_or(e, "library", NULL);
-    if (rec_get(e, "error") || !path) continue;
+    const builtin *built = strcmp(text_or(e, "from", ""), BUILTIN) ? NULL : builtin_of(name);
+    if (rec_get(e, "error") || (!path && !built)) continue;
     int k = native_called(name);
     if (k < 0 && native_total == sizeof natives / sizeof *natives) { set_aside(a, e, "this core can't take more native lingos"); continue; }
     if (k < 0) {
-      buf why = { 0 };
-      lingo_entry entry = pl_library(path, &why);
-      if (!entry) set_aside(a, e, fmt(a, "%s: %s", text_or(e, "program", ""), why.s));
-      buf_free(&why);
+      lingo_entry entry = NULL;
+      if (built) entry = built->entry;
+      else {
+        buf why = { 0 };
+        entry = pl_library(path, &why);
+        if (!entry) set_aside(a, e, fmt(a, "%s: %s", text_or(e, "program", ""), why.s));
+        buf_free(&why);
+      }
       if (!entry) continue;
       natives[native_total] = strdup(name);   // kept for as long as the core runs, like the library itself
       native_begin(loading = native_total);
@@ -1226,6 +1260,7 @@ val *core_control(arena *a, const char *verb, val *v, const char **why) {
   if (!strcmp(verb, "start") || !strcmp(verb, "stop")) {
     val *was = home_json(a, "running.json"), *now = v_list(a);
     if (!entry_of(lingo)) { *why = fmt(a, "There's no lingo called %s here", lingo); return NULL; }
+    if (builtin_of(lingo)) { *why = fmt(a, "%s is built into this program, so it always runs", lingo); return NULL; }
     for (size_t i = 0; was && was->k == V_LIST && i < was->l.n; i++) if (was->l.v[i]->k == V_TEXT && strcmp(was->l.v[i]->t.s, lingo)) list_push(a, now, was->l.v[i]);
     if (!strcmp(verb, "start")) list_push(a, now, v_cstr(a, lingo));
     if (!keep_json("running.json", now)) { *why = "This computer couldn't save which lingos run"; return NULL; }

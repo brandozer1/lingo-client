@@ -1,6 +1,6 @@
 // native.c - the native lingo, for Windows: call a function in Windows or any DLL directly, by its name and the shape of
-// what it takes and returns, so any of them can be run without code written for each one. Built for Windows x64 by
-// core/build.ps1, with a small vendored part of libffi (libffi/, MIT) to arrange the call. Needs the run permission,
+// what it takes and returns, so any of them can be run without code written for each one. Built into the lingo client for
+// Windows x64 by core/build.ps1, with a small vendored part of libffi (libffi/, MIT) to arrange the call. Needs the run permission,
 // since a call can do anything the computer can.
 //
 // 1. type(name)              -> the libffi type for a layout name, or NULL
@@ -93,7 +93,8 @@ static val *call(run *r, val **a) {
 
 ////////// 2. THE PHRASE //////////
 
-LINGO_ENTRY void lingo_phrases(void) {
+// Called once as the lingo client starts (core.c, BUILTINS).
+void native_lingo(void) {
   phrase_add("native", "run", "call(library, function, returns, args=nothing) -> value: calls a function in Windows or a DLL "
              "by name. library is its file, like \"kernel32.dll\", or \"\" for this program. returns and each argument's type is "
              "one of i8 u8 i16 u16 i32 u32 i64 u64 (whole numbers), f32 f64 (decimals), pointer, text, cstring, or none. args is "
