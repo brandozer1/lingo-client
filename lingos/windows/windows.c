@@ -1723,6 +1723,21 @@ static val *input_move_in(run *r, val **a) {
   return point_val(r, p);
 }
 
+// Through each point in turn, the seconds shared evenly among them, in one go, so a shape stays one movement.
+static val *input_move_along(run *r, val **a) {
+  val *points = a[0], *w = ready(r, a[1]);
+  if (points->k != V_LIST || !points->l.n) fail(r, "phrase", "input.move_along: points is a list of places, like [[100, 200], [150, 250]]");
+  double each = num_or(a[2], 0) / points->l.n;
+  POINT p = { 0 };
+  for (size_t i = 0; i < points->l.n; i++) {
+    val *one = points->l.v[i];
+    if (one->k != V_LIST || one->l.n != 2) fail(r, "phrase", "input.move_along: each point is [x, y]");
+    p = place(r, w, one->l.v[0], one->l.v[1]);
+    glide(r, p.x, p.y, each, 0);
+  }
+  return point_val(r, p);
+}
+
 static val *input_drag_in(run *r, val **a) {
   val *w = ready(r, a[0]);
   POINT from = place(r, w, a[1], a[2]), to = place(r, w, a[3], a[4]);
@@ -2009,48 +2024,48 @@ void windows_lingo(void) {
   aware_fn aware = (aware_fn)(void *)GetProcAddress(GetModuleHandleW(L"user32.dll"), "SetProcessDpiAwarenessContext");
   if (aware) aware((HANDLE)-4);   // per monitor aware, version 2
 
-  phrase_add("window", "screen.read", "list() -> [" WINDOW "]: front to back", win_list);
+  phrase_add("window", "screen.read", "list() -> [" WINDOW "]: every window open on this computer, front to back, with its id, app, title and place", win_list);
   phrase_add("window", "screen.read", "current() -> " WINDOW ": the one in front, never Onsay's own chat", win_front);
   phrase_add("window", "screen.act", "open(target) -> " WINDOW "?: opens an app, file, folder or web address, like notepad, target being its name or path", win_open);
   phrase_add("window", "screen.read", "wait_for(match, seconds=10) -> " WINDOW ": match {app} or {title}, part of the text is enough", win_wait);
-  phrase_add("window", "screen.act", "focus(id)", win_focus);
-  phrase_add("window", "screen.act", "close(id)", win_close);
-  phrase_add("window", "screen.act", "resize(id, how): how is min, max or normal", win_size);
-  phrase_add("window", "screen.act", "move(id, x=nothing, y=nothing, w=nothing, h=nothing)", win_move);
+  phrase_add("window", "screen.act", "focus(id): brings a window to the front and gives it the keyboard", win_focus);
+  phrase_add("window", "screen.act", "close(id): closes a window", win_close);
+  phrase_add("window", "screen.act", "resize(id, how): minimizes, maximizes or restores a window, how being min, max or normal", win_size);
+  phrase_add("window", "screen.act", "move(id, x=nothing, y=nothing, w=nothing, h=nothing): moves a window on the screen or changes its size, in pixels", win_move);
 
   phrase_add("controls", "screen.read", "find(win, match) -> [" CONTROL "]: match {name,role,value}, part of the text is enough", ui_find);
-  phrase_add("controls", "screen.read", "list(win, max=80) -> [" CONTROL "]", ui_all);
+  phrase_add("controls", "screen.read", "list(win, max=80) -> [" CONTROL "]: the buttons, boxes, menus and other controls in a window", ui_all);
   phrase_add("controls", "screen.read", "read(win) -> text: every word of a page or document", ui_text);
-  phrase_add("controls", "screen.act", "press(control)", ui_press);
-  phrase_add("controls", "screen.act", "fill(control, text): replaces its text", ui_fill);
-  phrase_add("controls", "screen.act", "toggle(control)", ui_toggle);
+  phrase_add("controls", "screen.act", "press(control): presses a button or other control found with controls.find", ui_press);
+  phrase_add("controls", "screen.act", "fill(control, text): replaces the text in a box found with controls.find", ui_fill);
+  phrase_add("controls", "screen.act", "toggle(control): ticks or unticks a checkbox or switch", ui_toggle);
   phrase_add("controls", "screen.act", "pick(control, option): a dropdown or list option, by name", ui_choose);
-  phrase_add("controls", "screen.act", "scroll(control, amount): positive is up", ui_scroll);
-  phrase_add("controls", "screen.read", "wait_for(win, match, seconds=10) -> " CONTROL, ui_wait);
+  phrase_add("controls", "screen.act", "scroll(control, amount): scrolls a list or page inside a window, positive up", ui_scroll);
+  phrase_add("controls", "screen.read", "wait_for(win, match, seconds=10) -> " CONTROL ": waits until a control matching {name,role,value} shows in a window", ui_wait);
 
-  phrase_add("files", "files.read", "read(path) -> text", fs_read);
-  phrase_add("files", "files.write", "write(path, text): replaces it", fs_write);
-  phrase_add("files", "files.write", "add_to(path, text)", fs_append);
+  phrase_add("files", "files.read", "read(path) -> text: the text of a file on this computer", fs_read);
+  phrase_add("files", "files.write", "write(path, text): writes a whole text file, replacing what is there", fs_write);
+  phrase_add("files", "files.write", "add_to(path, text): adds text to the end of a file", fs_append);
   phrase_add("files", "files.read, files.write", "edit(path, find, with, all=false) -> {replaced}: exact words in a file replaced by others, refused when they "
              "are there more than once unless all is true", fs_edit);
-  phrase_add("files", "files.read", "exists(path) -> bool", fs_exists);
-  phrase_add("files", "files.read", "list(folder, pattern=\"*\") -> [" FILE_ "]", fs_list);
-  phrase_add("files", "files.read", "find(folder, pattern=\"*\") -> [" FILE_ "]: every folder inside too", fs_find);
+  phrase_add("files", "files.read", "exists(path) -> bool: whether a file or folder is there", fs_exists);
+  phrase_add("files", "files.read", "list(folder, pattern=\"*\") -> [" FILE_ "]: the files and folders in a folder, like the desktop or downloads", fs_list);
+  phrase_add("files", "files.read", "find(folder, pattern=\"*\") -> [" FILE_ "]: finds files and folders by name in a folder and every folder inside it", fs_find);
   phrase_add("files", "files.read", "search(folder, words, pattern=\"*\", most=100) -> [{path,line,text}]: every line holding those words, in any case, in the "
              "text files of a folder and every folder inside, or those whose names match pattern", fs_search);
-  phrase_add("files", "files.write", "copy(from, to): into to if it is a folder", fs_copy);
-  phrase_add("files", "files.write", "move(from, to): into to if it is a folder", fs_move);
-  phrase_add("files", "files.write", "delete(path): to the Recycle Bin", fs_delete);
-  phrase_add("files", "files.write", "make_folder(path): makes it", fs_folder);
+  phrase_add("files", "files.write", "copy(from, to): copies a file or folder, into to if it is a folder", fs_copy);
+  phrase_add("files", "files.write", "move(from, to): moves or renames a file or folder, into to if it is a folder", fs_move);
+  phrase_add("files", "files.write", "delete(path): deletes a file or folder, to the Recycle Bin", fs_delete);
+  phrase_add("files", "files.write", "make_folder(path): makes a new folder", fs_folder);
 
-  phrase_add("clipboard", "screen.read", "read() -> text", clip_get);
-  phrase_add("clipboard", "screen.act", "write(text)", clip_set);
+  phrase_add("clipboard", "screen.read", "read() -> text: the text copied to the clipboard", clip_get);
+  phrase_add("clipboard", "screen.act", "write(text): copies text to the clipboard", clip_set);
 
-  phrase_add("commands", "run", "run(command) -> {code,out}: Windows PowerShell", shell_run);
-  phrase_add("commands", "none", "running() -> [{pid,name,memory}]: memory in MB", shell_processes);
-  phrase_add("commands", "run", "stop(pid)", shell_stop);
+  phrase_add("commands", "run", "run(command) -> {code,out}: runs any command or script in Windows PowerShell on this computer, and gives its exit code and output. For anything no other function does", shell_run);
+  phrase_add("commands", "none", "running() -> [{pid,name,memory}]: the programs and processes running now, memory in MB", shell_processes);
+  phrase_add("commands", "run", "stop(pid): ends a running program or process", shell_stop);
 
-  phrase_add("notify", "none", "show(title, text)", note_toast);
+  phrase_add("notify", "none", "show(title, text): shows a Windows notification", note_toast);
 
   phrase_add("panel", "none", "show(html, title=\"\", width=480, height=360): draws a small rounded window of Onsay's own on screen, beside him, "
              "showing html: a page, a table, a chart, a picture or an answer laid out. It stays until hidden or the person closes it, and "
@@ -2093,6 +2108,9 @@ void windows_lingo(void) {
   phrase_add("input", "screen.act, screen.read", "move_in(window=nothing, x=0.5, y=0.5, seconds=0) -> {x,y}: moves the mouse pointer, gliding "
              "it to a place in a window, or on the screen with no window, the middle unless given. x, y the same way as click_in, at a "
              "hand's pace or over seconds", input_move_in);
+  phrase_add("input", "screen.act, screen.read", "move_along(points, window=nothing, seconds=0) -> {x,y}: moves the mouse pointer through a list of "
+             "places in turn, tracing a path or shape like a circle, each [x, y] the same way as click_in. At a hand's pace, or over seconds in all. "
+             "Clicks nothing", input_move_along);
   phrase_add("input", "screen.act, screen.read", "drag_in(window, x1, y1, x2, y2): drags from one place in a window to another, the same way as "
              "click_in", input_drag_in);
   phrase_add("input", "screen.act, screen.read", "scroll_in(window, amount, x=0.5, y=0.5) -> {x,y}: scrolls at a place in a window, the middle "

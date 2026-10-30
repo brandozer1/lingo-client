@@ -321,7 +321,8 @@ under its limits.
 There are two ways to reach a function: name it, with a dotted call here or `use(...)` elsewhere, or ask for it in
 words with `lingo(...)` when you don't know which.
 
-A lingo's own code may call `lingo(...)` too.
+A lingo's own code may call `lingo(...)` too. `lingo.ways(ask, values)` asks the same way but runs nothing: it gives the
+best ways, best first, each `{does, where, address, inputs, needs}`, to choose from and run with `use(...)`.
 
 A lingo client with no onsay lingo running asks the web address its settings name as `ask` instead, the same way
 (`core/README.md`, *Settings*). Onsay runs its own library like that.
@@ -510,7 +511,9 @@ native lingo, which has no comments to read, and `x-lingo` with its settings, a 
 
 - **`settings`** is a list. Each is a name alone, or a record of its `name`, and as it needs: `title`, the words a form
   shows, `about`, what it is and where to get it, `default`, its value when none is kept, `required`, true when the lingo
-  can't work without it, and `secret`, true for a key or a password, which a form hides.
+  can't work without it, and `secret`, true for a key or a password, which a form hides. A required one with no value
+  and no default is named in the catalog as `x-lingo.missing`, never its value, so Onsay won't pick the lingo on that
+  computer until it is set.
 - **`keep`**, which most lingos leave out, names two of the lingo's own functions that keep its settings wherever its
   maker wants them: `read(key)` gives one's value and `write(key, value)` keeps one. Inside them, `setting(...)` of
   that lingo reads the lingo client's own file. Without it, the lingo client keeps them in its own folder,
@@ -664,7 +667,7 @@ Keyword spellings are not worth shortening: words like `return` and `continue` a
 
 ## 15. The core: what every computer has
 
-Every lingo client has one lingo of its own, `core`, on any computer, never listed in its catalog. It is the floor:
+Every lingo client has one lingo of its own, `core`, on any computer. Its catalog lists what a request may reach, only for its own account's devices: never `lingo` or `settings`. It is the floor:
 only what Lingo truly can't write for itself, each phrase called with its group, like `std.length(x)`. Anything Lingo
 can write in a few lines is a standard function instead, written in Lingo on this floor (`lingos/standard/`).
 

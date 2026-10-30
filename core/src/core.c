@@ -294,21 +294,28 @@ static val *asked(run *r, buf *in) {
   return rec_get(got, "value") ? rec_get(got, "value") : NOTHING;
 }
 
-// lingo.run(ask, values, gives), with what was around it (pl_context) and the function asking, never the answer itself.
-static val *lingo_run(run *r, val **a) {
+/* A request of the lingo function, with what was around it (pl_context) and the function asking, never the answer
+   itself. gives is what lingo.run says it wants, NULL for lingo.ways, which asks for the ways, nothing run. */
+static val *lingo_asked(run *r, val *ask, val *values, val *gives) {
   buf in = { 0 };
   buf_str(&in, "{\"ask\":");
-  buf_json(&in, a[0]);
+  buf_json(&in, ask);
   buf_str(&in, ",\"values\":");
-  buf_json(&in, a[1]);
-  buf_str(&in, ",\"gives\":");
-  buf_json(&in, a[2]);
+  buf_json(&in, values);
+  if (gives) { buf_str(&in, ",\"gives\":"); buf_json(&in, gives); }
+  else buf_str(&in, ",\"mode\":\"list\"");
   buf_str(&in, ",\"context\":");
   pl_context(&in);
   if (job.fn) { buf_str(&in, ",\"asking\":"); buf_json_str(&in, job.fn, strlen(job.fn)); }
   buf_chr(&in, '}');
   return asked(r, &in);
 }
+
+// lingo.run(ask, values, gives).
+static val *lingo_run(run *r, val **a) { return lingo_asked(r, a[0], a[1], a[2]); }
+
+// lingo.ways(ask, values).
+static val *lingo_ways(run *r, val **a) { return lingo_asked(r, a[0], a[1], NULL); }
 
 // lingo.use(address, values).
 static val *lingo_use(run *r, val **a) {
@@ -338,6 +345,7 @@ static void floor_phrases(void) {
              "with its value now", settings_get);
   phrase_add("settings", "none", "set(lingo, key, value): kept wherever that lingo keeps its settings", settings_set);
   phrase_add("lingo", "none", "run(ask, values=nothing, gives=\"\")", lingo_run);
+  phrase_add("lingo", "none", "ways(ask, values=nothing) -> [{does,where,address,inputs,needs}]: the best ways to do it, best first, nothing run", lingo_ways);
   phrase_add("lingo", "none", "use(address, values=nothing)", lingo_use);
   phrase_add("lingo", "none", "setting(key, reference)", setting_);
 }
@@ -363,6 +371,13 @@ static unsigned long long looked;    // a fingerprint of the lingos folder and r
 typedef struct { const char *name; const char *manifest; lingo_entry entry; } builtin;
 #include "builtins.h"
 #define BUILTIN "built in"   // what a built-in lingo's from and program say
+
+// core's own manifest. Its calls are every computer's floor: the language's own and the settings are never reached by a
+// request, so they are in no catalog, and only this account's own devices reach the rest (let_in).
+#define CORE_MANIFEST "{\"info\":{\"version\":\"1.0.0\",\"description\":\"What every lingo client can do by itself on its computer: send a web request from that computer, wait, write to its log, tell the time, and keep text in its own storage.\"}}"
+static int core_private(const char *lingo, const char *id) {
+  return !strcmp(lingo, "core") && (!strncmp(id, "lingo.", 6) || !strncmp(id, "settings.", 9));
+}
 
 /* The standard functions every lingo can call with nothing to install, like text.split, list.sort and request.get, from
    ../lingos/standard: each group's name and its Lingo code (standard.h, made by build.ps1). They compile with every lingo
@@ -535,7 +550,7 @@ static val *shared(arena *a, const char *name) {
   val *own = rec_get(rec_get(rec_get(device, "lingos"), name), "phrases"), *out = v_list(a);
   const char *serve = fmt(a, "%s.serve", name);
   for (size_t i = 0; own && i < own->l.n; i++) if (!strcmp(text_or(own->l.v[i], "id", ""), serve)) { list_push(a, out, own->l.v[i]); return out; }
-  for (size_t i = 0; own && i < own->l.n; i++) list_push(a, out, own->l.v[i]);
+  for (size_t i = 0; own && i < own->l.n; i++) if (!core_private(name, text_or(own->l.v[i], "id", ""))) list_push(a, out, own->l.v[i]);
   return out;
 }
 
@@ -621,6 +636,23 @@ static val *described(arena *a, val *e) {
   return out;
 }
 
+static val *declared(arena *a, const char *lingo, val **keep);   // 7.
+
+/* Its manifest's x-lingo says missing, the names of its required settings with no value on this computer, never a value,
+   so Onsay knows it can't run here yet. Settings a lingo keeps itself can't be seen without running it, so they count as
+   set. */
+static void say_missing(arena *a, val *e) {
+  const char *name = text_or(e, "name", "");
+  val *keep = NULL, *all = declared(a, name, &keep), *missing = v_list(a);
+  if (keep) return;
+  for (size_t i = 0; i < all->l.n; i++) {
+    val *s = all->l.v[i], *wanted = rec_get(s, "required"), *now = lingo_setting(a, name, text_or(s, "name", ""));
+    if (!wanted || !truthy(wanted) || rec_get(s, "default")) continue;
+    if (!now || now->k == V_NOTHING || (now->k == V_TEXT && !now->t.len)) list_push(a, missing, rec_get(s, "name"));
+  }
+  if (missing->l.n) rec_set(a, rec_get(rec_get(e, "manifest"), "x-lingo"), "missing", missing);
+}
+
 // Reads everything again: every lingo, the natives, the graph, the manifests and the catalog, with extra, a folder being
 // packed, in place of any lingo of its name. Built beside what there was, which stays in use when even core's own lingos
 // can't load now. 1 when it loaded.
@@ -641,6 +673,13 @@ static int load(const char *extra) {
     rec_set(a, e, "running", VBOOL(1));
     list_push(a, found, e);
   }
+  val *floor = v_rec(a);
+  rec_set(a, floor, "name", v_cstr(a, "core"));
+  rec_set(a, floor, "from", v_cstr(a, BUILTIN));
+  rec_set(a, floor, "program", v_cstr(a, BUILTIN));
+  rec_set(a, floor, "manifest", json_parse(a, CORE_MANIFEST, strlen(CORE_MANIFEST), NULL));
+  rec_set(a, floor, "running", VBOOL(1));
+  list_push(a, found, floor);
 
   if (extra) {
     buf path = { 0 };
@@ -740,6 +779,7 @@ static int load(const char *extra) {
     val *e = found->l.v[i], *one = v_rec(a), *error = rec_get(e, "error");
     if (!error && (!rec_get(rec_get(e, "manifest"), "paths") || rec_get(e, "fresh"))) rec_set(a, e, "manifest", described(a, e));
     if (!truthy(rec_get(e, "running"))) continue;
+    if (!error) say_missing(a, e);
     rec_set(a, one, "name", rec_get(e, "name"));
     rec_set(a, one, error ? "error" : "openapi", error ? error : rec_get(e, "manifest"));
     list_push(a, catalog, one);
@@ -889,6 +929,7 @@ static int names(const char *who, const caller *c) {
    which rule decided. */
 static int let_in(arena *a, val *p, const caller *c, const char *lingo, const char *rest, const char **why) {
   val *block = rec_get(p, "block"), *access = rec_get(p, "access");
+  if (!strcmp(lingo, "core") && !names("me", c) && !names("my devices", c)) { *why = "core is for this account's own devices"; return 0; }
   for (size_t i = 0; i < block->l.n; i++)
     if (block->l.v[i]->k == V_TEXT && names(fmt(a, "ip %s", block->l.v[i]->t.s), c)) { *why = fmt(a, "blocked: %s", block->l.v[i]->t.s); return 0; }
   for (size_t i = 0; i < access->l.n; i++) {
@@ -1195,6 +1236,7 @@ int lingo_set(const char *lingo, const char *key, val *value) {
   rec_set(a, s, key, value);
   int ok = named(lingo) && keep_json(fmt(a, "settings/%s.json", lingo), s);
   arena_free(a);
+  looked = 0;   // read everything again, so the catalog says what is still missing
   return ok;
 }
 
@@ -1516,6 +1558,7 @@ static val *unescape(arena *a, const char *s, size_t n) {
 // A function's listing, if the lingo has one by that id, like memo.recall of memo or window.list of windows.
 static val *listed(const char *lingo, const char *id) {
   val *own = rec_get(rec_get(rec_get(device, "lingos"), lingo), "phrases");
+  if (core_private(lingo, id)) return NULL;
   for (size_t i = 0; own && i < own->l.n; i++) if (!strcmp(text_or(own->l.v[i], "id", ""), id)) return own->l.v[i];
   return NULL;
 }

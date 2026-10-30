@@ -2,6 +2,10 @@
 // lingos folder by its dotted name, all as they run.
 
 // What was kept under a name, asked through lingo(...).
+fn ways(task) {
+  return lingo.ways(task, {name: "x"})
+}
+
 fn kept(k) {
   return lingo("what was kept under a name", {name: k}, "text")
 }

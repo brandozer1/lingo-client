@@ -225,7 +225,7 @@ const CASES = [
     name: "settings.set keeps one in its file, and settings.get gives each with what its openapi.json says and its value",
     path: '/checks/set_units',
     check: (r) => r.status === 200 && r.json[0] === 'kelvin' && same(r.json[1], [
-      { name: 'units', title: 'Units', about: 'metric or imperial.', default: 'metric', required: true, value: 'kelvin' }, { name: 'name', value: 'Ana' }, { name: 'color', value: null }]) &&
+      { name: 'units', title: 'Units', about: 'metric or imperial.', default: 'metric', required: true, value: 'kelvin' }, { name: 'name', required: true, value: 'Ana' }, { name: 'color', value: null }]) &&
       JSON.parse(readFileSync(new URL('prefs.json', SETTINGS), 'utf8')).units === 'kelvin',
   },
   { name: 'keep: a lingo that keeps its settings with its own functions', path: '/checks/vault_keep', check: (r) => gives(['0000', '1234', '"1234"', '1234'])(r) && !existsSync(new URL('vault.json', SETTINGS)) },
@@ -242,7 +242,7 @@ const CASES = [
     check: (r) => gives('Bo')(r) && same(shown.map((s) => s.value), ['cli', 'Bo', null]) && shown[0].title === 'Units',
   },
   // agent: the library's AI, on a key from its settings on this computer, here the stand-in's.
-  { name: 'agent.ask with no key says where to set one', before: () => keep('agent', {}), path: '/agent/ask', values: { prompt: 'hello' }, check: fails(500, /agent's settings/) },
+  { name: "agent.ask with no key asks Onsay's AI", before: () => keep('agent', {}), path: '/agent/ask', values: { prompt: 'hello' }, check: () => asked.address === 'https://api.onsay.dev/ai/chat' },
   { name: 'agent.ask asks with the key, model and address from its settings', before: () => keep('agent', { openai_key: 'test-key', url: AI }), path: '/agent/ask', values: { prompt: 'hello' }, check: gives('gpt-5-mini says: hello') },
   { name: 'agent.ask with a model of its own', path: '/agent/ask', values: { prompt: 'hi there', model: 'qwen/qwen3' }, check: gives('qwen/qwen3 says: hi there') },
   {
@@ -316,6 +316,10 @@ const CASES = [
   },
   { name: 'lingo(...) with words worked out as it runs', path: '/checks/capital_of_japan', check: (r) => gives('Tokyo')(r) && asked.gives === '' },
   { name: "lingo(...): Onsay reaches this computer's lingos while it waits", path: '/checks/only_here', check: (r) => gives('heard: 2 litres')(r) && device?.status === 200 },
+  { name: 'lingo.ways asks for the ways and runs nothing', path: '/asker/ways', values: { task: 'the ways to do it' }, check: (r) => r.status === 200 && r.json?.[0]?.address === 'laptop.tester/memo/all' && asked.mode === 'list' && !('gives' in asked) },
+  { name: 'core: this account reaches its calls by request', path: '/core/compute/now', values: {}, check: (r) => r.status === 200 && r.json > 0 },
+  { name: "core: the language's own are never reached by a request", path: '/core/lingo/use', values: { address: 'x' }, check: fails(404, /core has no function lingo\.use/) },
+  { name: 'core: the settings are never reached by a request', path: '/core/settings/get', values: { lingo: 'prefs' }, check: fails(404, /core has no function settings\.get/) },
   { name: "a lingo's own lingo(...), saying the request it runs for", path: '/asker/kept', values: { k: 'eggs' }, check: (r) => gives('kept: eggs')(r) && asked.for === `r${next}` },
   {
     name: 'a lingo reaching one elsewhere with use(...), asked of Onsay at its address',
@@ -493,6 +497,11 @@ const WEB_CASES = [
     const r = await send('/memo/recall?k=milk', undefined, { as: undefined, headers: signedBy('laptop', 'laptop.tester', 'GET', '/memo/recall?k=milk') })
     return r.status === 200 && r.json === '2 litres' && decisions().some((d) => d.caller === 'laptop.tester' && d.why === 'rule: my devices' && d.allowed)
   }],
+  ['core: anyone else is kept out, even with a rule naming it', async (send) => {
+    command('share', 'core', 'ip 203.0.113.0/24')
+    const r = await send('/core/compute/now', {}, from('203.0.113.9'))
+    return r.status === 404
+  }],
   ['signed: a device of another handle reaches only what is shared with that handle', async (send) => {
     const ask = () => send('/memo/recall?k=milk', undefined, { as: undefined, headers: signedBy('phone', 'phone.james', 'GET', '/memo/recall?k=milk') })
     const before = await ask()
@@ -605,6 +614,13 @@ const WEB_CASES = [
     command('ceiling', ...POLICY.ceiling)
     const again = await post('/checks/http_get', { base: HTTP })
     return r.status === 403 && /checks needs net, which this computer never allows/.test(r.json.error) && again.status === 200 && same(policyFile().ceiling, POLICY.ceiling)
+  }],
+  ['required settings: one with no value is named in the catalog, and gone once it is set', async () => {
+    await control('set', { lingo: 'prefs', key: 'name', value: '' })
+    const named = await soon(() => catalog.find((l) => l.name === 'prefs')?.openapi['x-lingo'].missing?.includes('name'))
+    await control('set', { lingo: 'prefs', key: 'name', value: 'Ana' })
+    const gone = await soon(() => !catalog.find((l) => l.name === 'prefs')?.openapi['x-lingo'].missing)
+    return named && gone
   }],
   ['running: stopped by the control route, it is not there, and leaves the catalog; started, back', async () => {
     const s = await control('stop', { lingo: 'memo' })
@@ -927,6 +943,7 @@ const LINGO = [
     return `heard: ${device.json}`
   }],
   [/never answered/, () => new Promise(() => {})],
+  [/^the ways to do it$/, ({ mode }) => mode === 'list' ? [{ does: 'Does it', where: 'on your laptop', address: 'laptop.tester/memo/all', inputs: {} }] : 'it ran'],
   [/^trip\/plan$/, () => ({ questions: ['Where to?', 'When?'] })],
 ]
 const answer = async (m, send) => {
@@ -1085,7 +1102,7 @@ const session = (link) => {
       about('memo') === "things to remember, kept in Onsay's own storage on this device." && ops('memo').length === 4 && entry('memo').openapi.openapi === '3.1.0' &&
       recall?.description === 'What was kept under that name.' && recall['x-lingo-calls'] === 0 && 'k' in (schema(recall)?.properties ?? {}) && !JSON.stringify(entry('memo')).includes('store.get'))
     report('catalog: each function counts its lingo(...) calls', phrase('asker', 'asker.kept')?.['x-lingo-calls'] === 1 && phrase('asker', 'asker.forecast')?.['x-lingo-calls'] === 0)
-    report('catalog: core, every computer\'s floor, is never listed', !entry('core'))
+    report('catalog: core lists what a request may reach, never the language\'s own or the settings', !!phrase('core', 'http.send') && !phrase('core', 'lingo.run') && !phrase('core', 'settings.get'))
     if (has('windows')) {
       const click = phrase('windows', 'input.click_text'), ids = ops('windows').map((o) => o['x-lingo-function'])
       report('catalog: windows, built into the lingo client, with what it is', builtIn('windows') && about('windows')?.length > 0)
@@ -1111,7 +1128,7 @@ const session = (link) => {
     report('the build ships one lingo, the agent, and it says what each function does', same(shipped, ['agent.lingo']) && about('agent') && !ops('agent').some((o) => !o.description))
     report('standard functions are no app: no entry in the catalog, and nothing to install', !['text', 'list', 'math', 'json', 'url', 'request', 'time', 'encode'].some((g) => entry(g)))
     report('hello: the lingo client, its version, its device key and its catalog, and nothing else', same(Object.keys(hello), ['type', 'token', 'client', 'version', 'key', 'catalog']) &&
-      hello.client === 'lingo-client' && hello.version === '0.16.1' && /^ed25519:[A-Za-z0-9+/]{43}=$/.test(hello.key) && Array.isArray(hello.catalog))
+      hello.client === 'lingo-client' && hello.version === '0.16.2' && /^ed25519:[A-Za-z0-9+/]{43}=$/.test(hello.key) && Array.isArray(hello.catalog))
     report('catalog: onsay, built in, ready, sharing /onsay alone', builtIn('onsay') && ops('onsay').length === 1 && phrase('onsay', 'onsay.serve') !== undefined)
     for (const [name, test, lingo] of WEB_CASES) {
       if (lingo && !has(lingo)) { skipped++; console.log(`  skip  ${name}: this core has no ${lingo}`); continue }
