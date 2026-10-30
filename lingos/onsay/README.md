@@ -48,7 +48,7 @@ the wire*.
   4. Back to 1, until the decision is the reply, at most 8 calls, then "That needed more steps than I take at once, so
      I stopped here. Ask again to go on." The reply is the last message of the turn.
 
-  In decision mode each call is first a card at `/live`, "Which should I do?" with each of the decision's `choices` as
+  In list mode each call is first a card at `/live`, "Which should I do?" with each of the decision's `choices` as
   "what it does, where" and "None of these", which ends the prompt with "Okay, I didn't do any of those. Say it another
   way and I'll look again.", and the pick runs. A value a call needs that nobody gave, its `missing`, is asked of the
   person first, "What city should I use?", the answer read as JSON when it is JSON. A card waits 2 minutes. A call whose

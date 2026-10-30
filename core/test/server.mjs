@@ -801,7 +801,7 @@ const WEB_CASES = [
     return r.status === 500 && /Stopped by the person/.test(r.json?.error) && Date.now() - started < 3000 && turn?.text === 'Okay, I stopped.' && /^It failed: .*[Ss]topped/.test(turn.messages[1]?.content)
   }],
   ['/onsay: with Let me choose each call is first a card of the closest ways and None of these, followed at /live with its steps, and the pick runs', async () => {
-    const headers = { authorization: `Bearer ${onsayed.key}` }, session = '0193abc4d5e6f7a8b9', body = { prompt: 'pick for me', session, mode: 'decision' }
+    const headers = { authorization: `Bearer ${onsayed.key}` }, session = '0193abc4d5e6f7a8b9', body = { prompt: 'pick for me', session, mode: 'list' }
     const card = async () => { let live = null; await soon(async () => (live = (await web(`/onsay/sessions/${session}/live`, { headers })).json)?.questions); return live }
     const out = web('/onsay', { method: 'POST', body, headers }), live = await card()
     const sent = await web(`/onsay/sessions/${session}/answers`, { method: 'POST', body: { answers: ['The second, on this computer'] }, headers })
@@ -811,7 +811,7 @@ const WEB_CASES = [
     await card()
     await web(`/onsay/sessions/${session}/answers`, { method: 'POST', body: { answers: ['None of these'] }, headers })
     const none = await refused
-    return decided.at(-1).mode === 'decision' && live?.running === true && same(live.steps, [{ text: 'Understanding what you asked', depth: 0 }, { text: 'Waiting for you to choose', depth: 0 }]) &&
+    return decided.at(-1).mode === 'list' && live?.running === true && same(live.steps, [{ text: 'Understanding what you asked', depth: 0 }, { text: 'Waiting for you to choose', depth: 0 }]) &&
       same(live.questions, [{ question: 'Which should I do?', choices: ['The first, on this computer', 'The second, on this computer', 'None of these'] }]) && sent.status === 200 &&
       done.json?.text === 'you picked: ["hi Ana","hi Ana"]' && done.json.steps.some((s) => s.text === 'Picked: The second') && done.json.session === session &&
       same(after, { running: false, steps: [], questions: null }) && again.status === 404 && none.json?.text === "Okay, I didn't do any of those. Say it another way and I'll look again."
@@ -988,7 +988,7 @@ const decide = (m, link) => {
     : /spin forever/.test(asked) ? here('checks/forever', 'Spins until it is stopped')
     : /plan a trip/.test(asked) ? { call: 'trip/plan', does: 'Plans a trip', where: 'on the web', inputs: {}, missing: [] }
     : /recall something/.test(asked) && !gave.length ? here('memo/recall', 'What was kept under a name', {}, ['k'])
-    : m.mode === 'decision' && !gave.length ? { ...first, choices: [first, second] }
+    : m.mode === 'list' && !gave.length ? { ...first, choices: [first, second] }
     : gave.length ? { reply: `you picked: ${gave[0]}` } : { reply: `Onsay heard: ${asked}` }) })
 }
 

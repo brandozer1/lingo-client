@@ -668,7 +668,7 @@ static val *called(run *r, const char *address, val *inputs, buf *why) {
 /* Every request to /onsay, each with its prompt key as Authorization: Bearer <key>.
      POST /onsay {prompt, session, mode}   the prompt worked through with the session so far, answered {session, text,
                                        steps} or {session, questions, steps}, steps every step it took. With no session,
-                                       a new one. mode: run, the default, or decision, where every pick is the person's
+                                       a new one. mode: run, the default, or list, where every pick is the person's
      GET /onsay/sessions               [{session, prompt}], the newest first, each named by its first prompt
      GET /onsay/sessions/<id>          {session, turns}: each {prompt, text} or {prompt, questions}, and messages, the
                                        chat messages it added to the log, its calls and what they gave, and its reply
@@ -677,7 +677,7 @@ static val *called(run *r, const char *address, val *inputs, buf *why) {
      POST /onsay/sessions/<id>/answers {answers}   the person's answers to those questions, in order
    A prompt is the agent loop, Onsay's lingo function in the AI's seat: the whole log goes to Onsay, which decides the next
    step, a call with its inputs or the reply; the call runs here (called), and it and what it gave join the log, until
-   the decision is the reply, at most MOST calls. In decision mode each call is first the person's pick of the closest
+   the decision is the reply, at most MOST calls. In list mode each call is first the person's pick of the closest
    ways, or None of these, and a value a call needs that nobody gave is asked of them. A call whose answer asks questions
    ends the prompt with them. A session is kept in the store as onsay/sessions/<id>, its id the time it began and a few
    random letters, or one the app made the same way, so it can follow the prompt as it runs. */
@@ -756,7 +756,7 @@ static val *serve(run *r, val **v) {
   val *prompt = rec_get(json, "prompt"), *log, *added = v_list(a), *done = v_rec(a), *record = v_rec(a), *asks = NULL;
   if (!prompt || prompt->k != V_TEXT || !prompt->t.len) return answer(r, 400, "Send the prompt as {\"prompt\": \"...\"}");
   const char *reply = NULL, *unanswered = "Nobody answered in 2 minutes, so I stopped. Ask again when you're ready.";
-  int choosing = !strcmp(text_or(json, "mode", ""), "decision"), reached = 1;
+  int choosing = !strcmp(text_or(json, "mode", ""), "list"), reached = 1;
   buf m = { 0 };
   turn t = { .session = id };
   pl_enter(lock);
@@ -769,7 +769,7 @@ static val *serve(run *r, val **v) {
     if (k > MOST) { reply = "That needed more steps than I take at once, so I stopped here. Ask again to go on."; break; }
     buf_str(&m, "{\"messages\":");
     buf_json(&m, log);
-    buf_str(&m, choosing ? ",\"mode\":\"decision\"}" : "}");
+    buf_str(&m, choosing ? ",\"mode\":\"list\"}" : "}");
     d = exchange("decide", m.s, m.n, r->stop, 150, &said, &t) ? json_parse(a, said.s, said.n, NULL) : NULL;
     m.n = said.n = 0;
     if (*r->stop) { buf_free(&said); break; }
