@@ -1,21 +1,20 @@
 // windows.c - the base calls on Windows, built into the lingo client for Windows (build.ps1): windows, controls, files, the clipboard,
-// commands, notifications, Onsay's panel, input (the mouse and keyboard as a person uses them), look (the screen read) and
-// chat (the person's Onsay chat). OCR and notifications have no C API, so they go through Windows PowerShell. Positions are
+// commands, notifications, Onsay's panel, input (the mouse and keyboard as a person uses them) and look (the screen read). OCR and notifications have no C API, so they go through Windows PowerShell. Positions are
 // physical desktop pixels. What the app draws, Onsay's pointer, its rings, his panel and lines in the chat, goes out as a
 // line of JSON on stdout (show), which onsay-desktop's Overlay.cs reads.
 //
-// 1. helpers                  text, records, boxes, paths, waiting, PowerShell
+// 1. helpers                  text, boxes, paths, PowerShell
 // 2. window                   list, current, open, wait_for, focus, close, resize, move
 // 3. controls                 find, list, read, press, fill, toggle, pick, scroll, wait_for
 // 4. screen                   a picture of it, and its words by OCR
 // 5. pointer and keys         Onsay's pointer (virtual or real), clicks, drags, the wheel, rings, his panel, and typing
-// 6. files                    read, write, add_to, edit, exists, list, find, search, copy, move, delete, make_folder
-// 7. clipboard/commands/notify
+// 6. files                    exists, list, find, copy, move, delete: what is Windows' own about them
+// 7. clipboard, commands, notifications
 // 8. input                    the mouse and keyboard the way a person uses them: words on screen, controls by name, places in a window
 // 9. look                     the screen read as text, and a picture of it
-// 10. chat                    ask, say and step: questions for the person in Onsay's chat, waited for, and lines in it
-// 11. base_calls()            -> every call joined to its function (../onsay/calls_every.h and calls_device.h), called as the
+// 10. base_calls()            -> every call joined to its function (../onsay/calls_every.h and calls_device.h), called as the
 //                               lingo client starts (onsay_lingo)
+// What is the same on every computer, like files.search and chat, is in ../onsay/calls_shared.c.
 #define COBJMACROS
 #include <initguid.h>
 #include <windows.h>
@@ -31,18 +30,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "platform.h"
+#define SLASH "\\"
+#include "calls_shared.c"
 
 ////////// 1. HELPERS //////////
-
-static const char *str(run *r, val *x) {
-  if (x->k == V_TEXT) return x->t.s;
-  buf b = { 0 };
-  buf_text(&b, x);
-  val *t = v_text(r->a, b.s ? b.s : "", b.n);
-  buf_free(&b);
-  return t->t.s;
-}
 
 static val *wtext(run *r, const wchar_t *w, int len) {
   buf b = { 0 };
@@ -52,11 +43,10 @@ static val *wtext(run *r, const wchar_t *w, int len) {
   return t;
 }
 
-static void put(run *r, val *rec, const char *key, val *v) { rec_set(r->a, rec, key, v); }
-static void put_num(run *r, val *rec, const char *key, double n) { rec_set(r->a, rec, key, v_num(r->a, n)); }
-static val *part(val *rec, const char *key) { val *v = rec->k == V_REC ? rec_get(rec, key) : NULL; return v ? v : NOTHING; }
-static double num_or(val *x, double fallback) { return x->k == V_NUM ? x->n : fallback; }
-
+static val *part(val *rec, const char *key) {
+  val *v = rec->k == V_REC ? rec_get(rec, key) : NULL;
+  return v ? v : NOTHING;
+}
 // Text as Windows lowers it, to find words whatever their case. Freed with free.
 static wchar_t *lowered(run *r, val *x) {
   wchar_t *w = win_wide(str(r, x));
@@ -67,17 +57,22 @@ static wchar_t *lowered(run *r, val *x) {
 // Text without the spaces around it, as text.trim gives it.
 static val *trimmed(run *r, val *x) {
   const char *s = str(r, x);
-  size_t from = 0, to = strlen(s);
+  size_t from = 0;
+  size_t to = strlen(s);
   while (from < to && isspace((unsigned char)s[from])) from++;
   while (to > from && isspace((unsigned char)s[to - 1])) to--;
   return v_text(r->a, s + from, to - from);
 }
 
 // A place on screen, {x,y,w,h}, as windows, controls and lines of text all have, with the text it holds when it has one.
-typedef struct { double x, y, w, h; val *text; } box;
+typedef struct {
+  double x, y, w, h;
+  val *text;
+} box;
 
 static box box_of(run *r, val *x) {
-  return (box){ num_of(r, part(x, "x"), "x"), num_of(r, part(x, "y"), "y"), num_of(r, part(x, "w"), "w"), num_of(r, part(x, "h"), "h"), part(x, "text") };
+  return (box){ num_of(r, part(x, "x"), "x"), num_of(r, part(x, "y"), "y"), num_of(r, part(x, "w"), "w"),
+    num_of(r, part(x, "h"), "h"), part(x, "text") };
 }
 
 static int mid(double at, double size) { return (int)(at + floor(size / 2)); }
@@ -87,24 +82,20 @@ static val *box_val(run *r, box b, int whole) {
   val *out = v_rec(r->a);
   put_num(r, out, "x", whole ? b.x : mid(b.x, b.w));
   put_num(r, out, "y", whole ? b.y : mid(b.y, b.h));
-  if (whole) { put_num(r, out, "w", b.w); put_num(r, out, "h", b.h); }
+  if (whole) {
+    put_num(r, out, "w", b.w);
+    put_num(r, out, "h", b.h);
+  }
   put(r, out, "text", b.text);
   return out;
-}
-
-// A wait that a stop ends at once.
-static void nap(run *r, double seconds) {
-  for (double until = pl_now() + seconds; pl_now() < until;) {
-    if (*r->stop) fail(r, "stopped", "Stopped by the person");
-    Sleep(20);
-  }
 }
 
 // Every field of match is a case-insensitive substring of rec's: {title:"note"} finds Notepad.
 static int matches(run *r, val *rec, val *match) {
   if (!match || match->k != V_REC) return 1;
   for (size_t i = 0; i < match->r.n; i++) {
-    wchar_t *h = lowered(r, part(rec, match->r.key[i])), *w = lowered(r, match->r.v[i]);
+    wchar_t *h = lowered(r, part(rec, match->r.key[i]));
+    wchar_t *w = lowered(r, match->r.v[i]);
     int found = wcsstr(h, w) != NULL;
     free(h);
     free(w);
@@ -116,20 +107,32 @@ static int matches(run *r, val *rec, val *match) {
 // A path as the person means it: / or \, ~ for home, downloads/desktop/documents for those folders, otherwise from home,
 // made whole, and checked with the core for need, files.read or files.write, when it is given (may in lingo.h).
 static val *path_of(run *r, val *p, const char *need) {
-  wchar_t *w = win_wide(str(r, p)), full[MAX_PATH * 4], *base = NULL, joined[MAX_PATH * 4];
-  for (wchar_t *c = w; *c; c++) if (*c == L'/') *c = L'\\';
+  wchar_t *w = win_wide(str(r, p));
+  wchar_t full[MAX_PATH * 4];
+  wchar_t *base = NULL;
+  wchar_t joined[MAX_PATH * 4];
+  for (wchar_t *c = w; *c; c++)
+    if (*c == L'/') *c = L'\\';
   size_t first = wcscspn(w, L"\\");
   const KNOWNFOLDERID *known = NULL;
-  if (first == 1 && w[0] == L'~') known = &FOLDERID_Profile;
-  else if (first == 9 && !_wcsnicmp(w, L"downloads", 9)) known = &FOLDERID_Downloads;
-  else if (first == 7 && !_wcsnicmp(w, L"desktop", 7)) known = &FOLDERID_Desktop;
-  else if (first == 9 && !_wcsnicmp(w, L"documents", 9)) known = &FOLDERID_Documents;
+  if (first == 1 && w[0] == L'~')
+    known = &FOLDERID_Profile;
+  else if (first == 9 && !_wcsnicmp(w, L"downloads", 9))
+    known = &FOLDERID_Downloads;
+  else if (first == 7 && !_wcsnicmp(w, L"desktop", 7))
+    known = &FOLDERID_Desktop;
+  else if (first == 9 && !_wcsnicmp(w, L"documents", 9))
+    known = &FOLDERID_Documents;
   int rooted = w[0] == L'\\' || (w[0] && w[1] == L':');
   if (known || !rooted) {
     SHGetKnownFolderPath(known ? known : &FOLDERID_Profile, 0, NULL, &base);
-    _snwprintf(joined, sizeof joined / sizeof *joined, L"%ls%ls%ls", base ? base : L"", w[known ? first : 0] ? L"\\" : L"", w + (known ? first + (w[first] ? 1 : 0) : 0));
+    const wchar_t *rest = w;   // what follows the known folder, without its slash
+    if (known) rest = w[first] ? w + first + 1 : w + first;
+    int joins = known ? w[first] != 0 : w[0] != 0;
+    _snwprintf(joined, sizeof joined / sizeof *joined, L"%ls%ls%ls", base ? base : L"", joins ? L"\\" : L"", rest);
     CoTaskMemFree(base);
-  } else wcsncpy(joined, w, sizeof joined / sizeof *joined - 1);
+  } else
+    wcsncpy(joined, w, sizeof joined / sizeof *joined - 1);
   joined[sizeof joined / sizeof *joined - 1] = 0;
   free(w);
   if (!GetFullPathNameW(joined, sizeof full / sizeof *full, full, NULL)) wcscpy(full, joined);
@@ -138,10 +141,12 @@ static val *path_of(run *r, val *p, const char *need) {
   return out;
 }
 
-static void win_fail(run *r, const char *what, const char *path) {
+static void file_failed(run *r, const char *what, const char *path) {
   DWORD e = GetLastError();
-  const char *why = e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND ? "it doesn't exist" : e == ERROR_ACCESS_DENIED ? "Windows denied access"
-                  : e == ERROR_SHARING_VIOLATION ? "another program has it open" : "Windows refused";
+  const char *why = "Windows refused";
+  if (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) why = "it doesn't exist";
+  if (e == ERROR_ACCESS_DENIED) why = "Windows denied access";
+  if (e == ERROR_SHARING_VIOLATION) why = "another program has it open";
   fail(r, "phrase", "can't %s %s: %s", what, path, why);
 }
 
@@ -152,36 +157,53 @@ static int powershell(run *r, const char *script, int wait, double seconds, buf 
   GetTempFileNameW(dir, L"ons", 0, file);
   wcscat(file, L".ps1");
   buf text = { 0 };
-  buf_str(&text, "\xEF\xBB\xBF$ProgressPreference='SilentlyContinue';[Console]::OutputEncoding=[Text.Encoding]::UTF8\n");
+  buf_str(
+      &text, "\xEF\xBB\xBF$ProgressPreference='SilentlyContinue';[Console]::OutputEncoding=[Text.Encoding]::UTF8\n");
   buf_str(&text, script);
   if (!wait) buf_str(&text, "\nRemove-Item -LiteralPath $PSCommandPath -ErrorAction SilentlyContinue");
   HANDLE f = CreateFileW(file, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY, NULL);
   DWORD wrote = 0;
-  if (f != INVALID_HANDLE_VALUE) { WriteFile(f, text.s, (DWORD)text.n, &wrote, NULL); CloseHandle(f); }
+  if (f != INVALID_HANDLE_VALUE) {
+    WriteFile(f, text.s, (DWORD)text.n, &wrote, NULL);
+    CloseHandle(f);
+  }
   buf_free(&text);
   wchar_t line[MAX_PATH + 128];
-  _snwprintf(line, sizeof line / sizeof *line, L"powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"%ls\"", file);
+  _snwprintf(line, sizeof line / sizeof *line,
+      L"powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"%ls\"", file);
 
   SECURITY_ATTRIBUTES sa = { sizeof sa, NULL, TRUE };
-  HANDLE readEnd = NULL, writeEnd = NULL;
-  if (wait) { CreatePipe(&readEnd, &writeEnd, &sa, 0); SetHandleInformation(readEnd, HANDLE_FLAG_INHERIT, 0); }
+  HANDLE readEnd = NULL;
+  HANDLE writeEnd = NULL;
+  if (wait) {
+    CreatePipe(&readEnd, &writeEnd, &sa, 0);
+    SetHandleInformation(readEnd, HANDLE_FLAG_INHERIT, 0);
+  }
   STARTUPINFOW si = { .cb = sizeof si };
   si.dwFlags = wait ? STARTF_USESTDHANDLES : 0;
   si.hStdOutput = si.hStdError = writeEnd;
   PROCESS_INFORMATION pi;
   if (!CreateProcessW(NULL, line, NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
-    if (wait) { CloseHandle(readEnd); CloseHandle(writeEnd); }
+    if (wait) {
+      CloseHandle(readEnd);
+      CloseHandle(writeEnd);
+    }
     DeleteFileW(file);
     fail(r, "phrase", "Windows PowerShell wouldn't start");
   }
   CloseHandle(pi.hThread);
-  if (!wait) { CloseHandle(pi.hProcess); return 0; }
+  if (!wait) {
+    CloseHandle(pi.hProcess);
+    return 0;
+  }
   CloseHandle(writeEnd);
   double until = pl_now() + seconds;
   char chunk[8192];
   for (int done = 0;;) {
-    DWORD ready = 0, got = 0;
-    while (PeekNamedPipe(readEnd, NULL, 0, NULL, &ready, NULL) && ready && ReadFile(readEnd, chunk, ready < sizeof chunk ? ready : sizeof chunk, &got, NULL) && got) {
+    DWORD ready = 0;
+    DWORD got = 0;
+    while (PeekNamedPipe(readEnd, NULL, 0, NULL, &ready, NULL) && ready &&
+        ReadFile(readEnd, chunk, ready < sizeof chunk ? ready : sizeof chunk, &got, NULL) && got) {
       if (out->n < 4u << 20) buf_add(out, chunk, got);
       ready = 0;
     }
@@ -201,20 +223,26 @@ static int powershell(run *r, const char *script, int wait, double seconds, buf 
   CloseHandle(pi.hProcess);
   CloseHandle(readEnd);
   DeleteFileW(file);
-  while (out->n && (out->s[out->n - 1] == '\n' || out->s[out->n - 1] == '\r' || out->s[out->n - 1] == ' ')) out->s[--out->n] = 0;
+  trim_end(out);
   return (int)code;
 }
 
 // Text as a PowerShell string that means exactly it.
 static void ps_quote(buf *b, const char *s) {
   buf_chr(b, '\'');
-  for (; *s; s++) { if (*s == '\'') buf_chr(b, '\''); buf_chr(b, *s); }
+  for (; *s; s++) {
+    if (*s == '\'') buf_chr(b, '\'');
+    buf_chr(b, *s);
+  }
   buf_chr(b, '\'');
 }
 
 ////////// 2. WINDOW //////////
 
-static void title_of(HWND h, wchar_t *out, int n) { out[0] = 0; GetWindowTextW(h, out, n); }
+static void title_of(HWND h, wchar_t *out, int n) {
+  out[0] = 0;
+  GetWindowTextW(h, out, n);
+}
 
 // Top level windows front to back, the ones the taskbar would show. visit says whether to go on.
 static void each_window(int (*visit)(HWND, void *), void *arg) {
@@ -241,12 +269,14 @@ static val *window_rec(run *r, HWND h) {
   GetWindowRect(h, &rc);
   DWORD pid = 0;
   GetWindowThreadProcessId(h, &pid);
-  wchar_t app[MAX_PATH] = L"", title[512];
+  wchar_t app[MAX_PATH] = L"";
+  wchar_t title[512];
   HANDLE p = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
   if (p) {
     DWORD n = MAX_PATH;
     if (QueryFullProcessImageNameW(p, 0, app, &n)) {
-      wchar_t *slash = wcsrchr(app, L'\\'), *dot;
+      wchar_t *slash = wcsrchr(app, L'\\');
+      wchar_t *dot;
       if (slash) memmove(app, slash + 1, (wcslen(slash + 1) + 1) * sizeof *app);
       if ((dot = wcsrchr(app, L'.'))) *dot = 0;
     }
@@ -273,13 +303,24 @@ static HWND hwnd_of(run *r, val *x, const char *what) {
   return h;
 }
 
-typedef struct { run *r; val *list, *match; HWND found; HWND *skip; size_t skips; } walk;
+typedef struct {
+  run *r;
+  val *list, *match;
+  HWND found;
+  HWND *skip;
+  size_t skips;
+} walk;
 
-static int add_window(HWND h, void *arg) { walk *w = arg; list_push(w->r->a, w->list, window_rec(w->r, h)); return 1; }
+static int add_window(HWND h, void *arg) {
+  walk *w = arg;
+  list_push(w->r->a, w->list, window_rec(w->r, h));
+  return 1;
+}
 
 static int match_window(HWND h, void *arg) {
   walk *w = arg;
-  for (size_t i = 0; i < w->skips; i++) if (w->skip[i] == h) return 1;
+  for (size_t i = 0; i < w->skips; i++)
+    if (w->skip[i] == h) return 1;
   if (w->match && !matches(w->r, window_rec(w->r, h), w->match)) return 1;
   w->found = h;
   return 0;
@@ -298,7 +339,10 @@ static int onsay_own(HWND h) {
   HANDLE p = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
   wchar_t path[MAX_PATH] = L"";
   DWORD n = MAX_PATH;
-  if (p) { QueryFullProcessImageNameW(p, 0, path, &n); CloseHandle(p); }
+  if (p) {
+    QueryFullProcessImageNameW(p, 0, path, &n);
+    CloseHandle(p);
+  }
   const wchar_t *name = wcsrchr(path, L'\\');
   return !_wcsicmp(name ? name + 1 : path, L"Onsay.exe");
 }
@@ -316,13 +360,20 @@ static val *win_front(run *r, val **a) {
   return h ? window_rec(r, h) : NOTHING;
 }
 
-static int count_window(HWND h, void *arg) { walk *w = arg; w->skip[w->skips++] = h; return w->skips < 4096; }
+static int count_window(HWND h, void *arg) {
+  walk *w = arg;
+  w->skip[w->skips++] = h;
+  return w->skips < 4096;
+}
 
 // Opens it as a double click would, then waits up to ten seconds for a new window. Path-like targets go through path_of.
 static val *win_open(run *r, val **a) {
   const char *t = str(r, a[0]);
-  int path = !strstr(t, "://") && (strpbrk(t, "/\\~") || !_strnicmp(t, "downloads", 9) || !_strnicmp(t, "desktop", 7) || !_strnicmp(t, "documents", 9));
-  wchar_t *target = win_wide(path ? path_of(r, a[0], NULL)->t.s : t), expanded[2048];
+  int path = !strstr(t, "://") &&
+      (strpbrk(t, "/\\~") || !_strnicmp(t, "downloads", 9) || !_strnicmp(t, "desktop", 7) ||
+          !_strnicmp(t, "documents", 9));
+  wchar_t *target = win_wide(path ? path_of(r, a[0], NULL)->t.s : t);
+  wchar_t expanded[2048];
   ExpandEnvironmentStringsW(target, expanded, 2048);
   free(target);
   walk before = { .r = r, .skip = malloc(4096 * sizeof(HWND)) };
@@ -331,13 +382,19 @@ static val *win_open(run *r, val **a) {
   info.lpVerb = L"open";
   info.lpFile = expanded;
   info.nShow = SW_SHOWNORMAL;
-  if (!ShellExecuteExW(&info)) { free(before.skip); fail(r, "phrase", "Windows couldn't open %s", t); }
+  if (!ShellExecuteExW(&info)) {
+    free(before.skip);
+    fail(r, "phrase", "Windows couldn't open %s", t);
+  }
   val *out = NOTHING;
   for (double until = pl_now() + 10; pl_now() < until && out == NOTHING;) {
     before.found = NULL;
     each_window(match_window, &before);
-    if (before.found) { nap(r, 0.3); out = window_rec(r, before.found); }
-    else nap(r, 0.2);
+    if (before.found) {
+      nap(r, 0.3);
+      out = window_rec(r, before.found);
+    } else
+      nap(r, 0.2);
   }
   free(before.skip);
   return out;
@@ -367,11 +424,17 @@ static val *win_focus(run *r, val **a) {
   return NOTHING;
 }
 
-static val *win_close(run *r, val **a) { PostMessageW(hwnd_of(r, a[0], "id"), WM_CLOSE, 0, 0); return NOTHING; }
+static val *win_close(run *r, val **a) {
+  PostMessageW(hwnd_of(r, a[0], "id"), WM_CLOSE, 0, 0);
+  return NOTHING;
+}
 
 static val *win_size(run *r, val **a) {
   const char *how = str(r, a[1]);
-  ShowWindow(hwnd_of(r, a[0], "id"), !strcmp(how, "min") ? SW_MINIMIZE : !strcmp(how, "max") ? SW_MAXIMIZE : SW_RESTORE);
+  int show_as = SW_RESTORE;
+  if (!strcmp(how, "min")) show_as = SW_MINIMIZE;
+  if (!strcmp(how, "max")) show_as = SW_MAXIMIZE;
+  ShowWindow(hwnd_of(r, a[0], "id"), show_as);
   return NOTHING;
 }
 
@@ -380,8 +443,10 @@ static val *win_move(run *r, val **a) {
   RECT rc;
   GetWindowRect(h, &rc);
   if (IsZoomed(h) || IsIconic(h)) ShowWindow(h, SW_RESTORE);
-  int x = a[1]->k == V_NUM ? (int)a[1]->n : rc.left, y = a[2]->k == V_NUM ? (int)a[2]->n : rc.top;
-  int w = a[3]->k == V_NUM ? (int)a[3]->n : rc.right - rc.left, hh = a[4]->k == V_NUM ? (int)a[4]->n : rc.bottom - rc.top;
+  int x = a[1]->k == V_NUM ? (int)a[1]->n : rc.left;
+  int y = a[2]->k == V_NUM ? (int)a[2]->n : rc.top;
+  int w = a[3]->k == V_NUM ? (int)a[3]->n : rc.right - rc.left;
+  int hh = a[4]->k == V_NUM ? (int)a[4]->n : rc.bottom - rc.top;
   SetWindowPos(h, NULL, x, y, w, hh, SWP_NOZORDER | SWP_NOACTIVATE);
   return NOTHING;
 }
@@ -391,37 +456,71 @@ static val *win_move(run *r, val **a) {
 // UI Automation: one cached fetch per window tree. Controls keep their ids between phrases so a program can find, then press.
 static IUIAutomation *uia;
 static IUIAutomationCacheRequest *fetch;
-typedef struct { double id; IUIAutomationElement *e; } seen_control;
+typedef struct {
+  double id;
+  IUIAutomationElement *e;
+} seen_control;
 static seen_control *seen;
 static size_t seen_count, seen_room;
 static double next_control = 1;
 
 static const PROPERTYID FETCHED[] = {
-  UIA_ControlTypePropertyId, UIA_LocalizedControlTypePropertyId, UIA_NamePropertyId, UIA_BoundingRectanglePropertyId,
-  UIA_IsOffscreenPropertyId, UIA_IsEnabledPropertyId, UIA_HasKeyboardFocusPropertyId, UIA_IsPasswordPropertyId,
-  UIA_IsInvokePatternAvailablePropertyId, UIA_IsTogglePatternAvailablePropertyId, UIA_IsValuePatternAvailablePropertyId,
-  UIA_IsSelectionItemPatternAvailablePropertyId, UIA_IsExpandCollapsePatternAvailablePropertyId, UIA_IsScrollPatternAvailablePropertyId,
+  UIA_ControlTypePropertyId,
+  UIA_LocalizedControlTypePropertyId,
+  UIA_NamePropertyId,
+  UIA_BoundingRectanglePropertyId,
+  UIA_IsOffscreenPropertyId,
+  UIA_IsEnabledPropertyId,
+  UIA_HasKeyboardFocusPropertyId,
+  UIA_IsPasswordPropertyId,
+  UIA_IsInvokePatternAvailablePropertyId,
+  UIA_IsTogglePatternAvailablePropertyId,
+  UIA_IsValuePatternAvailablePropertyId,
+  UIA_IsSelectionItemPatternAvailablePropertyId,
+  UIA_IsExpandCollapsePatternAvailablePropertyId,
+  UIA_IsScrollPatternAvailablePropertyId,
   UIA_ValueValuePropertyId,
 };
 
-static const struct { int type; const char *role; } ROLES[] = {
-  { UIA_ButtonControlTypeId, "button" }, { UIA_SplitButtonControlTypeId, "button" }, { UIA_EditControlTypeId, "field" },
-  { UIA_DocumentControlTypeId, "document" }, { UIA_HyperlinkControlTypeId, "link" }, { UIA_CheckBoxControlTypeId, "checkbox" },
-  { UIA_RadioButtonControlTypeId, "radio" }, { UIA_ComboBoxControlTypeId, "dropdown" }, { UIA_ListControlTypeId, "list" },
-  { UIA_ListItemControlTypeId, "list item" }, { UIA_TreeItemControlTypeId, "tree item" }, { UIA_TabItemControlTypeId, "tab" },
-  { UIA_MenuItemControlTypeId, "menu item" }, { UIA_MenuControlTypeId, "menu" }, { UIA_SliderControlTypeId, "slider" },
-  { UIA_TextControlTypeId, "text" }, { UIA_ImageControlTypeId, "image" }, { UIA_DataItemControlTypeId, "row" },
-  { UIA_HeaderItemControlTypeId, "header" }, { UIA_SpinnerControlTypeId, "field" }, { UIA_WindowControlTypeId, "window" },
-  { UIA_PaneControlTypeId, "pane" }, { UIA_GroupControlTypeId, "group" }, { UIA_TableControlTypeId, "table" },
+static const struct {
+  int type;
+  const char *role;
+} ROLES[] = {
+  { UIA_ButtonControlTypeId, "button" },
+  { UIA_SplitButtonControlTypeId, "button" },
+  { UIA_EditControlTypeId, "field" },
+  { UIA_DocumentControlTypeId, "document" },
+  { UIA_HyperlinkControlTypeId, "link" },
+  { UIA_CheckBoxControlTypeId, "checkbox" },
+  { UIA_RadioButtonControlTypeId, "radio" },
+  { UIA_ComboBoxControlTypeId, "dropdown" },
+  { UIA_ListControlTypeId, "list" },
+  { UIA_ListItemControlTypeId, "list item" },
+  { UIA_TreeItemControlTypeId, "tree item" },
+  { UIA_TabItemControlTypeId, "tab" },
+  { UIA_MenuItemControlTypeId, "menu item" },
+  { UIA_MenuControlTypeId, "menu" },
+  { UIA_SliderControlTypeId, "slider" },
+  { UIA_TextControlTypeId, "text" },
+  { UIA_ImageControlTypeId, "image" },
+  { UIA_DataItemControlTypeId, "row" },
+  { UIA_HeaderItemControlTypeId, "header" },
+  { UIA_SpinnerControlTypeId, "field" },
+  { UIA_WindowControlTypeId, "window" },
+  { UIA_PaneControlTypeId, "pane" },
+  { UIA_GroupControlTypeId, "group" },
+  { UIA_TableControlTypeId, "table" },
 };
 
 static void uia_start(run *r) {
   if (uia) return;
   CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
-  if (FAILED(CoCreateInstance(&CLSID_CUIAutomation, NULL, CLSCTX_INPROC_SERVER, &IID_IUIAutomation, (void **)&uia)) || !uia)
+  if (FAILED(CoCreateInstance(&CLSID_CUIAutomation, NULL, CLSCTX_INPROC_SERVER, &IID_IUIAutomation, (void **)&uia)) ||
+      !uia)
     fail(r, "phrase", "Windows' UI Automation isn't available");
   IUIAutomation_CreateCacheRequest(uia, &fetch);
-  for (size_t i = 0; i < sizeof FETCHED / sizeof *FETCHED; i++) IUIAutomationCacheRequest_AddProperty(fetch, FETCHED[i]);
+  for (size_t i = 0; i < sizeof FETCHED / sizeof *FETCHED; i++)
+    IUIAutomationCacheRequest_AddProperty(fetch, FETCHED[i]);
   IUIAutomationCacheRequest_put_TreeScope(fetch, TreeScope_Subtree);
 }
 
@@ -455,25 +554,35 @@ static val *control_rec(run *r, IUIAutomationElement *e) {
   VariantClear(&box);
   if (rc[2] <= 0 || rc[3] <= 0 || yes(e, UIA_IsOffscreenPropertyId)) return NULL;
 
-  val *c = v_rec(r->a), *can = v_list(r->a);
-  VARIANT type = cached(e, UIA_ControlTypePropertyId), local = cached(e, UIA_LocalizedControlTypePropertyId), name = cached(e, UIA_NamePropertyId);
+  val *c = v_rec(r->a);
+  val *can = v_list(r->a);
+  VARIANT type = cached(e, UIA_ControlTypePropertyId);
+  VARIANT local = cached(e, UIA_LocalizedControlTypePropertyId);
+  VARIANT name = cached(e, UIA_NamePropertyId);
   const char *role = NULL;
-  for (size_t i = 0; i < sizeof ROLES / sizeof *ROLES && type.vt == VT_I4; i++) if (ROLES[i].type == type.lVal) role = ROLES[i].role;
+  for (size_t i = 0; i < sizeof ROLES / sizeof *ROLES && type.vt == VT_I4; i++)
+    if (ROLES[i].type == type.lVal) role = ROLES[i].role;
   put(r, c, "role", role ? v_cstr(r->a, role) : bstr_text(r, local.vt == VT_BSTR ? local.bstrVal : NULL));
   val *n = bstr_text(r, name.vt == VT_BSTR ? name.bstrVal : NULL);
-  size_t from = 0, to = n->t.len;
-  while (from < to && (n->t.s[from] == ' ' || n->t.s[from] == '\n' || n->t.s[from] == '\r' || n->t.s[from] == '\t')) from++;
-  while (to > from && (n->t.s[to - 1] == ' ' || n->t.s[to - 1] == '\n' || n->t.s[to - 1] == '\r' || n->t.s[to - 1] == '\t')) to--;
+  size_t from = 0;
+  size_t to = n->t.len;
+  while (from < to && (n->t.s[from] == ' ' || n->t.s[from] == '\n' || n->t.s[from] == '\r' || n->t.s[from] == '\t'))
+    from++;
+  while (to > from &&
+      (n->t.s[to - 1] == ' ' || n->t.s[to - 1] == '\n' || n->t.s[to - 1] == '\r' || n->t.s[to - 1] == '\t'))
+    to--;
   put(r, c, "name", v_text(r->a, n->t.s + from, to - from));
   VariantClear(&type);
   VariantClear(&local);
   VariantClear(&name);
-  if (yes(e, UIA_IsPasswordPropertyId)) put(r, c, "value", v_cstr(r->a, "(hidden)"));
+  if (yes(e, UIA_IsPasswordPropertyId))
+    put(r, c, "value", v_cstr(r->a, "(hidden)"));
   else if (yes(e, UIA_IsValuePatternAvailablePropertyId)) {
     VARIANT v = cached(e, UIA_ValueValuePropertyId);
     put(r, c, "value", v.vt == VT_BSTR ? bstr_text(r, v.bstrVal) : NOTHING);
     VariantClear(&v);
-  } else put(r, c, "value", NOTHING);
+  } else
+    put(r, c, "value", NOTHING);
   put_num(r, c, "x", (int)rc[0]);
   put_num(r, c, "y", (int)rc[1]);
   put_num(r, c, "w", (int)rc[2]);
@@ -483,7 +592,8 @@ static val *control_rec(run *r, IUIAutomationElement *e) {
   if (yes(e, UIA_IsInvokePatternAvailablePropertyId)) list_push(r->a, can, v_cstr(r->a, "press"));
   if (yes(e, UIA_IsValuePatternAvailablePropertyId)) list_push(r->a, can, v_cstr(r->a, "fill"));
   if (yes(e, UIA_IsTogglePatternAvailablePropertyId)) list_push(r->a, can, v_cstr(r->a, "toggle"));
-  if (yes(e, UIA_IsSelectionItemPatternAvailablePropertyId) || yes(e, UIA_IsExpandCollapsePatternAvailablePropertyId)) list_push(r->a, can, v_cstr(r->a, "choose"));
+  if (yes(e, UIA_IsSelectionItemPatternAvailablePropertyId) || yes(e, UIA_IsExpandCollapsePatternAvailablePropertyId))
+    list_push(r->a, can, v_cstr(r->a, "choose"));
   if (yes(e, UIA_IsScrollPatternAvailablePropertyId)) list_push(r->a, can, v_cstr(r->a, "scroll"));
   put(r, c, "can", can);
   return c;
@@ -495,21 +605,32 @@ static void forget_controls(void) {
 }
 
 static double keep(IUIAutomationElement *e) {
-  if (seen_count == seen_room) { seen_room = seen_room ? seen_room * 2 : 256; seen = realloc(seen, seen_room * sizeof *seen); }
+  if (seen_count == seen_room) {
+    seen_room = seen_room ? seen_room * 2 : 256;
+    seen = realloc(seen, seen_room * sizeof *seen);
+  }
   IUIAutomationElement_AddRef(e);
   seen[seen_count] = (seen_control){ next_control++, e };
   return seen[seen_count++].id;
 }
 
-typedef struct { run *r; val *found, *match; int max; } finding;
+typedef struct {
+  run *r;
+  val *found, *match;
+  int max;
+} finding;
 
 static void visit(finding *f, IUIAutomationElement *e) {
   if ((int)f->found->l.n >= f->max) return;
   val *c = control_rec(f->r, e);
   if (c) {
     const char *role = rec_get(c, "role")->t.s;
-    int keepit = f->match ? matches(f->r, c, f->match) : rec_get(c, "name")->t.len > 0 || !strcmp(role, "field") || !strcmp(role, "checkbox") || !strcmp(role, "dropdown");
-    if (keepit) { put_num(f->r, c, "id", keep(e)); list_push(f->r->a, f->found, c); }
+    int worth_seeing = rec_get(c, "name")->t.len > 0 || !strcmp(role, "field") || !strcmp(role, "checkbox") ||
+        !strcmp(role, "dropdown");
+    if (f->match ? matches(f->r, c, f->match) : worth_seeing) {
+      put_num(f->r, c, "id", keep(e));
+      list_push(f->r->a, f->found, c);
+    }
   }
   IUIAutomationElementArray *kids = NULL;
   if (FAILED(IUIAutomationElement_GetCachedChildren(e, &kids)) || !kids) return;
@@ -517,7 +638,10 @@ static void visit(finding *f, IUIAutomationElement *e) {
   IUIAutomationElementArray_get_Length(kids, &n);
   for (int i = 0; i < n; i++) {
     IUIAutomationElement *kid = NULL;
-    if (SUCCEEDED(IUIAutomationElementArray_GetElement(kids, i, &kid)) && kid) { visit(f, kid); IUIAutomationElement_Release(kid); }
+    if (SUCCEEDED(IUIAutomationElementArray_GetElement(kids, i, &kid)) && kid) {
+      visit(f, kid);
+      IUIAutomationElement_Release(kid);
+    }
   }
   IUIAutomationElementArray_Release(kids);
 }
@@ -527,7 +651,8 @@ static val *find(run *r, HWND win, val *match, int max) {
   uia_start(r);
   if (seen_count > 20000) forget_controls();
   IUIAutomationElement *root = NULL;
-  if (FAILED(IUIAutomation_ElementFromHandleBuildCache(uia, win, fetch, &root)) || !root) fail(r, "phrase", "that window can't be read");
+  if (FAILED(IUIAutomation_ElementFromHandleBuildCache(uia, win, fetch, &root)) || !root)
+    fail(r, "phrase", "that window can't be read");
   finding f = { r, v_list(r->a), match, max };
   visit(&f, root);
   IUIAutomationElement_Release(root);
@@ -537,7 +662,8 @@ static val *find(run *r, HWND win, val *match, int max) {
 static IUIAutomationElement *element(run *r, val *control) {
   val *id = control->k == V_REC ? rec_get(control, "id") : control;
   if (!id || id->k != V_NUM) fail(r, "phrase", "that is not a control from controls.find");
-  for (size_t i = 0; i < seen_count; i++) if (seen[i].id == id->n) return seen[i].e;
+  for (size_t i = 0; i < seen_count; i++)
+    if (seen[i].id == id->n) return seen[i].e;
   fail(r, "phrase", "control %g is no longer known. Find it again with controls.find", id->n);
 }
 
@@ -555,14 +681,19 @@ static void type_text(run *r, const char *text);
 static void press_keys(run *r, const char *combo);
 
 static val *ui_find(run *r, val **a) { return find(r, hwnd_of(r, a[0], "win"), a[1], 200); }
-static val *ui_all(run *r, val **a) { return find(r, hwnd_of(r, a[0], "win"), NULL, a[1]->k == V_NUM ? (int)a[1]->n : 80); }
+static val *ui_all(run *r, val **a) {
+  return find(r, hwnd_of(r, a[0], "win"), NULL, a[1]->k == V_NUM ? (int)a[1]->n : 80);
+}
 
 // The words of a page or document, through the text pattern browsers and editors give screen readers, or every control's name.
 static val *ui_text(run *r, val **a) {
   HWND win = hwnd_of(r, a[0], "win");
   uia_start(r);
-  IUIAutomationElement *root = NULL, *doc = NULL;
-  IUIAutomationCondition *has = NULL, *shown = NULL, *both = NULL;
+  IUIAutomationElement *root = NULL;
+  IUIAutomationElement *doc = NULL;
+  IUIAutomationCondition *has = NULL;
+  IUIAutomationCondition *shown = NULL;
+  IUIAutomationCondition *both = NULL;
   VARIANT t, f;
   VariantInit(&t);
   VariantInit(&f);
@@ -579,7 +710,9 @@ static val *ui_text(run *r, val **a) {
   if (text) {
     IUIAutomationTextRange *range = NULL;
     BSTR words = NULL;
-    if (SUCCEEDED(IUIAutomationTextPattern_get_DocumentRange(text, &range)) && range && SUCCEEDED(IUIAutomationTextRange_GetText(range, 200000, &words))) out = bstr_text(r, words);
+    if (SUCCEEDED(IUIAutomationTextPattern_get_DocumentRange(text, &range)) && range &&
+        SUCCEEDED(IUIAutomationTextRange_GetText(range, 200000, &words)))
+      out = bstr_text(r, words);
     SysFreeString(words);
     if (range) IUIAutomationTextRange_Release(range);
     IUIAutomationTextPattern_Release(text);
@@ -606,13 +739,31 @@ static val *ui_text(run *r, val **a) {
 // The control's own action (invoke, toggle, select, expand, or focus for a text box). 0 when it has none.
 static int act(IUIAutomationElement *e) {
   IUIAutomationInvokePattern *inv = pattern(e, UIA_InvokePatternId, &IID_IUIAutomationInvokePattern);
-  if (inv) { IUIAutomationInvokePattern_Invoke(inv); IUIAutomationInvokePattern_Release(inv); return 1; }
+  if (inv) {
+    IUIAutomationInvokePattern_Invoke(inv);
+    IUIAutomationInvokePattern_Release(inv);
+    return 1;
+  }
   IUIAutomationTogglePattern *tog = pattern(e, UIA_TogglePatternId, &IID_IUIAutomationTogglePattern);
-  if (tog) { IUIAutomationTogglePattern_Toggle(tog); IUIAutomationTogglePattern_Release(tog); return 1; }
-  IUIAutomationSelectionItemPattern *sel = pattern(e, UIA_SelectionItemPatternId, &IID_IUIAutomationSelectionItemPattern);
-  if (sel) { IUIAutomationSelectionItemPattern_Select(sel); IUIAutomationSelectionItemPattern_Release(sel); return 1; }
-  IUIAutomationExpandCollapsePattern *exp = pattern(e, UIA_ExpandCollapsePatternId, &IID_IUIAutomationExpandCollapsePattern);
-  if (exp) { IUIAutomationExpandCollapsePattern_Expand(exp); IUIAutomationExpandCollapsePattern_Release(exp); return 1; }
+  if (tog) {
+    IUIAutomationTogglePattern_Toggle(tog);
+    IUIAutomationTogglePattern_Release(tog);
+    return 1;
+  }
+  IUIAutomationSelectionItemPattern *sel = pattern(
+      e, UIA_SelectionItemPatternId, &IID_IUIAutomationSelectionItemPattern);
+  if (sel) {
+    IUIAutomationSelectionItemPattern_Select(sel);
+    IUIAutomationSelectionItemPattern_Release(sel);
+    return 1;
+  }
+  IUIAutomationExpandCollapsePattern *exp = pattern(
+      e, UIA_ExpandCollapsePatternId, &IID_IUIAutomationExpandCollapsePattern);
+  if (exp) {
+    IUIAutomationExpandCollapsePattern_Expand(exp);
+    IUIAutomationExpandCollapsePattern_Release(exp);
+    return 1;
+  }
   CONTROLTYPEID type = 0;
   IUIAutomationElement_get_CurrentControlType(e, &type);
   if (type == UIA_EditControlTypeId || type == UIA_DocumentControlTypeId || type == UIA_ComboBoxControlTypeId)
@@ -633,11 +784,16 @@ static void press_element(run *r, IUIAutomationElement *e) {
   POINT p;
   middle(e, &p);
   glide(r, p.x, p.y, 0, 0);
-  if (act(e)) show_press(0, 1);
-  else click(r, p.x, p.y, 0, 1);
+  if (act(e))
+    show_press(0, 1);
+  else
+    click(r, p.x, p.y, 0, 1);
 }
 
-static val *ui_press(run *r, val **a) { press_element(r, element(r, a[0])); return NOTHING; }
+static val *ui_press(run *r, val **a) {
+  press_element(r, element(r, a[0]));
+  return NOTHING;
+}
 
 static val *ui_fill(run *r, val **a) {
   IUIAutomationElement *e = element(r, a[0]);
@@ -654,7 +810,8 @@ static val *ui_fill(run *r, val **a) {
     free(w);
     IUIAutomationValuePattern_Release(v);
     if (SUCCEEDED(done)) return NOTHING;
-  } else if (v) IUIAutomationValuePattern_Release(v);
+  } else if (v)
+    IUIAutomationValuePattern_Release(v);
   IUIAutomationElement_SetFocus(e);
   press_keys(r, "ctrl+a");
   type_text(r, text);
@@ -675,9 +832,15 @@ static val *ui_toggle(run *r, val **a) {
 
 // A dropdown or list: opened if it opens, then the option picked by name, wherever its list appears.
 static val *ui_choose(run *r, val **a) {
-  IUIAutomationElement *e = element(r, a[0]), *item = NULL, *top = NULL;
-  IUIAutomationExpandCollapsePattern *exp = pattern(e, UIA_ExpandCollapsePatternId, &IID_IUIAutomationExpandCollapsePattern);
-  if (exp) { IUIAutomationExpandCollapsePattern_Expand(exp); nap(r, 0.3); }
+  IUIAutomationElement *e = element(r, a[0]);
+  IUIAutomationElement *item = NULL;
+  IUIAutomationElement *top = NULL;
+  IUIAutomationExpandCollapsePattern *exp = pattern(
+      e, UIA_ExpandCollapsePatternId, &IID_IUIAutomationExpandCollapsePattern);
+  if (exp) {
+    IUIAutomationExpandCollapsePattern_Expand(exp);
+    nap(r, 0.3);
+  }
   wchar_t *w = win_wide(str(r, a[1]));
   VARIANT name, kind;
   VariantInit(&name);
@@ -687,7 +850,9 @@ static val *ui_choose(run *r, val **a) {
   kind.vt = VT_I4;
   kind.lVal = UIA_ListItemControlTypeId;
   free(w);
-  IUIAutomationCondition *named = NULL, *listed = NULL, *both = NULL;
+  IUIAutomationCondition *named = NULL;
+  IUIAutomationCondition *listed = NULL;
+  IUIAutomationCondition *both = NULL;
   IUIAutomation_CreatePropertyConditionEx(uia, UIA_NamePropertyId, name, PropertyConditionFlags_IgnoreCase, &named);
   IUIAutomationElement_FindFirst(e, TreeScope_Descendants, named, &item);
   if (!item) {
@@ -701,10 +866,17 @@ static val *ui_choose(run *r, val **a) {
   if (listed) IUIAutomationCondition_Release(listed);
   if (both) IUIAutomationCondition_Release(both);
   if (top) IUIAutomationElement_Release(top);
-  if (!item) { if (exp) IUIAutomationExpandCollapsePattern_Release(exp); fail(r, "phrase", "there is no option called %s", str(r, a[1])); }
-  IUIAutomationSelectionItemPattern *sel = pattern(item, UIA_SelectionItemPatternId, &IID_IUIAutomationSelectionItemPattern);
-  if (sel) { IUIAutomationSelectionItemPattern_Select(sel); IUIAutomationSelectionItemPattern_Release(sel); }
-  else press_element(r, item);
+  if (!item) {
+    if (exp) IUIAutomationExpandCollapsePattern_Release(exp);
+    fail(r, "phrase", "there is no option called %s", str(r, a[1]));
+  }
+  IUIAutomationSelectionItemPattern *sel = pattern(
+      item, UIA_SelectionItemPatternId, &IID_IUIAutomationSelectionItemPattern);
+  if (sel) {
+    IUIAutomationSelectionItemPattern_Select(sel);
+    IUIAutomationSelectionItemPattern_Release(sel);
+  } else
+    press_element(r, item);
   IUIAutomationElement_Release(item);
   if (exp) {
     enum ExpandCollapseState state = ExpandCollapseState_Collapsed;
@@ -722,7 +894,9 @@ static val *ui_scroll(run *r, val **a) {
   POINT p;
   if (middle(e, &p)) glide(r, p.x, p.y, 0, 0);
   int amount = (int)num_of(r, a[1], NULL);
-  for (int i = 0; i < abs(amount) * 3; i++) IUIAutomationScrollPattern_Scroll(s, ScrollAmount_NoAmount, amount > 0 ? ScrollAmount_SmallDecrement : ScrollAmount_SmallIncrement);
+  for (int i = 0; i < abs(amount) * 3; i++)
+    IUIAutomationScrollPattern_Scroll(
+        s, ScrollAmount_NoAmount, amount > 0 ? ScrollAmount_SmallDecrement : ScrollAmount_SmallIncrement);
   IUIAutomationScrollPattern_Release(s);
   return NOTHING;
 }
@@ -745,40 +919,62 @@ static val *ui_wait(run *r, val **a) {
 
 /* grab(): a picture of a window, or the main screen when win is nothing, saved as a PNG in ~/Onsay/shots. box is
    nothing, or {x,y,w,h} in the window's pixels: only that part is kept. Gives the file, and the part's place on screen. */
-typedef struct { val *path; int x, y, w, h; } shot;
+typedef struct {
+  val *path;
+  int x, y, w, h;
+} shot;
 
 static shot grab(run *r, val *win, val *box) {
   HWND hwnd = win->k == V_NOTHING ? NULL : hwnd_of(r, win, "window");
   RECT rc = { 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN) };
   if (hwnd) GetWindowRect(hwnd, &rc);
-  int ww = rc.right - rc.left, wh = rc.bottom - rc.top;
+  int ww = rc.right - rc.left;
+  int wh = rc.bottom - rc.top;
   if (ww <= 0 || wh <= 0) fail(r, "phrase", "that window has no size to take a picture of");
-  int bx = 0, by = 0, bw = ww, bh = wh;
+  int bx = 0;
+  int by = 0;
+  int bw = ww;
+  int bh = wh;
   if (box->k == V_REC) {
     val *v[4] = { rec_get(box, "x"), rec_get(box, "y"), rec_get(box, "w"), rec_get(box, "h") };
-    for (int i = 0; i < 4; i++) if (!v[i] || v[i]->k != V_NUM) fail(r, "phrase", "box must be {x,y,w,h}, in pixels inside the window");
-    bx = (int)v[0]->n, by = (int)v[1]->n, bw = (int)v[2]->n, bh = (int)v[3]->n;
-    if (bx < 0) bw += bx, bx = 0;
-    if (by < 0) bh += by, by = 0;
+    for (int i = 0; i < 4; i++)
+      if (!v[i] || v[i]->k != V_NUM) fail(r, "phrase", "box must be {x,y,w,h}, in pixels inside the window");
+    bx = (int)v[0]->n;
+    by = (int)v[1]->n;
+    bw = (int)v[2]->n;
+    bh = (int)v[3]->n;
+    if (bx < 0) {
+      bw += bx;
+      bx = 0;
+    }
+    if (by < 0) {
+      bh += by;
+      by = 0;
+    }
     if (bx + bw > ww) bw = ww - bx;
     if (by + bh > wh) bh = wh - by;
     if (bw <= 0 || bh <= 0) fail(r, "phrase", "that box isn't inside the window");
   }
 
-  HDC screen = GetDC(NULL), mem = CreateCompatibleDC(screen);
+  HDC screen = GetDC(NULL);
+  HDC mem = CreateCompatibleDC(screen);
   HBITMAP bmp = CreateCompatibleBitmap(screen, ww, wh);
   HGDIOBJ old = SelectObject(mem, bmp);
-  if (!hwnd || !PrintWindow(hwnd, mem, 2)) BitBlt(mem, 0, 0, ww, wh, screen, rc.left, rc.top, SRCCOPY | CAPTUREBLT);   // 2 PW_RENDERFULLCONTENT
+  if (!hwnd || !PrintWindow(hwnd, mem, 2))
+    BitBlt(mem, 0, 0, ww, wh, screen, rc.left, rc.top, SRCCOPY | CAPTUREBLT);   // 2 PW_RENDERFULLCONTENT
   SelectObject(mem, old);
 
-  wchar_t *home = NULL, folder[MAX_PATH], file[MAX_PATH];
+  wchar_t *home = NULL;
+  wchar_t folder[MAX_PATH];
+  wchar_t file[MAX_PATH];
   SHGetKnownFolderPath(&FOLDERID_Profile, 0, NULL, &home);
   _snwprintf(folder, MAX_PATH, L"%ls\\Onsay\\shots", home ? home : L".");
   CoTaskMemFree(home);
   SHCreateDirectoryExW(NULL, folder, NULL);
   SYSTEMTIME t;
   GetLocalTime(&t);
-  _snwprintf(file, MAX_PATH, L"%ls\\%04d%02d%02d-%02d%02d%02d-%03d.png", folder, t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond, t.wMilliseconds);
+  _snwprintf(file, MAX_PATH, L"%ls\\%04d%02d%02d-%02d%02d%02d-%03d.png", folder, t.wYear, t.wMonth, t.wDay, t.wHour,
+      t.wMinute, t.wSecond, t.wMilliseconds);
 
   // Window bitmap, clipped to box, encoded to file.
   CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
@@ -791,7 +987,8 @@ static shot grab(run *r, val *win, val *box) {
   IPropertyBag2 *props = NULL;
   GUID format = GUID_WICPixelFormat24bppBGR;
   WICRect part = { bx, by, bw, bh };
-  HRESULT ok = CoCreateInstance(&CLSID_WICImagingFactory, NULL, CLSCTX_INPROC_SERVER, &IID_IWICImagingFactory, (void **)&wic);
+  HRESULT ok = CoCreateInstance(
+      &CLSID_WICImagingFactory, NULL, CLSCTX_INPROC_SERVER, &IID_IWICImagingFactory, (void **)&wic);
   if (SUCCEEDED(ok)) ok = IWICImagingFactory_CreateBitmapFromHBITMAP(wic, bmp, NULL, WICBitmapIgnoreAlpha, &pic);
   if (SUCCEEDED(ok)) ok = IWICImagingFactory_CreateBitmapClipper(wic, &clip);
   if (SUCCEEDED(ok)) ok = IWICBitmapClipper_Initialize(clip, (IWICBitmapSource *)pic, &part);
@@ -835,38 +1032,40 @@ static val *look_screenshot(run *r, val **a) {
 static val *screen_read(run *r, val *window) {
   shot taken = grab(r, window, NOTHING);
   val *file = taken.path;
-  int x = taken.x, y = taken.y;
-  buf s = { 0 }, out = { 0 };
+  int x = taken.x;
+  int y = taken.y;
+  buf s = { 0 };
+  buf out = { 0 };
   buf_str(&s, "$path=");
   ps_quote(&s, file->t.s);
   buf_fmt(&s, ";$ox=%d;$oy=%d\n", x, y);
   buf_str(&s,
-    "Add-Type -AssemblyName System.Runtime.WindowsRuntime\n"
-    "$null=[Windows.Storage.StorageFile,Windows.Storage,ContentType=WindowsRuntime]\n"
-    "$null=[Windows.Media.Ocr.OcrEngine,Windows.Foundation,ContentType=WindowsRuntime]\n"
-    "$null=[Windows.Graphics.Imaging.BitmapDecoder,Windows.Graphics,ContentType=WindowsRuntime]\n"
-    "$null=[Windows.Graphics.Imaging.BitmapTransform,Windows.Graphics,ContentType=WindowsRuntime]\n"
-    "$as=([System.WindowsRuntimeSystemExtensions].GetMethods()|?{$_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1'})[0]\n"
-    "function Await($op,$t){$task=$as.MakeGenericMethod($t).Invoke($null,@($op));$null=$task.Wait(-1);$task.Result}\n"
-    "$file=Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync($path)) ([Windows.Storage.StorageFile])\n"
-    "$stream=Await ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])\n"
-    "$decoder=Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])\n"
-    // OCR reads small screen text far better at twice the size, so enlarge, then scale every box back.
-    "$max=[Windows.Media.Ocr.OcrEngine]::MaxImageDimension\n"
-    "$k=[Math]::Min(2,[Math]::Min($max/$decoder.PixelWidth,$max/$decoder.PixelHeight))\n"
-    "$tf=New-Object Windows.Graphics.Imaging.BitmapTransform\n"
-    "$tf.ScaledWidth=[uint32][Math]::Floor($decoder.PixelWidth*$k);$tf.ScaledHeight=[uint32][Math]::Floor($decoder.PixelHeight*$k)\n"
-    "$tf.InterpolationMode=[Windows.Graphics.Imaging.BitmapInterpolationMode]::Fant\n"
-    "$bitmap=Await ($decoder.GetSoftwareBitmapAsync([Windows.Graphics.Imaging.BitmapPixelFormat]::Bgra8,[Windows.Graphics.Imaging.BitmapAlphaMode]::Premultiplied,"
-    "$tf,[Windows.Graphics.Imaging.ExifOrientationMode]::IgnoreExifOrientation,[Windows.Graphics.Imaging.ColorManagementMode]::DoNotColorManage)) "
-    "([Windows.Graphics.Imaging.SoftwareBitmap])\n"
-    "$engine=[Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()\n"
-    "if(-not $engine){Write-Output 'NO OCR';exit 3}\n"
-    "$result=Await ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])\n"
-    "$lines=@($result.Lines|%{$b=$_.Words|%{$_.BoundingRect};$l=($b|%{$_.X}|measure -Minimum).Minimum;$t=($b|%{$_.Y}|measure -Minimum).Minimum;"
-    "$rr=($b|%{$_.X+$_.Width}|measure -Maximum).Maximum;$bb=($b|%{$_.Y+$_.Height}|measure -Maximum).Maximum;"
-    "[ordered]@{text=$_.Text;x=[int]($l/$k)+$ox;y=[int]($t/$k)+$oy;w=[int](($rr-$l)/$k);h=[int](($bb-$t)/$k)}})\n"
-    "ConvertTo-Json -InputObject $lines -Compress -Depth 3\n");
+      "Add-Type -AssemblyName System.Runtime.WindowsRuntime\n"
+      "$null=[Windows.Storage.StorageFile,Windows.Storage,ContentType=WindowsRuntime]\n"
+      "$null=[Windows.Media.Ocr.OcrEngine,Windows.Foundation,ContentType=WindowsRuntime]\n"
+      "$null=[Windows.Graphics.Imaging.BitmapDecoder,Windows.Graphics,ContentType=WindowsRuntime]\n"
+      "$null=[Windows.Graphics.Imaging.BitmapTransform,Windows.Graphics,ContentType=WindowsRuntime]\n"
+      "$as=([System.WindowsRuntimeSystemExtensions].GetMethods()|?{$_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1'})[0]\n"
+      "function Await($op,$t){$task=$as.MakeGenericMethod($t).Invoke($null,@($op));$null=$task.Wait(-1);$task.Result}\n"
+      "$file=Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync($path)) ([Windows.Storage.StorageFile])\n"
+      "$stream=Await ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])\n"
+      "$decoder=Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])\n"
+      // OCR reads small screen text far better at twice the size, so enlarge, then scale every box back.
+      "$max=[Windows.Media.Ocr.OcrEngine]::MaxImageDimension\n"
+      "$k=[Math]::Min(2,[Math]::Min($max/$decoder.PixelWidth,$max/$decoder.PixelHeight))\n"
+      "$tf=New-Object Windows.Graphics.Imaging.BitmapTransform\n"
+      "$tf.ScaledWidth=[uint32][Math]::Floor($decoder.PixelWidth*$k);$tf.ScaledHeight=[uint32][Math]::Floor($decoder.PixelHeight*$k)\n"
+      "$tf.InterpolationMode=[Windows.Graphics.Imaging.BitmapInterpolationMode]::Fant\n"
+      "$bitmap=Await ($decoder.GetSoftwareBitmapAsync([Windows.Graphics.Imaging.BitmapPixelFormat]::Bgra8,[Windows.Graphics.Imaging.BitmapAlphaMode]::Premultiplied,"
+      "$tf,[Windows.Graphics.Imaging.ExifOrientationMode]::IgnoreExifOrientation,[Windows.Graphics.Imaging.ColorManagementMode]::DoNotColorManage)) "
+      "([Windows.Graphics.Imaging.SoftwareBitmap])\n"
+      "$engine=[Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()\n"
+      "if(-not $engine){Write-Output 'NO OCR';exit 3}\n"
+      "$result=Await ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])\n"
+      "$lines=@($result.Lines|%{$b=$_.Words|%{$_.BoundingRect};$l=($b|%{$_.X}|measure -Minimum).Minimum;$t=($b|%{$_.Y}|measure -Minimum).Minimum;"
+      "$rr=($b|%{$_.X+$_.Width}|measure -Maximum).Maximum;$bb=($b|%{$_.Y+$_.Height}|measure -Maximum).Maximum;"
+      "[ordered]@{text=$_.Text;x=[int]($l/$k)+$ox;y=[int]($t/$k)+$oy;w=[int](($rr-$l)/$k);h=[int](($bb-$t)/$k)}})\n"
+      "ConvertTo-Json -InputObject $lines -Compress -Depth 3\n");
   int code = powershell(r, s.s, 1, 60, &out);
   buf_free(&s);
   const char *problem = NULL;
@@ -933,26 +1132,38 @@ static void glide(run *r, int x, int y, double seconds, int text) {
   if (real_mode || !hand_known) {
     POINT p;
     GetCursorPos(&p);
-    hand_x = p.x, hand_y = p.y, hand_known = 1;
+    hand_x = p.x;
+    hand_y = p.y;
+    hand_known = 1;
   }
-  int fx = hand_x, fy = hand_y;
-  double dx = x - fx, dy = y - fy, span = sqrt(dx * dx + dy * dy), ms = seconds > 0 ? seconds * 1000 : span < 1 ? 0 : 90 + 0.18 * span;
+  int fx = hand_x;
+  int fy = hand_y;
+  double dx = x - fx;
+  double dy = y - fy;
+  double span = sqrt(dx * dx + dy * dy);
+  double ms = span < 1 ? 0 : 90 + 0.18 * span;
+  if (seconds > 0) ms = seconds * 1000;
   if (ms > 60000) ms = 60000;
-  double bend = span < 1 ? 0 : (rand() / (double)RAND_MAX * 2 - 1) * 0.1 * span, one = span > 1 ? span : 1;
-  double cx = fx + dx / 2 - dy / one * bend, cy = fy + dy / 2 + dx / one * bend;
+  double bend = span < 1 ? 0 : (rand() / (double)RAND_MAX * 2 - 1) * 0.1 * span;
+  double one = span > 1 ? span : 1;
+  double cx = fx + dx / 2 - dy / one * bend;
+  double cy = fy + dy / 2 + dx / one * bend;
   buf b = { 0 };
-  buf_fmt(&b, "{\"show\":\"glide\",\"from\":[%d,%d],\"to\":[%d,%d],\"ms\":%d,\"bend\":%.2f,\"real\":%s,\"text\":%s}", fx, fy, x, y, (int)ms,
-          bend, real_mode ? "true" : "false", text ? "true" : "false");
+  buf_fmt(&b, "{\"show\":\"glide\",\"from\":[%d,%d],\"to\":[%d,%d],\"ms\":%d,\"bend\":%.2f,\"real\":%s,\"text\":%s}",
+      fx, fy, x, y, (int)ms, bend, real_mode ? "true" : "false", text ? "true" : "false");
   show(&b);
-  hand_x = x, hand_y = y;
+  hand_x = x;
+  hand_y = y;
   // Steps follow the clock, not the sleeps, so the real mouse stays in step with the drawn arrow.
   double start = pl_now();
   for (double k = 0; k < 1;) {
     k = ms > 0 ? (pl_now() - start) * 1000 / ms : 1;
     if (k > 1) k = 1;
     if (real_mode) {
-      double t = (1 - cos(3.14159265358979 * k)) / 2, u = 1 - t;
-      SetCursorPos((int)lround(u * u * fx + 2 * u * t * cx + t * t * x), (int)lround(u * u * fy + 2 * u * t * cy + t * t * y));
+      double t = (1 - cos(3.14159265358979 * k)) / 2;
+      double u = 1 - t;
+      SetCursorPos(
+          (int)lround(u * u * fx + 2 * u * t * cx + t * t * x), (int)lround(u * u * fy + 2 * u * t * cy + t * t * y));
     }
     if (k < 1) wait_ms(r, real_mode ? 4 : 15);
   }
@@ -961,7 +1172,8 @@ static void glide(run *r, int x, int y, double seconds, int text) {
 // The window at a point and the point in its client terms, brought to the front so typing goes to it.
 static HWND window_at(run *r, int x, int y, LPARAM *inside) {
   POINT p = { x, y };
-  HWND h = WindowFromPoint(p), top = h ? GetAncestor(h, GA_ROOT) : NULL;
+  HWND h = WindowFromPoint(p);
+  HWND top = h ? GetAncestor(h, GA_ROOT) : NULL;
   if (!h) fail(r, "phrase", "there is no window at %d, %d", x, y);
   if (top && top != GetForegroundWindow()) {
     keybd_event(VK_MENU, 0, 0, 0);
@@ -979,7 +1191,8 @@ static void virtual_click(run *r, int x, int y, int right, int times) {
   HWND h = window_at(r, x, y, &inside);
   if (!right && times == 1) {
     uia_start(r);
-    IUIAutomationElement *e = NULL, *up = NULL;
+    IUIAutomationElement *e = NULL;
+    IUIAutomationElement *up = NULL;
     IUIAutomationTreeWalker *walk = NULL;
     POINT p = { x, y };
     IUIAutomation_ElementFromPoint(uia, p, &e);
@@ -987,14 +1200,20 @@ static void virtual_click(run *r, int x, int y, int right, int times) {
     int done = 0;
     for (int level = 0; e && walk && level < 3 && !done; level++) {
       done = act(e);
-      if (!done && SUCCEEDED(IUIAutomationTreeWalker_GetParentElement(walk, e, &up))) { IUIAutomationElement_Release(e); e = up; up = NULL; }
-      else break;
+      if (!done && SUCCEEDED(IUIAutomationTreeWalker_GetParentElement(walk, e, &up))) {
+        IUIAutomationElement_Release(e);
+        e = up;
+        up = NULL;
+      } else
+        break;
     }
     if (e) IUIAutomationElement_Release(e);
     if (walk) IUIAutomationTreeWalker_Release(walk);
     if (done) return;
   }
-  UINT down = right ? WM_RBUTTONDOWN : WM_LBUTTONDOWN, again = right ? WM_RBUTTONDBLCLK : WM_LBUTTONDBLCLK, lift = right ? WM_RBUTTONUP : WM_LBUTTONUP;
+  UINT down = right ? WM_RBUTTONDOWN : WM_LBUTTONDOWN;
+  UINT again = right ? WM_RBUTTONDBLCLK : WM_LBUTTONDBLCLK;
+  UINT lift = right ? WM_RBUTTONUP : WM_LBUTTONUP;
   WPARAM held = right ? MK_RBUTTON : MK_LBUTTON;
   PostMessageW(h, WM_MOUSEMOVE, 0, inside);
   for (int i = 0; i < times; i++) {
@@ -1006,7 +1225,10 @@ static void virtual_click(run *r, int x, int y, int right, int times) {
 static void click(run *r, int x, int y, int right, int times) {
   glide(r, x, y, 0, 0);
   show_press(right, times);
-  if (!real_mode) { virtual_click(r, x, y, right, times); return; }
+  if (!real_mode) {
+    virtual_click(r, x, y, right, times);
+    return;
+  }
   wait_ms(r, 30);
   for (int i = 0; i < times; i++) {
     mouse(right ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_LEFTDOWN, 0);
@@ -1041,15 +1263,17 @@ static void drag(run *r, int x1, int y1, int x2, int y2) {
   PostMessageW(h, WM_LBUTTONUP, 0, MAKELPARAM(end.x, end.y));
 }
 
-
 static void wheel(run *r, int x, int y, int amount) {
   glide(r, x, y, 0, 0);
-  if (real_mode) { mouse(MOUSEEVENTF_WHEEL, (DWORD)(amount * WHEEL_DELTA)); return; }
+  if (real_mode) {
+    mouse(MOUSEEVENTF_WHEEL, (DWORD)(amount * WHEEL_DELTA));
+    return;
+  }
   LPARAM inside;
   HWND h = window_at(r, x, y, &inside);
-  PostMessageW(h, WM_MOUSEWHEEL, MAKEWPARAM(0, (short)(amount * WHEEL_DELTA)), MAKELPARAM(x, y));   // a wheel's point is on the screen
+  PostMessageW(h, WM_MOUSEWHEEL, MAKEWPARAM(0, (short)(amount * WHEEL_DELTA)),
+      MAKELPARAM(x, y));   // a wheel's point is on the screen
 }
-
 
 static val *mouse_mode(run *r, val **a) {
   if (a[0]->k != V_NOTHING) {
@@ -1064,7 +1288,8 @@ static val *mouse_mode(run *r, val **a) {
 static void ring(run *r, box where, val *say, double seconds) {
   buf b = { 0 };
   const char *words = str(r, say);   // nothing says nothing
-  buf_fmt(&b, "{\"show\":\"point\",\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,\"seconds\":%g,\"say\":", (int)where.x, (int)where.y, (int)where.w, (int)where.h, seconds);
+  buf_fmt(&b, "{\"show\":\"point\",\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,\"seconds\":%g,\"say\":", (int)where.x,
+      (int)where.y, (int)where.w, (int)where.h, seconds);
   buf_json_str(&b, words, strlen(words));
   buf_chr(&b, '}');
   show(&b);
@@ -1084,7 +1309,8 @@ static val *show_clear(run *r, val **a) {
 
 // A small rounded window of Onsay's own, drawn by the app, showing a page of HTML until it is hidden or closed.
 static val *panel_show(run *r, val **a) {
-  const char *html = str(r, a[0]), *title = str(r, a[1]);
+  const char *html = str(r, a[0]);
+  const char *title = str(r, a[1]);
   buf b = { 0 };
   buf_fmt(&b, "{\"show\":\"panel\",\"w\":%d,\"h\":%d,\"title\":", (int)num_or(a[2], 480), (int)num_or(a[3], 360));
   buf_json_str(&b, title, strlen(title));
@@ -1118,8 +1344,10 @@ static void typing(run *r, IUIAutomationElement *e) {
     found = SUCCEEDED(IUIAutomation_GetFocusedElement(uia, &focused)) && focused && middle(focused, &p);
     if (focused) IUIAutomationElement_Release(focused);
   }
-  if (!found && hand_known) p = (POINT){ hand_x, hand_y };
-  else if (!found) GetCursorPos(&p);
+  if (!found && hand_known)
+    p = (POINT){ hand_x, hand_y };
+  else if (!found)
+    GetCursorPos(&p);
   glide(r, p.x, p.y, 0, 1);
   show_type();
 }
@@ -1130,27 +1358,57 @@ static void type_text(run *r, const char *text) {
   wchar_t *w = win_wide(text);
   double ticked = pl_now();
   for (wchar_t *c = w; *c; c++) {
-    if (pl_now() - ticked > 0.3) show_type(), ticked = pl_now();
+    if (pl_now() - ticked > 0.3) {
+      show_type();
+      ticked = pl_now();
+    }
     if (*c == L'\r') continue;
-    if (*c == L'\n') { key(VK_RETURN, 0); key(VK_RETURN, 1); }
-    else {
+    if (*c == L'\n') {
+      key(VK_RETURN, 0);
+      key(VK_RETURN, 1);
+    } else {
       INPUT in[2] = { { .type = INPUT_KEYBOARD }, { .type = INPUT_KEYBOARD } };
       in[0].ki.wScan = in[1].ki.wScan = *c;
       in[0].ki.dwFlags = KEYEVENTF_UNICODE;
       in[1].ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
       send_input(in, 2);
     }
-    if (*r->stop) { free(w); fail(r, "stopped", "Stopped by the person"); }
+    if (*r->stop) {
+      free(w);
+      fail(r, "stopped", "Stopped by the person");
+    }
     Sleep(5);
   }
   free(w);
 }
 
-static const struct { const char *name; WORD vk; } KEYS[] = {
-  { "ctrl", VK_CONTROL }, { "control", VK_CONTROL }, { "shift", VK_SHIFT }, { "alt", VK_MENU }, { "win", VK_LWIN }, { "enter", VK_RETURN },
-  { "return", VK_RETURN }, { "tab", VK_TAB }, { "esc", VK_ESCAPE }, { "escape", VK_ESCAPE }, { "backspace", VK_BACK }, { "delete", VK_DELETE },
-  { "del", VK_DELETE }, { "space", VK_SPACE }, { "up", VK_UP }, { "down", VK_DOWN }, { "left", VK_LEFT }, { "right", VK_RIGHT },
-  { "home", VK_HOME }, { "end", VK_END }, { "pageup", VK_PRIOR }, { "pagedown", VK_NEXT }, { "insert", VK_INSERT },
+static const struct {
+  const char *name;
+  WORD vk;
+} KEYS[] = {
+  { "ctrl", VK_CONTROL },
+  { "control", VK_CONTROL },
+  { "shift", VK_SHIFT },
+  { "alt", VK_MENU },
+  { "win", VK_LWIN },
+  { "enter", VK_RETURN },
+  { "return", VK_RETURN },
+  { "tab", VK_TAB },
+  { "esc", VK_ESCAPE },
+  { "escape", VK_ESCAPE },
+  { "backspace", VK_BACK },
+  { "delete", VK_DELETE },
+  { "del", VK_DELETE },
+  { "space", VK_SPACE },
+  { "up", VK_UP },
+  { "down", VK_DOWN },
+  { "left", VK_LEFT },
+  { "right", VK_RIGHT },
+  { "home", VK_HOME },
+  { "end", VK_END },
+  { "pageup", VK_PRIOR },
+  { "pagedown", VK_NEXT },
+  { "insert", VK_INSERT },
 };
 
 // Like ctrl+s: every key down in order, then up in reverse.
@@ -1167,8 +1425,10 @@ static void press_keys(run *r, const char *combo) {
     char k[16] = { 0 };
     for (size_t i = 0; i < len && i < 15; i++) k[i] = (char)(p[i] >= 'A' && p[i] <= 'Z' ? p[i] + 32 : p[i]);
     WORD vk = 0;
-    for (size_t i = 0; i < sizeof KEYS / sizeof *KEYS; i++) if (!strcmp(KEYS[i].name, k)) vk = KEYS[i].vk;
-    if (!vk && len == 1 && ((k[0] >= 'a' && k[0] <= 'z') || (k[0] >= '0' && k[0] <= '9'))) vk = (WORD)(k[0] >= 'a' ? k[0] - 32 : k[0]);
+    for (size_t i = 0; i < sizeof KEYS / sizeof *KEYS; i++)
+      if (!strcmp(KEYS[i].name, k)) vk = KEYS[i].vk;
+    if (!vk && len == 1 && ((k[0] >= 'a' && k[0] <= 'z') || (k[0] >= '0' && k[0] <= '9')))
+      vk = (WORD)(k[0] >= 'a' ? k[0] - 32 : k[0]);
     if (!vk && k[0] == 'f' && atoi(k + 1) >= 1 && atoi(k + 1) <= 12) vk = (WORD)(VK_F1 + atoi(k + 1) - 1);
     if (!vk) fail(r, "phrase", "there is no key called %s", k);
     keys[n++] = vk;
@@ -1178,48 +1438,7 @@ static void press_keys(run *r, const char *combo) {
   for (int i = n; i-- > 0;) key(keys[i], 1);
 }
 
-
 ////////// 6. FILES //////////
-
-static val *fs_read(run *r, val **a) {
-  val *p = path_of(r, a[0], "files.read");
-  buf b = { 0 };
-  if (!pl_read(p->t.s, &b)) win_fail(r, "read", p->t.s);
-  size_t skip = b.n >= 3 && !memcmp(b.s, "\xEF\xBB\xBF", 3) ? 3 : 0;   // a byte order mark isn't part of the text
-  val *out = v_text(r->a, b.s + skip, b.n - skip);
-  buf_free(&b);
-  return out;
-}
-
-static void parent_folder(run *r, val *p) {
-  wchar_t *w = win_wide(p->t.s), *slash = wcsrchr(w, L'\\');
-  if (slash && slash > w + 2) { *slash = 0; SHCreateDirectoryExW(NULL, w, NULL); }
-  free(w);
-}
-
-static val *fs_write(run *r, val **a) {
-  val *p = path_of(r, a[0], "files.write");
-  buf b = { 0 };
-  if (a[1]->k == V_TEXT) buf_add(&b, a[1]->t.s, a[1]->t.len); else buf_json(&b, a[1]);
-  parent_folder(r, p);
-  int ok = pl_write(p->t.s, b.s ? b.s : "", b.n);
-  buf_free(&b);
-  if (!ok) win_fail(r, "write", p->t.s);
-  return NOTHING;
-}
-
-static val *fs_append(run *r, val **a) {
-  val *p = path_of(r, a[0], "files.write");
-  const char *text = str(r, a[1]);
-  wchar_t *w = win_wide(p->t.s);
-  HANDLE f = CreateFileW(w, FILE_APPEND_DATA, FILE_SHARE_READ, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-  free(w);
-  if (f == INVALID_HANDLE_VALUE) win_fail(r, "add to", p->t.s);
-  DWORD wrote = 0;
-  WriteFile(f, text, (DWORD)strlen(text), &wrote, NULL);
-  CloseHandle(f);
-  return NOTHING;
-}
 
 static DWORD attributes(val *p) {
   wchar_t *w = win_wide(p->t.s);
@@ -1228,13 +1447,8 @@ static DWORD attributes(val *p) {
   return at;
 }
 
-static val *fs_exists(run *r, val **a) { return VBOOL(attributes(path_of(r, a[0], "files.read")) != INVALID_FILE_ATTRIBUTES); }
-
-// * is any run of characters and ? any one, ignoring case, as Windows names files.
-static int glob(const wchar_t *p, const wchar_t *s) {
-  if (!*p) return !*s;
-  if (*p == L'*') return glob(p + 1, s) || (*s && glob(p, s + 1));
-  return *s && (*p == L'?' || towlower(*p) == towlower(*s)) && glob(p + 1, s + 1);
+static val *fs_exists(run *r, val **a) {
+  return VBOOL(attributes(path_of(r, a[0], "files.read")) != INVALID_FILE_ATTRIBUTES);
 }
 
 static val *file_rec(run *r, const wchar_t *folder, WIN32_FIND_DATAW *d) {
@@ -1243,7 +1457,8 @@ static val *file_rec(run *r, const wchar_t *folder, WIN32_FIND_DATAW *d) {
   SYSTEMTIME t;
   FileTimeToSystemTime(&d->ftLastWriteTime, &t);
   char when[32];
-  snprintf(when, sizeof when, "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond, t.wMilliseconds);
+  snprintf(when, sizeof when, "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute,
+      t.wSecond, t.wMilliseconds);
   val *f = v_rec(r->a);
   put(r, f, "name", wtext(r, d->cFileName, -1));
   put(r, f, "path", wtext(r, full, -1));
@@ -1254,7 +1469,7 @@ static val *file_rec(run *r, const wchar_t *folder, WIN32_FIND_DATAW *d) {
 }
 
 // Entries in folder whose name fits pattern, recursive with deep, up to 10,000.
-static void look_in(run *r, const wchar_t *folder, const wchar_t *pattern, int deep, val *out) {
+static void look_in(run *r, const wchar_t *folder, const char *pattern, int deep, val *out) {
   wchar_t all[MAX_PATH * 4];
   _snwprintf(all, sizeof all / sizeof *all, L"%ls\\*", folder);
   WIN32_FIND_DATAW d;
@@ -1263,8 +1478,12 @@ static void look_in(run *r, const wchar_t *folder, const wchar_t *pattern, int d
   do {
     if (!wcscmp(d.cFileName, L".") || !wcscmp(d.cFileName, L"..")) continue;
     if (out->l.n >= 10000 || *r->stop) break;
-    if (glob(pattern, d.cFileName)) list_push(r->a, out, file_rec(r, folder, &d));
-    if (deep && (d.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && !(d.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+    buf name = { 0 };
+    win_narrow(&name, d.cFileName, -1);
+    if (glob(pattern, name.s ? name.s : "")) list_push(r->a, out, file_rec(r, folder, &d));
+    buf_free(&name);
+    if (deep && (d.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
+        !(d.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
       wchar_t inner[MAX_PATH * 4];
       _snwprintf(inner, sizeof inner / sizeof *inner, L"%ls\\%ls", folder, d.cFileName);
       look_in(r, inner, pattern, deep, out);
@@ -1274,112 +1493,22 @@ static void look_in(run *r, const wchar_t *folder, const wchar_t *pattern, int d
 }
 
 static val *listing(run *r, val **a, int deep) {
-  val *p = path_of(r, a[0], "files.read"), *out = v_list(r->a);
+  val *p = path_of(r, a[0], "files.read");
+  val *out = v_list(r->a);
   DWORD at = attributes(p);
-  if (at == INVALID_FILE_ATTRIBUTES || !(at & FILE_ATTRIBUTE_DIRECTORY)) fail(r, "phrase", "there is no folder %s", p->t.s);
-  wchar_t *folder = win_wide(p->t.s), *pattern = win_wide(a[1]->k == V_NOTHING ? "*" : str(r, a[1]));
-  look_in(r, folder, pattern, deep, out);
+  if (at == INVALID_FILE_ATTRIBUTES || !(at & FILE_ATTRIBUTE_DIRECTORY))
+    fail(r, "phrase", "there is no folder %s", p->t.s);
+  wchar_t *folder = win_wide(p->t.s);
+  look_in(r, folder, a[1]->k == V_NOTHING ? "*" : str(r, a[1]), deep, out);
   free(folder);
-  free(pattern);
   if (*r->stop) fail(r, "stopped", "Stopped by the person");
   return out;
 }
 
-static val *fs_list(run *r, val **a) { return listing(r, a, 0); }
-static val *fs_find(run *r, val **a) { return listing(r, a, 1); }
-
-/* files.search: every line holding the words, in any case, in the text files of a folder and the folders inside it,
-   leaving out .git and node_modules, files over SEARCH_MOST bytes and files that aren't text. */
-#define SEARCH_MOST 5000000
-#define SEARCH_LINE 300
-static val *fs_search(run *r, val **a) {
-  const char *words = str(r, a[1]);
-  size_t n = strlen(words);
-  if (!n) fail(r, "phrase", "files.search needs the words to look for");
-  double most = num_of(r, a[3], "most");
-  val *where[2] = { a[0], a[2] };
-  val *found = listing(r, where, 1), *out = v_list(r->a);
-  for (size_t i = 0; i < found->l.n && out->l.n < most && !*r->stop; i++) {
-    val *f = found->l.v[i];
-    const char *path = text_or(f, "path", "");
-    if (truthy(rec_get(f, "folder")) || rec_get(f, "size")->n > SEARCH_MOST) continue;
-    if (strstr(path, "\\.git\\") || strstr(path, "\\node_modules\\")) continue;
-    buf b = { 0 };
-    if (!pl_read(path, &b) || !b.n || memchr(b.s, 0, b.n < 8000 ? b.n : 8000)) { buf_free(&b); continue; }
-    int number = 0;
-    for (char *line = b.s, *end = b.s + b.n; line < end && out->l.n < most;) {
-      char *stop = memchr(line, '\n', end - line);
-      size_t len = stop ? (size_t)(stop - line) : (size_t)(end - line);
-      number++;
-      int has = 0;
-      for (size_t k = 0; k + n <= len && !has; k++) has = !_strnicmp(line + k, words, n);
-      if (has) {
-        val *hit = v_rec(r->a);
-        put(r, hit, "path", v_cstr(r->a, path));
-        put_num(r, hit, "line", number);
-        size_t shown = len && line[len - 1] == '\r' ? len - 1 : len;
-        put(r, hit, "text", v_text(r->a, line, shown > SEARCH_LINE ? SEARCH_LINE : shown));
-        list_push(r->a, out, hit);
-      }
-      line += len + 1;
-    }
-    buf_free(&b);
-  }
-  return out;
-}
-
-// Text with each lone new line written the way Windows files write it, \r\n.
-static const char *with_crlf(run *r, const char *text) {
-  buf b = { 0 };
-  for (const char *c = text; *c; c++) {
-    if (*c == '\n' && (c == text || c[-1] != '\r')) buf_chr(&b, '\r');
-    buf_chr(&b, *c);
-  }
-  const char *out = v_text(r->a, b.s ? b.s : "", b.n)->t.s;
-  buf_free(&b);
-  return out;
-}
-
-// How many times what is in the text.
-static int times_in(const char *text, const char *what) {
-  int count = 0;
-  for (const char *at = strstr(text, what); at; at = strstr(at + strlen(what), what)) count++;
-  return count;
-}
-
-/* files.edit: exact words in a file replaced by others. Words that are there more than once are refused unless all is
-   set, so the wrong place is never changed. Words of several lines also match a file that ends its lines \r\n. */
-static val *fs_edit(run *r, val **a) {
-  val *p = path_of(r, a[0], "files.write");
-  const char *find = str(r, a[1]), *with = str(r, a[2]);
-  if (!*find) fail(r, "phrase", "files.edit needs the words to replace");
-  buf b = { 0 };
-  if (!pl_read(p->t.s, &b)) win_fail(r, "read", p->t.s);
-  const char *text = v_text(r->a, b.s ? b.s : "", b.n)->t.s;
-  buf_free(&b);
-  if (!times_in(text, find) && strchr(find, '\n')) { find = with_crlf(r, find); with = with_crlf(r, with); }
-  int count = times_in(text, find);
-  if (!count) fail(r, "phrase", "those words aren't in %s", p->t.s);
-  if (count > 1 && !truthy(a[3])) fail(r, "phrase", "those words are in %s %d times: give more of what is around them, or all as true", p->t.s, count);
-  buf out = { 0 };
-  const char *from = text;
-  for (const char *at = strstr(from, find); at; at = strstr(from, find)) {
-    buf_add(&out, from, at - from);
-    buf_str(&out, with);
-    from = at + strlen(find);
-  }
-  buf_str(&out, from);
-  int ok = pl_write(p->t.s, out.s ? out.s : "", out.n);
-  buf_free(&out);
-  if (!ok) win_fail(r, "write", p->t.s);
-  val *rec = v_rec(r->a);
-  put_num(r, rec, "replaced", count);
-  return rec;
-}
-
 // Into to if it is a folder, otherwise as to, with the folders above it made.
 static void copy_or_move(run *r, val **a, int move) {
-  val *from = path_of(r, a[0], move ? "files.write" : "files.read"), *to = path_of(r, a[1], "files.write");
+  val *from = path_of(r, a[0], move ? "files.write" : "files.read");
+  val *to = path_of(r, a[1], "files.write");
   if (attributes(from) == INVALID_FILE_ATTRIBUTES) fail(r, "phrase", "there is nothing at %s", from->t.s);
   DWORD at = attributes(to);
   if (at != INVALID_FILE_ATTRIBUTES && (at & FILE_ATTRIBUTE_DIRECTORY)) {
@@ -1389,16 +1518,14 @@ static void copy_or_move(run *r, val **a, int move) {
     to = v_text(r->a, b.s, b.n);
     buf_free(&b);
   }
-  parent_folder(r, to);
-  wchar_t *wa = win_wide(from->t.s), *wb = win_wide(to->t.s);
+  parent_folder(r, to->t.s);
+  wchar_t *wa = win_wide(from->t.s);
+  wchar_t *wb = win_wide(to->t.s);
   BOOL ok = move ? MoveFileExW(wa, wb, MOVEFILE_COPY_ALLOWED | MOVEFILE_REPLACE_EXISTING) : CopyFileW(wa, wb, FALSE);
   free(wa);
   free(wb);
-  if (!ok) win_fail(r, move ? "move" : "copy", from->t.s);
+  if (!ok) file_failed(r, move ? "move" : "copy", from->t.s);
 }
-
-static val *fs_copy(run *r, val **a) { copy_or_move(r, a, 0); return NOTHING; }
-static val *fs_move(run *r, val **a) { copy_or_move(r, a, 1); return NOTHING; }
 
 // To the Recycle Bin, so the person can always get it back.
 static val *fs_delete(run *r, val **a) {
@@ -1416,15 +1543,6 @@ static val *fs_delete(run *r, val **a) {
   free(two);
   free(w);
   if (failed) fail(r, "phrase", "Windows couldn't move %s to the Recycle Bin", p->t.s);
-  return NOTHING;
-}
-
-static val *fs_folder(run *r, val **a) {
-  val *p = path_of(r, a[0], "files.write");
-  wchar_t *w = win_wide(p->t.s);
-  int e = SHCreateDirectoryExW(NULL, w, NULL);
-  free(w);
-  if (e != ERROR_SUCCESS && e != ERROR_ALREADY_EXISTS && e != ERROR_FILE_EXISTS) fail(r, "phrase", "can't make the folder %s", p->t.s);
   return NOTHING;
 }
 
@@ -1473,67 +1591,37 @@ static val *shell_run(run *r, val **a) {
   return rec;
 }
 
-// Where a started command keeps what commands.output reads: <temp>\onsay-<id>.<what>.
-static const char *kept_at(run *r, const char *id, const char *what) {
+static const char *temp_folder(run *r) {
   wchar_t dir[MAX_PATH];
   GetTempPathW(MAX_PATH, dir);
-  val *folder = wtext(r, dir, -1);
-  buf b = { 0 };
-  buf_fmt(&b, "%sonsay-%s.%s", folder->t.s, id, what);
-  const char *out = v_text(r->a, b.s, b.n)->t.s;
-  buf_free(&b);
-  return out;
+  return wtext(r, dir, -1)->t.s;
 }
 
 // In the background, on after this call returns: PowerShell writes its output, its process id and its exit code to files.
 static val *shell_start(run *r, val **a) {
-  unsigned long long random_id = 0;
-  pl_random(&random_id, sizeof random_id);
-  buf id = { 0 }, s = { 0 }, none = { 0 };
-  buf_fmt(&id, "%llu", random_id);
-  val *given = v_text(r->a, id.s, id.n);
-  buf_free(&id);
-  const char *log = kept_at(r, given->t.s, "log"), *code = kept_at(r, given->t.s, "code"), *pid = kept_at(r, given->t.s, "pid");
+  const char *id = started_id(r);
+  const char *log = kept_at(r, id, "log");
+  const char *code = kept_at(r, id, "code");
+  const char *pid = kept_at(r, id, "pid");
+  buf s = { 0 };
+  buf none = { 0 };
   buf_str(&s, "Set-Content -LiteralPath ");
   ps_quote(&s, pid);
   buf_str(&s, " -Value $PID\n$c=0\ntry { Invoke-Expression ");
   ps_quote(&s, str(r, a[0]));
   buf_str(&s, " *>&1 | Out-File -Encoding utf8 -LiteralPath ");
   ps_quote(&s, log);
-  buf_str(&s, "; if ($LASTEXITCODE) { $c=$LASTEXITCODE } elseif (-not $?) { $c=1 } } catch { $_ | Out-File -Append -Encoding utf8 -LiteralPath ");
+  buf_str(&s,
+      "; if ($LASTEXITCODE) { $c=$LASTEXITCODE } elseif (-not $?) { $c=1 } } catch { $_ | Out-File -Append -Encoding utf8 -LiteralPath ");
   ps_quote(&s, log);
   buf_str(&s, "; $c=1 }\nSet-Content -LiteralPath ");
   ps_quote(&s, code);
   buf_str(&s, " -Value $c");
   powershell(r, s.s, 0, 0, &none);
-  buf_free(&s), buf_free(&none);
+  buf_free(&s);
+  buf_free(&none);
   val *rec = v_rec(r->a);
-  put(r, rec, "id", given);
-  return rec;
-}
-
-// What a started command has written so far, and its exit code once it ended.
-static val *shell_output(run *r, val **a) {
-  const char *id = str(r, a[0]);
-  if (!*id || strspn(id, "0123456789") != strlen(id)) fail(r, "phrase", "that isn't the id of a started command");
-  buf log = { 0 }, code = { 0 }, pid = { 0 };
-  int began = pl_read(kept_at(r, id, "pid"), &pid);
-  if (!began) {
-    // It may only just have been started, before PowerShell has written anything.
-    nap(r, 1);
-    began = pl_read(kept_at(r, id, "pid"), &pid);
-    if (!began) fail(r, "phrase", "no started command has that id");
-  }
-  // Whether it ended first, so all it wrote is read once it has.
-  int ended = pl_read(kept_at(r, id, "code"), &code);
-  pl_read(kept_at(r, id, "log"), &log);
-  size_t skip = log.n >= 3 && !memcmp(log.s, "\xEF\xBB\xBF", 3) ? 3 : 0;
-  val *rec = v_rec(r->a);
-  put(r, rec, "running", VBOOL(!ended));
-  put(r, rec, "code", ended ? v_num(r->a, atoi(code.s + (code.n >= 3 && !memcmp(code.s, "\xEF\xBB\xBF", 3) ? 3 : 0))) : NOTHING);
-  if (began) put_num(r, rec, "pid", atoi(pid.s + (pid.n >= 3 && !memcmp(pid.s, "\xEF\xBB\xBF", 3) ? 3 : 0)));
-  put(r, rec, "out", v_text(r->a, log.n ? log.s + skip : "", log.n - skip));
-  buf_free(&log), buf_free(&code), buf_free(&pid);
+  put(r, rec, "id", v_cstr(r->a, id));
   return rec;
 }
 
@@ -1561,16 +1649,21 @@ static val *shell_processes(run *r, val **a) {
 
 static val *shell_stop(run *r, val **a) {
   HANDLE h = OpenProcess(PROCESS_TERMINATE, FALSE, (DWORD)num_of(r, a[0], NULL));
-  if (!h || !TerminateProcess(h, 1)) { if (h) CloseHandle(h); fail(r, "phrase", "process %g couldn't be stopped", a[0]->n); }
+  if (!h || !TerminateProcess(h, 1)) {
+    if (h) CloseHandle(h);
+    fail(r, "phrase", "process %g couldn't be stopped", a[0]->n);
+  }
   CloseHandle(h);
   return NOTHING;
 }
 
 // A notification from the tray, which Windows shows as a toast. It shows on its own, so the program goes on.
 static val *note_toast(run *r, val **a) {
-  buf s = { 0 }, none = { 0 };
-  buf_str(&s, "Add-Type -AssemblyName System.Windows.Forms,System.Drawing\n$i=New-Object System.Windows.Forms.NotifyIcon\n"
-              "$i.Icon=[System.Drawing.SystemIcons]::Information;$i.Text='Onsay';$i.Visible=$true\n$i.ShowBalloonTip(6000,");
+  buf s = { 0 };
+  buf none = { 0 };
+  buf_str(&s,
+      "Add-Type -AssemblyName System.Windows.Forms,System.Drawing\n$i=New-Object System.Windows.Forms.NotifyIcon\n"
+      "$i.Icon=[System.Drawing.SystemIcons]::Information;$i.Text='Onsay';$i.Visible=$true\n$i.ShowBalloonTip(6000,");
   ps_quote(&s, str(r, a[0]));
   buf_chr(&s, ',');
   ps_quote(&s, *str(r, a[1]) ? str(r, a[1]) : " ");
@@ -1594,7 +1687,8 @@ static val *front(run *r, val *window) {
 
 // Where want, lowered, first is in text, lowered, in characters, or -1. *n is how many characters text has.
 static long words_at(run *r, val *text, const wchar_t *want, size_t *n) {
-  wchar_t *t = lowered(r, text), *found = wcsstr(t, want);
+  wchar_t *t = lowered(r, text);
+  wchar_t *found = wcsstr(t, want);
   long at = found ? (long)(found - t) : -1;
   *n = wcslen(t);
   free(t);
@@ -1606,7 +1700,8 @@ static long words_at(run *r, val *text, const wchar_t *want, size_t *n) {
 static int spot(run *r, val *words, val *window, double nth, int must, box *out) {
   val *lines = screen_read(r, window);
   wchar_t *want = lowered(r, words);
-  size_t wn = wcslen(want), n;
+  size_t wn = wcslen(want);
+  size_t n;
   int seen = 0;
   for (size_t i = 0; lines->k == V_LIST && i < lines->l.n; i++) {
     long k = words_at(r, part(lines->l.v[i], "text"), want, &n);
@@ -1680,7 +1775,10 @@ static val *input_shortcut(run *r, val **a) {
 
 static val *input_type_lines(run *r, val **a) {
   if (a[0]->k != V_LIST) fail(r, "phrase", "lines is a list of text");
-  for (size_t i = 0; i < a[0]->l.n; i++) { type_text(r, str(r, a[0]->l.v[i])); press_keys(r, "enter"); }
+  for (size_t i = 0; i < a[0]->l.n; i++) {
+    type_text(r, str(r, a[0]->l.v[i]));
+    press_keys(r, "enter");
+  }
   return NOTHING;
 }
 
@@ -1735,11 +1833,14 @@ static val *input_point_on(run *r, val **a) {
 static val *now(run *r, val *window) {
   if (window->k == V_NOTHING) {
     val *screen = v_rec(r->a);
-    put_num(r, screen, "x", 0), put_num(r, screen, "y", 0);
-    put_num(r, screen, "w", GetSystemMetrics(SM_CXSCREEN)), put_num(r, screen, "h", GetSystemMetrics(SM_CYSCREEN));
+    put_num(r, screen, "x", 0);
+    put_num(r, screen, "y", 0);
+    put_num(r, screen, "w", GetSystemMetrics(SM_CXSCREEN));
+    put_num(r, screen, "h", GetSystemMetrics(SM_CYSCREEN));
     return screen;
   }
-  if ((window->k == V_REC ? part(window, "id") : window)->k == V_NOTHING) return win_wait(r, (val *[]){ window, v_num(r->a, 5) });
+  if ((window->k == V_REC ? part(window, "id") : window)->k == V_NOTHING)
+    return win_wait(r, (val *[]){ window, v_num(r->a, 5) });
   return window_rec(r, hwnd_of(r, window, "window"));
 }
 
@@ -1748,16 +1849,25 @@ static val *ready(run *r, val *window) {
   val *w = now(r, window);
   if (window->k == V_NOTHING) return w;
   HWND h = hwnd_of(r, w, "window");
-  if (IsIconic(h)) { ShowWindow(h, SW_RESTORE); nap(r, 0.25); w = window_rec(r, h); }
-  if (h != GetForegroundWindow()) { win_focus(r, &w); nap(r, 0.15); }
+  if (IsIconic(h)) {
+    ShowWindow(h, SW_RESTORE);
+    nap(r, 0.25);
+    w = window_rec(r, h);
+  }
+  if (h != GetForegroundWindow()) {
+    win_focus(r, &w);
+    nap(r, 0.15);
+  }
   return w;
 }
 
 // x, y in a window to the screen. Between -1 and 1 they are shares of its size; below 0 they count back from the far edge.
 static double along(run *r, val *v, double size) {
   double n = num_of(r, v, NULL);
-  if (n > -1 && n < 1 && n != 0) n = n < 0 ? size * (1 + n) : size * n;
-  else if (n < 0) n += size;
+  if (n > -1 && n < 1 && n != 0)
+    n = n < 0 ? size * (1 + n) : size * n;
+  else if (n < 0)
+    n += size;
   return floor(n + 0.5);
 }
 
@@ -1775,7 +1885,8 @@ static val *point_val(run *r, POINT p) {
 
 static val *input_click_in(run *r, val **a) {
   const char *how = str(r, a[3]);
-  int right = !strcmp(how, "right"), times = !strcmp(how, "double") ? 2 : 1;
+  int right = !strcmp(how, "right");
+  int times = !strcmp(how, "double") ? 2 : 1;
   if (!right && times == 1 && strcmp(how, "left")) fail(r, "phrase", "how is left, double or right, not %s", how);
   POINT p = place(r, ready(r, a[0]), a[1], a[2]);
   click(r, p.x, p.y, right, times);
@@ -1790,8 +1901,10 @@ static val *input_move_in(run *r, val **a) {
 
 // Through each point in turn, the seconds shared evenly among them, in one go, so a shape stays one movement.
 static val *input_move_along(run *r, val **a) {
-  val *points = a[0], *w = ready(r, a[1]);
-  if (points->k != V_LIST || !points->l.n) fail(r, "phrase", "input.move_along: points is a list of places, like [[100, 200], [150, 250]]");
+  val *points = a[0];
+  val *w = ready(r, a[1]);
+  if (points->k != V_LIST || !points->l.n)
+    fail(r, "phrase", "input.move_along: points is a list of places, like [[100, 200], [150, 250]]");
   double each = num_or(a[2], 0) / points->l.n;
   POINT p = { 0 };
   for (size_t i = 0; i < points->l.n; i++) {
@@ -1805,7 +1918,8 @@ static val *input_move_along(run *r, val **a) {
 
 static val *input_drag_in(run *r, val **a) {
   val *w = ready(r, a[0]);
-  POINT from = place(r, w, a[1], a[2]), to = place(r, w, a[3], a[4]);
+  POINT from = place(r, w, a[1], a[2]);
+  POINT to = place(r, w, a[3], a[4]);
   drag(r, from.x, from.y, to.x, to.y);
   return NOTHING;
 }
@@ -1822,14 +1936,16 @@ static val *input_where_in(run *r, val **a) { return point_val(r, place(r, now(r
 
 // Given no window, controls are the front window's, and words the whole screen's.
 
-static const char *const UNMARKED[] = { "pane", "group", "window", "document", "table", "list", "menu", "text", "tree", "tool bar",
-                                        "status bar", "menu bar", "title bar", "scroll bar", NULL };
-static const char *const PRESSABLE[] = { "button", "link", "tab", "menu item", "checkbox", "radio", "list item", "tree item", NULL };
+static const char *const UNMARKED[] = { "pane", "group", "window", "document", "table", "list", "menu", "text", "tree",
+  "tool bar", "status bar", "menu bar", "title bar", "scroll bar", NULL };
+static const char *const PRESSABLE[] = { "button", "link", "tab", "menu item", "checkbox", "radio", "list item",
+  "tree item", NULL };
 static const char *const TYPEABLE[] = { "field", "dropdown", "document", NULL };
 
 static int role_is(val *c, const char *const *roles) {
   val *role = part(c, "role");
-  for (size_t i = 0; role->k == V_TEXT && roles[i]; i++) if (!strcmp(role->t.s, roles[i])) return 1;
+  for (size_t i = 0; role->k == V_TEXT && roles[i]; i++)
+    if (!strcmp(role->t.s, roles[i])) return 1;
   return 0;
 }
 
@@ -1837,7 +1953,8 @@ static int role_is(val *c, const char *const *roles) {
 static val *controls_of(run *r, val *window) { return find(r, hwnd_of(r, front(r, window), "window"), NULL, 400); }
 
 static val *focus_in(val *all) {
-  for (size_t i = 0; i < all->l.n; i++) if (truthy(part(all->l.v[i], "focused"))) return all->l.v[i];
+  for (size_t i = 0; i < all->l.n; i++)
+    if (truthy(part(all->l.v[i], "focused"))) return all->l.v[i];
   return NOTHING;
 }
 
@@ -1847,7 +1964,9 @@ static val *able(run *r, val *all, int typing, double most) {
   val *out = v_list(r->a);
   for (size_t i = 0; i < all->l.n && out->l.n < most; i++) {
     val *c = all->l.v[i];
-    if (!role_is(c, typing ? TYPEABLE : PRESSABLE) || (!typing && (!truthy(part(c, "enabled")) || !*str(r, part(c, "name"))))) continue;
+    if (!role_is(c, typing ? TYPEABLE : PRESSABLE) ||
+        (!typing && (!truthy(part(c, "enabled")) || !*str(r, part(c, "name")))))
+      continue;
     val *one = v_rec(r->a);
     box b = box_of(r, c);
     put(r, one, "name", part(c, "name"));
@@ -1862,7 +1981,8 @@ static val *able(run *r, val *all, int typing, double most) {
 
 static val *names(run *r, val *list) {
   val *out = v_list(r->a);
-  for (size_t i = 0; i < list->l.n; i++) list_push(r->a, out, part(list->l.v[i], *str(r, part(list->l.v[i], "name")) ? "name" : "role"));
+  for (size_t i = 0; i < list->l.n; i++)
+    list_push(r->a, out, part(list->l.v[i], *str(r, part(list->l.v[i], "name")) ? "name" : "role"));
   return out;
 }
 
@@ -1871,21 +1991,27 @@ static val *lines_with(run *r, val *words, val *lines) {
   val *out = v_list(r->a);
   wchar_t *want = lowered(r, words);
   size_t n;
-  for (size_t i = 0; lines->k == V_LIST && i < lines->l.n; i++) if (words_at(r, part(lines->l.v[i], "text"), want, &n) >= 0) list_push(r->a, out, lines->l.v[i]);
+  for (size_t i = 0; lines->k == V_LIST && i < lines->l.n; i++)
+    if (words_at(r, part(lines->l.v[i], "text"), want, &n) >= 0) list_push(r->a, out, lines->l.v[i]);
   free(want);
   return out;
 }
 
 // Squared distance between two boxes' nearest edges, 0 when they touch. Squared is enough to compare.
 static double gap(box a, box b) {
-  double dx = fmax(0, fmax(a.x - (b.x + b.w), b.x - (a.x + a.w))), dy = fmax(0, fmax(a.y - (b.y + b.h), b.y - (a.y + a.h)));
+  double dx = fmax(0, fmax(a.x - (b.x + b.w), b.x - (a.x + a.w)));
+  double dy = fmax(0, fmax(a.y - (b.y + b.h), b.y - (a.y + a.h)));
   return dx * dx + dy * dy;
 }
 
 /* marked(): everything on screen that can be told apart, numbered in reading order: the window's controls, then OCR
    lines that aren't part of one. Places are in the window's pixels (for input.click_in), or the screen's with no window.
    At most 120 controls, then text up to 170 in all. A mark's box holds its name. */
-typedef struct { const char *kind; box b; double order; } mark;
+typedef struct {
+  const char *kind;
+  box b;
+  double order;
+} mark;
 
 // What a control is, for marking, or NULL for containers, bars and plain text (OCR reads text better). A nameless
 // button or image is an icon, marked anyway for a model that can see.
@@ -1897,7 +2023,8 @@ static const char *kind_of(run *r, val *c) {
 
 // Which mark a line of text belongs to: a nameless one it sits in, or one whose name says the same. -1 when none.
 static long owner(run *r, mark *found, size_t n, box t) {
-  double cx = t.x + t.w / 2, cy = t.y + t.h / 2;
+  double cx = t.x + t.w / 2;
+  double cy = t.y + t.h / 2;
   wchar_t *b = lowered(r, trimmed(r, t.text));
   long out = -1;
   for (size_t i = 0; i < n && out < 0; i++) {
@@ -1914,16 +2041,25 @@ static long owner(run *r, mark *found, size_t n, box t) {
 // In reading order, the first seen first where two tie.
 static void by_order(mark *m, size_t n) {
   for (size_t i = 1; i < n; i++)
-    for (size_t j = i; j > 0 && m[j - 1].order > m[j].order; j--) { mark t = m[j]; m[j] = m[j - 1]; m[j - 1] = t; }
+    for (size_t j = i; j > 0 && m[j - 1].order > m[j].order; j--) {
+      mark t = m[j];
+      m[j] = m[j - 1];
+      m[j - 1] = t;
+    }
 }
 
 static val *marked(run *r, val *window, val *area) {
   int whole = window->k == V_NOTHING;
-  val *w = front(r, window), *controls = find(r, hwnd_of(r, w, "window"), NULL, 400), *lines = screen_read(r, window);
+  val *w = front(r, window);
+  val *controls = find(r, hwnd_of(r, w, "window"), NULL, 400);
+  val *lines = screen_read(r, window);
   box wb = box_of(r, w);
-  double ox = whole ? 0 : wb.x, oy = whole ? 0 : wb.y;
-  size_t n = 0, count = lines->k == V_LIST ? lines->l.n : 0;
-  mark *found = arena_get(r->a, (controls->l.n + count + 1) * sizeof *found), *texts = arena_get(r->a, (controls->l.n + count + 1) * sizeof *texts);
+  double ox = whole ? 0 : wb.x;
+  double oy = whole ? 0 : wb.y;
+  size_t n = 0;
+  size_t count = lines->k == V_LIST ? lines->l.n : 0;
+  mark *found = arena_get(r->a, (controls->l.n + count + 1) * sizeof *found);
+  mark *texts = arena_get(r->a, (controls->l.n + count + 1) * sizeof *texts);
   for (size_t i = 0; i < controls->l.n; i++) {
     val *c = controls->l.v[i];
     const char *kind = kind_of(r, c);
@@ -1933,25 +2069,35 @@ static val *marked(run *r, val *window, val *area) {
   }
   for (size_t i = 0; i < count; i++) {
     box b = box_of(r, lines->l.v[i]);
-    b.x -= ox, b.y -= oy;
+    b.x -= ox;
+    b.y -= oy;
     long k = owner(r, found, n, b);
-    if (k < 0) found[n++] = (mark){ "text", b, 0 };
+    if (k < 0)
+      found[n++] = (mark){ "text", b, 0 };
     else if (!trimmed(r, found[k].b.text)->t.len) {
       found[k].b.text = b.text;
       if (!strcmp(found[k].kind, "icon")) found[k].kind = "button";
     }
   }
   // Cut to the window or box. Controls come first, text fills what is left.
-  box cut = area->k != V_NOTHING ? box_of(r, area) : whole ? (box){ -100000, -100000, 200000, 200000, NOTHING } : (box){ 0, 0, wb.w, wb.h, NOTHING };
-  size_t kept = 0, read = 0;
+  box cut = { 0, 0, wb.w, wb.h, NOTHING };
+  if (whole) cut = (box){ -100000, -100000, 200000, 200000, NOTHING };
+  if (area->k != V_NOTHING) cut = box_of(r, area);
+  size_t kept = 0;
+  size_t read = 0;
   for (size_t i = 0; i < n; i++) {
     box e = found[i].b;
-    double x1 = fmax(e.x, cut.x), y1 = fmax(e.y, cut.y), x2 = fmin(e.x + e.w, cut.x + cut.w), y2 = fmin(e.y + e.h, cut.y + cut.h);
+    double x1 = fmax(e.x, cut.x);
+    double y1 = fmax(e.y, cut.y);
+    double x2 = fmin(e.x + e.w, cut.x + cut.w);
+    double y2 = fmin(e.y + e.h, cut.y + cut.h);
     if (x2 - x1 < 3 || y2 - y1 < 3) continue;
     mark m = { found[i].kind, { x1, y1, x2 - x1, y2 - y1, e.text }, floor(y1 / 12 + 0.5) * 100000 + x1 };
     val *t = trimmed(r, e.text);
-    if (strcmp(m.kind, "text")) found[kept++] = m;
-    else if (utf8_count(t->t.s, t->t.len) > 1) texts[read++] = m;
+    if (strcmp(m.kind, "text"))
+      found[kept++] = m;
+    else if (utf8_count(t->t.s, t->t.len) > 1)
+      texts[read++] = m;
   }
   by_order(found, kept);
   if (kept > 120) kept = 120;
@@ -1976,7 +2122,11 @@ static val *marked(run *r, val *window, val *area) {
 static val *look_elements(run *r, val **a) { return marked(r, a[0], a[1]); }
 
 static val *look_overview(run *r, val **a) {
-  val *w = front(r, a[0]), *all = controls_of(r, w), *f = focus_in(all), *out = v_rec(r->a), *focused = NOTHING;
+  val *w = front(r, a[0]);
+  val *all = controls_of(r, w);
+  val *f = focus_in(all);
+  val *out = v_rec(r->a);
+  val *focused = NOTHING;
   if (f != NOTHING) {
     focused = v_rec(r->a);
     put(r, focused, "name", part(f, "name"));
@@ -1994,7 +2144,8 @@ static val *look_overview(run *r, val **a) {
 static val *look_focused(run *r, val **a) { return focus_in(controls_of(r, a[0])); }
 
 static val *look_lines(run *r, val **a) {
-  val *lines = screen_read(r, a[0]), *out = v_list(r->a);
+  val *lines = screen_read(r, a[0]);
+  val *out = v_list(r->a);
   for (size_t i = 0; lines->k == V_LIST && i < lines->l.n; i++) list_push(r->a, out, part(lines->l.v[i], "text"));
   return out;
 }
@@ -2005,7 +2156,10 @@ static val *look_page(run *r, val **a) {
   if (t->t.len) return t;
   val *lines = look_lines(r, a);
   buf b = { 0 };
-  for (size_t i = 0; i < lines->l.n; i++) { if (i) buf_chr(&b, '\n'); buf_str(&b, str(r, lines->l.v[i])); }
+  for (size_t i = 0; i < lines->l.n; i++) {
+    if (i) buf_chr(&b, '\n');
+    buf_str(&b, str(r, lines->l.v[i]));
+  }
   t = v_text(r->a, b.s ? b.s : "", b.n);
   buf_free(&b);
   return t;
@@ -2016,18 +2170,24 @@ static val *look_fields(run *r, val **a) { return able(r, controls_of(r, a[0]), 
 
 // The other lines within distance of the first with the words in it, closest first, the first seen first where two tie.
 static val *look_near(run *r, val **a) {
-  val *all = screen_read(r, a[1]), *with = lines_with(r, a[0], all), *out = v_list(r->a);
+  val *all = screen_read(r, a[1]);
+  val *with = lines_with(r, a[0], all);
+  val *out = v_list(r->a);
   if (!with->l.n) return out;
   double most = num_of(r, a[2], "distance");
   box here = box_of(r, with->l.v[0]);
-  struct { double d; val *text; } *nearby = arena_get(r->a, (all->l.n + 1) * sizeof *nearby);
+  struct {
+    double d;
+    val *text;
+  } *nearby = arena_get(r->a, (all->l.n + 1) * sizeof *nearby);
   size_t k = 0;
   for (size_t i = 0; i < all->l.n; i++) {
     double d = gap(here, box_of(r, all->l.v[i]));
     if (v_same(all->l.v[i], with->l.v[0]) || d > most * most) continue;
     size_t j = k++;
     for (; j > 0 && nearby[j - 1].d > d; j--) nearby[j] = nearby[j - 1];
-    nearby[j].d = d, nearby[j].text = part(all->l.v[i], "text");
+    nearby[j].d = d;
+    nearby[j].text = part(all->l.v[i], "text");
   }
   for (size_t i = 0; i < k; i++) list_push(r->a, out, nearby[i].text);
   return out;
@@ -2036,9 +2196,11 @@ static val *look_near(run *r, val **a) {
 static val *look_locate(run *r, val **a) { return lines_with(r, a[0], screen_read(r, a[1])); }
 
 static val *look_open_windows(run *r, val **a) {
-  val *all = win_list(r, a), *out = v_list(r->a);
+  val *all = win_list(r, a);
+  val *out = v_list(r->a);
   for (size_t i = 0; i < all->l.n; i++) {
-    val *w = all->l.v[i], *one = v_rec(r->a);
+    val *w = all->l.v[i];
+    val *one = v_rec(r->a);
     if (!*str(r, part(w, "title")) || truthy(part(w, "minimized"))) continue;
     put(r, one, "app", part(w, "app"));
     put(r, one, "title", part(w, "title"));
@@ -2047,40 +2209,7 @@ static val *look_open_windows(run *r, val **a) {
   return out;
 }
 
-////////// 10. CHAT //////////
-
-/* Questions in the person's Onsay chat here, each text, answered by typing, or {question, choices}, answered by picking
-   one, waited for in the lingo client's questions for the app (lingo_ask), which shows them as one card. A text alone is
-   one question. Their answers in order, or nothing when none came in seconds. */
-static val *chat_ask(run *r, val **a) {
-  val *questions = a[0], *ask = v_rec(r->a), *got;
-  if (questions->k == V_TEXT) { questions = v_list(r->a); list_push(r->a, questions, a[0]); }
-  if (questions->k != V_LIST || !questions->l.n) fail(r, "type", "chat.ask takes questions, each a text or {question, choices}");
-  put(r, ask, "questions", questions);
-  if (!(got = lingo_ask(r, ask, num_or(a[1], 120)))) fail(r, "phrase", "No Onsay app is open on this computer to ask the person");
-  return got;
-}
-
-// A line in the chat, {"show":"say"} or {"show":"step"}, with its text, for the app to draw.
-static val *chat_line(run *r, const char *kind, val *text) {
-  const char *t = str(r, text);
-  buf b = { 0 };
-  buf_fmt(&b, "{\"show\":\"%s\",\"text\":", kind);
-  buf_json_str(&b, t, strlen(t));
-  buf_chr(&b, '}');
-  show(&b);
-  return NOTHING;
-}
-
-static val *chat_say(run *r, val **a) { return chat_line(r, "say", a[0]); }
-static val *chat_step(run *r, val **a) { return chat_line(r, "step", a[0]); }
-
-////////// 11. LINGO_PHRASES //////////
-
-// What windows, controls and files are, written out where a call gives one.
-#define WINDOW "{id,app,title,x,y,w,h,focused,minimized}"
-#define CONTROL "{id,role,name,value,x,y,w,h,enabled,focused,can}"
-#define FILE_ "{name,path,size,folder,changed}"
+////////// 10. BASE_CALLS //////////
 
 void native_calls(void);   // native.c
 

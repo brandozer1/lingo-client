@@ -1,6 +1,6 @@
 // platform_win.c - platform.h for Windows, on WinHTTP, so proxies and certificates work as for any Windows program.
 //
-// 1. Text      UTF-8 to and from UTF-16, shared with Windows lingos
+// 1. Text      UTF-8 to and from UTF-16, shared with windows.c
 // 2. Time and threads
 // 3. Links     connect, send, receive, close and free
 // 4. Files and device, and loading a native lingo
@@ -47,7 +47,10 @@ double pl_now(void) {
 
 void pl_sleep(double seconds) { Sleep(seconds > 0 ? (DWORD)(seconds * 1000) : 0); }
 
-typedef struct { void (*fn)(void *); void *arg; } start;
+typedef struct {
+  void (*fn)(void *);
+  void *arg;
+} start;
 
 static DWORD WINAPI begin(LPVOID p) {
   start s = *(start *)p;
@@ -63,7 +66,10 @@ void pl_thread(void (*fn)(void *), void *arg) {
   if (h) CloseHandle(h);
 }
 
-struct pl_gate { CRITICAL_SECTION lock; CONDITION_VARIABLE wake; };
+struct pl_gate {
+  CRITICAL_SECTION lock;
+  CONDITION_VARIABLE wake;
+};
 
 pl_gate *pl_gate_new(void) {
   pl_gate *g = malloc(sizeof *g);
@@ -85,17 +91,20 @@ struct pl_link {
 };
 
 static void why(buf *error, const char *what, DWORD code) {
-  const char *plain = code == ERROR_WINHTTP_CANNOT_CONNECT ? "nothing answered at that address"
-                    : code == ERROR_WINHTTP_NAME_NOT_RESOLVED ? "that server name wasn't found"
-                    : code == ERROR_WINHTTP_TIMEOUT ? "it took too long"
-                    : code == ERROR_WINHTTP_SECURE_FAILURE ? "its certificate wasn't trusted"
-                    : code == ERROR_WINHTTP_UNRECOGNIZED_SCHEME || code == ERROR_WINHTTP_INVALID_URL ? "that isn't a whole web address"
-                    : "Windows error";
+  const char *plain = "Windows error";
+  if (code == ERROR_WINHTTP_CANNOT_CONNECT) plain = "nothing answered at that address";
+  if (code == ERROR_WINHTTP_NAME_NOT_RESOLVED) plain = "that server name wasn't found";
+  if (code == ERROR_WINHTTP_TIMEOUT) plain = "it took too long";
+  if (code == ERROR_WINHTTP_SECURE_FAILURE) plain = "its certificate wasn't trusted";
+  if (code == ERROR_WINHTTP_UNRECOGNIZED_SCHEME || code == ERROR_WINHTTP_INVALID_URL) {
+    plain = "that isn't a whole web address";
+  }
   buf_fmt(error, "%s: %s (%lu)", what, plain, (unsigned long)code);
 }
 
 // The address cracked, and a session and connection to its host. 0 with the step that failed and why.
-static DWORD open_url(const wchar_t *w, URL_COMPONENTS *parts, HINTERNET *session, HINTERNET *connection, const char **step) {
+static DWORD open_url(
+    const wchar_t *w, URL_COMPONENTS *parts, HINTERNET *session, HINTERNET *connection, const char **step) {
   memset(parts, 0, sizeof *parts);
   parts->dwStructSize = sizeof *parts;
   parts->dwHostNameLength = parts->dwUrlPathLength = parts->dwExtraInfoLength = (DWORD)-1;
@@ -103,7 +112,8 @@ static DWORD open_url(const wchar_t *w, URL_COMPONENTS *parts, HINTERNET *sessio
   wchar_t host[256] = { 0 };
   wcsncpy(host, parts->lpszHostName, parts->dwHostNameLength < 255 ? parts->dwHostNameLength : 255);
   *step = "Connecting";
-  *session = WinHttpOpen(L"onsay-core", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+  *session = WinHttpOpen(
+      L"onsay-core", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
   if (!*session) return GetLastError();
   WinHttpSetTimeouts(*session, 10000, 10000, 30000, 30000);
   *connection = WinHttpConnect(*session, host, parts->nPort, 0);
@@ -113,9 +123,14 @@ static DWORD open_url(const wchar_t *w, URL_COMPONENTS *parts, HINTERNET *sessio
 pl_link *pl_connect(const char *url, buf *error) {
   // WinHTTP reads the address as http or https, then upgrades the connection to a WebSocket.
   buf http = { 0 };
-  if (!strncmp(url, "wss://", 6)) { buf_str(&http, "https://"); buf_str(&http, url + 6); }
-  else if (!strncmp(url, "ws://", 5)) { buf_str(&http, "http://"); buf_str(&http, url + 5); }
-  else buf_str(&http, url);
+  if (!strncmp(url, "wss://", 6)) {
+    buf_str(&http, "https://");
+    buf_str(&http, url + 6);
+  } else if (!strncmp(url, "ws://", 5)) {
+    buf_str(&http, "http://");
+    buf_str(&http, url + 5);
+  } else
+    buf_str(&http, url);
   wchar_t *w = win_wide(http.s);
   buf_free(&http);
 
@@ -128,31 +143,50 @@ pl_link *pl_connect(const char *url, buf *error) {
   if (failed) goto done;
   // The path runs to the end of the address, so its query, like ?room=1, stays on it.
   request = WinHttpOpenRequest(l->connection, L"GET", parts.dwUrlPathLength ? parts.lpszUrlPath : L"/", NULL,
-                               WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, parts.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0);
+      WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
+      parts.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0);
   if (!request || !WinHttpSetOption(request, WINHTTP_OPTION_UPGRADE_TO_WEB_SOCKET, NULL, 0) ||
       !WinHttpSendRequest(request, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
-      !WinHttpReceiveResponse(request, NULL)) { failed = GetLastError(); goto done; }
+      !WinHttpReceiveResponse(request, NULL)) {
+    failed = GetLastError();
+    goto done;
+  }
 
-  DWORD status = 0, size = sizeof status;
-  WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &status, &size, WINHTTP_NO_HEADER_INDEX);
-  if (status != 101) { buf_fmt(error, "The server answered %lu instead of opening a connection", (unsigned long)status); goto done; }
+  DWORD status = 0;
+  DWORD size = sizeof status;
+  WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX,
+      &status, &size, WINHTTP_NO_HEADER_INDEX);
+  if (status != 101) {
+    buf_fmt(error, "The server answered %lu instead of opening a connection", (unsigned long)status);
+    goto done;
+  }
   l->socket = WinHttpWebSocketCompleteUpgrade(request, 0);
-  if (!l->socket) { failed = GetLastError(); step = "Opening the connection"; goto done; }
+  if (!l->socket) {
+    failed = GetLastError();
+    step = "Opening the connection";
+    goto done;
+  }
   DWORD forever = 0;
-  WinHttpSetOption(l->socket, WINHTTP_OPTION_RECEIVE_TIMEOUT, &forever, sizeof forever);   // the heartbeat watches it instead
+  WinHttpSetOption(
+      l->socket, WINHTTP_OPTION_RECEIVE_TIMEOUT, &forever, sizeof forever);   // the heartbeat watches it instead
 
 done:
   if (failed) why(error, step, failed);
   if (request) WinHttpCloseHandle(request);
   free(w);
-  if (!l->socket) { pl_free(l); return NULL; }
+  if (!l->socket) {
+    pl_free(l);
+    return NULL;
+  }
   return l;
 }
 
 int pl_send(pl_link *l, const char *text, size_t n) {
   if (l->closed) return 0;
   EnterCriticalSection(&l->sending);
-  DWORD e = l->closed ? 1 : WinHttpWebSocketSend(l->socket, WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE, (PVOID)text, (DWORD)n);
+  DWORD e = l->closed
+      ? 1
+      : WinHttpWebSocketSend(l->socket, WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE, (PVOID)text, (DWORD)n);
   LeaveCriticalSection(&l->sending);
   return e == 0;
 }
@@ -166,7 +200,8 @@ int pl_receive(pl_link *l, buf *out) {
     if (WinHttpWebSocketReceive(l->socket, chunk, sizeof chunk, &got, &type)) return 0;
     if (type == WINHTTP_WEB_SOCKET_CLOSE_BUFFER_TYPE) return 0;
     buf_add(out, chunk, got);
-    if (type == WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE || type == WINHTTP_WEB_SOCKET_BINARY_MESSAGE_BUFFER_TYPE) return 1;
+    if (type == WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE || type == WINHTTP_WEB_SOCKET_BINARY_MESSAGE_BUFFER_TYPE)
+      return 1;
   }
 }
 
@@ -202,7 +237,8 @@ int pl_read(const char *path, buf *out) {
 int pl_write(const char *path, const char *data, size_t n) {
   buf temp = { 0 };
   buf_fmt(&temp, "%s.new", path);
-  wchar_t *wt = win_wide(temp.s), *w = win_wide(path);
+  wchar_t *wt = win_wide(temp.s);
+  wchar_t *w = win_wide(path);
   buf_free(&temp);
   FILE *f = _wfopen(wt, L"wb");
   int ok = f && fwrite(data, 1, n, f) == n;
@@ -231,9 +267,12 @@ int pl_delete(const char *path) {
 }
 
 void pl_whole(const char *path, buf *out) {
-  wchar_t *w = win_wide(path), full[MAX_PATH * 4];
-  if (GetFullPathNameW(w, sizeof full / sizeof *full, full, NULL)) win_narrow(out, full, -1);
-  else buf_str(out, path);
+  wchar_t *w = win_wide(path);
+  wchar_t full[MAX_PATH * 4];
+  if (GetFullPathNameW(w, sizeof full / sizeof *full, full, NULL))
+    win_narrow(out, full, -1);
+  else
+    buf_str(out, path);
   free(w);
 }
 
@@ -252,7 +291,8 @@ int pl_folder(const char *path) {
   return ok;
 }
 
-void pl_list(const char *folder, void (*each)(const char *name, int folder, double size, double changed, void *arg), void *arg) {
+void pl_list(
+    const char *folder, void (*each)(const char *name, int folder, double size, double changed, void *arg), void *arg) {
   buf pattern = { 0 };
   buf_fmt(&pattern, "%s/*", folder);
   wchar_t *w = win_wide(pattern.s);
@@ -265,9 +305,11 @@ void pl_list(const char *folder, void (*each)(const char *name, int folder, doub
     if (!wcscmp(found.cFileName, L".") || !wcscmp(found.cFileName, L"..")) continue;
     buf name = { 0 };
     win_narrow(&name, found.cFileName, -1);
-    unsigned long long t = ((unsigned long long)found.ftLastWriteTime.dwHighDateTime << 32) | found.ftLastWriteTime.dwLowDateTime;
+    unsigned long long t = ((unsigned long long)found.ftLastWriteTime.dwHighDateTime << 32) |
+        found.ftLastWriteTime.dwLowDateTime;
     double size = (double)(((unsigned long long)found.nFileSizeHigh << 32) | found.nFileSizeLow);
-    each(name.s, (found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0, size, (double)(t - 116444736000000000ULL) / 1e7, arg);
+    each(name.s, (found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0, size,
+        (double)(t - 116444736000000000ULL) / 1e7, arg);
     buf_free(&name);
   } while (FindNextFileW(h, &found));
   FindClose(h);
@@ -275,7 +317,8 @@ void pl_list(const char *folder, void (*each)(const char *name, int folder, doub
 
 // Sealed by DPAPI to this Windows user: the file holds only what Windows can open again, for that user on this computer.
 int pl_seal(const char *path, const void *data, size_t n) {
-  DATA_BLOB in = { (DWORD)n, (BYTE *)data }, out = { 0 };
+  DATA_BLOB in = { (DWORD)n, (BYTE *)data };
+  DATA_BLOB out = { 0 };
   if (!CryptProtectData(&in, L"lingo client key", NULL, NULL, NULL, CRYPTPROTECT_UI_FORBIDDEN, &out)) return 0;
   int ok = pl_write(path, (const char *)out.pbData, out.cbData);
   LocalFree(out.pbData);
@@ -284,9 +327,11 @@ int pl_seal(const char *path, const void *data, size_t n) {
 
 int pl_unseal(const char *path, buf *out) {
   buf sealed = { 0 };
-  DATA_BLOB in = { 0 }, open = { 0 };
+  DATA_BLOB in = { 0 };
+  DATA_BLOB open = { 0 };
   int ok = pl_read(path, &sealed);
-  in.cbData = (DWORD)sealed.n, in.pbData = (BYTE *)sealed.s;
+  in.cbData = (DWORD)sealed.n;
+  in.pbData = (BYTE *)sealed.s;
   ok = ok && CryptUnprotectData(&in, NULL, NULL, NULL, NULL, CRYPTPROTECT_UI_FORBIDDEN, &open);
   if (ok) {
     buf_add(out, (const char *)open.pbData, open.cbData);
@@ -315,19 +360,24 @@ void pl_context(buf *out) {
   TIME_ZONE_INFORMATION z;
   GetLocalTime(&t);
   DWORD kind = GetTimeZoneInformation(&z);
-  long offset = -(z.Bias + (kind == TIME_ZONE_ID_DAYLIGHT ? z.DaylightBias : z.StandardBias)), at = labs(offset);
-  buf_fmt(out, "{\"os\":\"windows\",\"time\":\"%04d-%02d-%02dT%02d:%02d:%02d%c%02ld:%02ld\"", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond,
-    offset < 0 ? '-' : '+', at / 60, at % 60);
+  long offset = -(z.Bias + (kind == TIME_ZONE_ID_DAYLIGHT ? z.DaylightBias : z.StandardBias));
+  long at = labs(offset);
+  buf_fmt(out, "{\"os\":\"windows\",\"time\":\"%04d-%02d-%02dT%02d:%02d:%02d%c%02ld:%02ld\"", t.wYear, t.wMonth, t.wDay,
+      t.wHour, t.wMinute, t.wSecond, offset < 0 ? '-' : '+', at / 60, at % 60);
   context_field(out, "zone", kind == TIME_ZONE_ID_DAYLIGHT ? z.DaylightName : z.StandardName);
-  wchar_t language[LOCALE_NAME_MAX_LENGTH] = L"", app[MAX_PATH] = L"", title[512] = L"";
+  wchar_t language[LOCALE_NAME_MAX_LENGTH] = L"";
+  wchar_t app[MAX_PATH] = L"";
+  wchar_t title[512] = L"";
   GetUserDefaultLocaleName(language, LOCALE_NAME_MAX_LENGTH);
   context_field(out, "language", language);
   HWND h = GetForegroundWindow();
-  DWORD pid = 0, n = MAX_PATH;
+  DWORD pid = 0;
+  DWORD n = MAX_PATH;
   if (h) GetWindowThreadProcessId(h, &pid);
   HANDLE p = pid ? OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid) : NULL;
   if (p && QueryFullProcessImageNameW(p, 0, app, &n)) {
-    wchar_t *slash = wcsrchr(app, L'\\'), *dot;
+    wchar_t *slash = wcsrchr(app, L'\\');
+    wchar_t *dot;
     if (slash) memmove(app, slash + 1, (wcslen(slash + 1) + 1) * sizeof *app);
     if ((dot = wcsrchr(app, L'.'))) *dot = 0;
   }
@@ -347,7 +397,8 @@ lingo_entry pl_library(const char *path, buf *error) {
     wchar_t why[256] = L"";
     DWORD code = GetLastError();
     FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, code, 0, why, 256, NULL);
-    for (size_t n = wcslen(why); n && (why[n - 1] == L'\r' || why[n - 1] == L'\n' || why[n - 1] == L'.'); n--) why[n - 1] = 0;
+    for (size_t n = wcslen(why); n && (why[n - 1] == L'\r' || why[n - 1] == L'\n' || why[n - 1] == L'.'); n--)
+      why[n - 1] = 0;
     buf_fmt(error, "Windows can't load it (%lu): ", code);
     win_narrow(error, why, -1);
     return NULL;
@@ -363,7 +414,10 @@ lingo_entry pl_library(const char *path, buf *error) {
 
 // WinHTTP looks at its own timeouts only every 4 seconds or so, so a 1 second one ends after 4. A timer closes the
 // request when its time is up instead, which ends whatever call it is waiting in. closed: whoever closes it first.
-typedef struct { HINTERNET q; volatile LONG closed; } watch;
+typedef struct {
+  HINTERNET q;
+  volatile LONG closed;
+} watch;
 
 static void CALLBACK too_long(PVOID arg, BOOLEAN fired) {
   watch *w = arg;
@@ -371,47 +425,73 @@ static void CALLBACK too_long(PVOID arg, BOOLEAN fired) {
   if (!InterlockedExchange(&w->closed, 1)) WinHttpCloseHandle(w->q);
 }
 
-val *pl_http(arena *a, const char *method, const char *url, val *headers, const char *body, size_t n, double seconds, buf *error) {
-  buf head = { 0 }, text = { 0 }, raw = { 0 };
+val *pl_http(arena *a, const char *method, const char *url, val *headers, const char *body, size_t n, double seconds,
+    buf *error) {
+  buf head = { 0 };
+  buf text = { 0 };
+  buf raw = { 0 };
   for (size_t i = 0; i < headers->r.n; i++) buf_fmt(&head, "%s: %s\r\n", headers->r.key[i], headers->r.v[i]->t.s);
-  DWORD ms = (DWORD)(seconds * 1000), status = 0, size = sizeof status, failed = 0;
-  wchar_t *w = win_wide(url), *mw = win_wide(method), *hw = head.n ? win_wide(head.s) : NULL;
+  DWORD ms = (DWORD)(seconds * 1000);
+  DWORD status = 0;
+  DWORD size = sizeof status;
+  DWORD failed = 0;
+  wchar_t *w = win_wide(url);
+  wchar_t *mw = win_wide(method);
+  wchar_t *hw = head.n ? win_wide(head.s) : NULL;
   URL_COMPONENTS parts;
-  HINTERNET s = NULL, c = NULL, q = NULL;
+  HINTERNET s = NULL;
+  HINTERNET c = NULL;
+  HINTERNET q = NULL;
   HANDLE timer = NULL;
   watch late = { NULL, 0 };
   const char *step = "";
   if (!(failed = open_url(w, &parts, &s, &c, &step))) {
-    q = late.q = WinHttpOpenRequest(c, mw, parts.dwUrlPathLength ? parts.lpszUrlPath : L"/", NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
-                                    parts.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0);
+    q = late.q = WinHttpOpenRequest(c, mw, parts.dwUrlPathLength ? parts.lpszUrlPath : L"/", NULL, WINHTTP_NO_REFERER,
+        WINHTTP_DEFAULT_ACCEPT_TYPES, parts.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0);
     if (q) CreateTimerQueueTimer(&timer, NULL, too_long, &late, ms, 0, WT_EXECUTEONLYONCE);
-    if (!q || !WinHttpSetTimeouts(q, (int)ms, (int)ms, (int)ms, (int)ms) || !WinHttpSetOption(q, WINHTTP_OPTION_RECEIVE_RESPONSE_TIMEOUT, &ms, sizeof ms) ||
-        !WinHttpSendRequest(q, hw ? hw : WINHTTP_NO_ADDITIONAL_HEADERS, (DWORD)-1L, (LPVOID)body, (DWORD)n, (DWORD)n, 0) || !WinHttpReceiveResponse(q, NULL)) failed = GetLastError();
+    if (!q || !WinHttpSetTimeouts(q, (int)ms, (int)ms, (int)ms, (int)ms) ||
+        !WinHttpSetOption(q, WINHTTP_OPTION_RECEIVE_RESPONSE_TIMEOUT, &ms, sizeof ms) ||
+        !WinHttpSendRequest(
+            q, hw ? hw : WINHTTP_NO_ADDITIONAL_HEADERS, (DWORD)-1L, (LPVOID)body, (DWORD)n, (DWORD)n, 0) ||
+        !WinHttpReceiveResponse(q, NULL))
+      failed = GetLastError();
   }
   if (q && !failed) {
-    WinHttpQueryHeaders(q, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &status, &size, WINHTTP_NO_HEADER_INDEX);
+    WinHttpQueryHeaders(q, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &status,
+        &size, WINHTTP_NO_HEADER_INDEX);
     size = 0;
-    WinHttpQueryHeaders(q, WINHTTP_QUERY_RAW_HEADERS_CRLF, WINHTTP_HEADER_NAME_BY_INDEX, NULL, &size, WINHTTP_NO_HEADER_INDEX);
+    WinHttpQueryHeaders(
+        q, WINHTTP_QUERY_RAW_HEADERS_CRLF, WINHTTP_HEADER_NAME_BY_INDEX, NULL, &size, WINHTTP_NO_HEADER_INDEX);
     wchar_t *lines = calloc(size / sizeof *lines + 1, sizeof *lines);
-    if (WinHttpQueryHeaders(q, WINHTTP_QUERY_RAW_HEADERS_CRLF, WINHTTP_HEADER_NAME_BY_INDEX, lines, &size, WINHTTP_NO_HEADER_INDEX)) win_narrow(&raw, lines, -1);
+    if (WinHttpQueryHeaders(
+            q, WINHTTP_QUERY_RAW_HEADERS_CRLF, WINHTTP_HEADER_NAME_BY_INDEX, lines, &size, WINHTTP_NO_HEADER_INDEX))
+      win_narrow(&raw, lines, -1);
     free(lines);
     char chunk[16384];
     for (DWORD got = 1; got && text.n <= ROOM;) {
-      if (!WinHttpReadData(q, chunk, sizeof chunk, &got)) { failed = GetLastError(); break; }
+      if (!WinHttpReadData(q, chunk, sizeof chunk, &got)) {
+        failed = GetLastError();
+        break;
+      }
       buf_add(&text, chunk, got);
     }
   }
-  if (timer) DeleteTimerQueueTimer(NULL, timer, INVALID_HANDLE_VALUE);   // waits for it, if it is closing the request now
-  if (late.closed) failed = ERROR_WINHTTP_TIMEOUT;
-  else if (q) WinHttpCloseHandle(q);
+  if (timer)
+    DeleteTimerQueueTimer(NULL, timer, INVALID_HANDLE_VALUE);   // waits for it, if it is closing the request now
+  if (late.closed)
+    failed = ERROR_WINHTTP_TIMEOUT;
+  else if (q)
+    WinHttpCloseHandle(q);
   val *out = NULL;
   if (failed) {
     buf where = { 0 };
     buf_fmt(&where, "%s couldn't be reached", url);
     why(error, where.s, failed);
     buf_free(&where);
-  } else if (text.n > ROOM) buf_fmt(error, "%s answered with more than 4 MB", url);
-  else if (!utf8_ok(text.s ? text.s : "", text.n)) buf_fmt(error, "%s answered with something that isn't text, like a picture or a file", url);
+  } else if (text.n > ROOM)
+    buf_fmt(error, "%s answered with more than 4 MB", url);
+  else if (!utf8_ok(text.s ? text.s : "", text.n))
+    buf_fmt(error, "%s answered with something that isn't text, like a picture or a file", url);
   else {
     out = v_rec(a);
     rec_set(a, out, "status", v_num(a, status));
@@ -420,14 +500,20 @@ val *pl_http(arena *a, const char *method, const char *url, val *headers, const 
   }
   if (c) WinHttpCloseHandle(c);
   if (s) WinHttpCloseHandle(s);
-  free(w), free(mw), free(hw);
-  buf_free(&head), buf_free(&text), buf_free(&raw);
+  free(w);
+  free(mw);
+  free(hw);
+  buf_free(&head);
+  buf_free(&text);
+  buf_free(&raw);
   return out;
 }
 
 ////////// 6. PORT //////////
 
-struct pl_socket { SOCKET s; };
+struct pl_socket {
+  SOCKET s;
+};
 
 // Everywhere: IPv6 and IPv4 on one socket, or IPv4 alone on a computer without IPv6. Else 127.0.0.1 alone, which
 // Windows' firewall never asks about.
@@ -435,19 +521,28 @@ pl_socket *pl_listen(int port, int everywhere, buf *error) {
   WSADATA w;
   struct sockaddr_in four = { 0 };
   struct sockaddr_in6 six = { 0 };   // its address all zeros: every one, IPv4 too once V6ONLY is off
-  DWORD no = 0, yes = 1;
-  four.sin_family = AF_INET, four.sin_port = htons((u_short)port), four.sin_addr.s_addr = htonl(everywhere ? INADDR_ANY : INADDR_LOOPBACK);
-  six.sin6_family = AF_INET6, six.sin6_port = htons((u_short)port);
-  SOCKET s = WSAStartup(MAKEWORD(2, 2), &w) || !everywhere ? INVALID_SOCKET : socket(AF_INET6, SOCK_STREAM, IPPROTO_TCP);
+  DWORD no = 0;
+  DWORD yes = 1;
+  four.sin_family = AF_INET;
+  four.sin_port = htons((u_short)port);
+  four.sin_addr.s_addr = htonl(everywhere ? INADDR_ANY : INADDR_LOOPBACK);
+  six.sin6_family = AF_INET6;
+  six.sin6_port = htons((u_short)port);
+  SOCKET s = WSAStartup(MAKEWORD(2, 2), &w) || !everywhere ? INVALID_SOCKET
+                                                           : socket(AF_INET6, SOCK_STREAM, IPPROTO_TCP);
   int v6 = s != INVALID_SOCKET;
   if (!v6) s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
   if (s != INVALID_SOCKET) {
-    setsockopt(s, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (char *)&yes, sizeof yes);   // so no other program can listen on it too
+    setsockopt(
+        s, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (char *)&yes, sizeof yes);   // so no other program can listen on it too
     if (v6) setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY, (char *)&no, sizeof no);
   }
-  if (s == INVALID_SOCKET || bind(s, v6 ? (struct sockaddr *)&six : (struct sockaddr *)&four, v6 ? sizeof six : sizeof four) || listen(s, SOMAXCONN)) {
+  if (s == INVALID_SOCKET ||
+      bind(s, v6 ? (struct sockaddr *)&six : (struct sockaddr *)&four, v6 ? sizeof six : sizeof four) ||
+      listen(s, SOMAXCONN)) {
     int code = WSAGetLastError();
-    buf_fmt(error, "Port %d couldn't be opened: %s (%d)", port, code == WSAEADDRINUSE || code == WSAEACCES ? "another program is using it" : "Windows error", code);
+    buf_fmt(error, "Port %d couldn't be opened: %s (%d)", port,
+        code == WSAEADDRINUSE || code == WSAEACCES ? "another program is using it" : "Windows error", code);
     if (s != INVALID_SOCKET) closesocket(s);
     return NULL;
   }
@@ -471,7 +566,10 @@ pl_socket *pl_accept(pl_socket *port, buf *from) {
   setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, (char *)&ms, sizeof ms);
   setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, (char *)&ms, sizeof ms);
   char text[64] = "";
-  inet_ntop(at.ss_family, at.ss_family == AF_INET ? (void *)&((struct sockaddr_in *)&at)->sin_addr : (void *)&((struct sockaddr_in6 *)&at)->sin6_addr, text, sizeof text);
+  inet_ntop(at.ss_family,
+      at.ss_family == AF_INET ? (void *)&((struct sockaddr_in *)&at)->sin_addr
+                              : (void *)&((struct sockaddr_in6 *)&at)->sin6_addr,
+      text, sizeof text);
   buf_str(from, strncmp(text, "::ffff:", 7) || !strchr(text, '.') ? text : text + 7);
   pl_socket *s = malloc(sizeof *s);
   s->s = c;
@@ -484,7 +582,8 @@ int pl_take(pl_socket *c, char *to, size_t n) {
 }
 
 int pl_give(pl_socket *c, const char *data, size_t n) {
-  for (int sent; n; data += sent, n -= (size_t)sent) if ((sent = send(c->s, data, (int)n, 0)) <= 0) return 0;
+  for (int sent; n; data += sent, n -= (size_t)sent)
+    if ((sent = send(c->s, data, (int)n, 0)) <= 0) return 0;
   return 1;
 }
 

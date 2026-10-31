@@ -1,7 +1,7 @@
 // calls_every.h - the base calls of every computer that can run this program: files, commands and chat.
-// One call, one line: CALL(group, what it needs, its words, its function). A file that includes this says what CALL does, and
-// WINDOW, CONTROL and FILE_ are what those things are, written out where a call gives one. Every computer has every call
-// under the same name, so a lingo written on one works on any other, and a call a device can't do says so when called.
+// One call, one line: CALL(group, what it needs, its words, its function). A file that includes this says what CALL does,
+// and calls_shared.c what WINDOW, CONTROL and FILE_ are. Every computer has every call under the same name, so a lingo
+// written on one works on any other, and a call a device can't do says so when called.
 CALL("files", "files.read", "read(path) -> text: the text of a file on this computer", fs_read)
 CALL("files", "files.write", "write(path, text): writes a whole text file, replacing what is there", fs_write)
 CALL("files", "files.write", "add_to(path, text): adds text to the end of a file", fs_append)
@@ -14,9 +14,9 @@ CALL("files", "files.read", "search(folder, words, pattern=\"*\", most=100) -> [
      "text files of a folder and every folder inside, or those whose names match pattern", fs_search)
 CALL("files", "files.write", "copy(from, to): copies a file or folder, into to if it is a folder", fs_copy)
 CALL("files", "files.write", "move(from, to): moves or renames a file or folder, into to if it is a folder", fs_move)
-CALL("files", "files.write", "delete(path): deletes a file or folder, to the Recycle Bin", fs_delete)
+CALL("files", "files.write", "delete(path): deletes a file or folder, to the Recycle Bin or the trash", fs_delete)
 CALL("files", "files.write", "make_folder(path): makes a new folder", fs_folder)
-CALL("commands", "run", "run(command) -> {code,out}: runs any command or script in Windows PowerShell on this computer, and gives its exit code and output. For anything no other function does", shell_run)
+CALL("commands", "run", "run(command) -> {code,out}: runs any command or script in this computer's shell, Windows PowerShell on Windows and sh elsewhere, and gives its exit code and output. For anything no other function does", shell_run)
 CALL("commands", "none", "running() -> [{pid,name,memory}]: the programs and processes running now, memory in MB", shell_processes)
 CALL("commands", "run", "stop(pid): ends a running program or process", shell_stop)
 CALL("commands", "run", "start(command) -> {id}: starts a command in the background and goes on, for one that takes long or keeps running, like a server. commands.output gives what it has written", shell_start)

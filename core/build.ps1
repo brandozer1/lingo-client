@@ -14,7 +14,7 @@ if (-not $zig) { Write-Error "zig wasn't found. Get it from ziglang.org/download
 $here = $PSScriptRoot
 $lingos = "$here/../lingos"
 Remove-Item -Recurse -Force "$here/bin/lingos", "$here/bin/test/lingos", "$here/obj" -ErrorAction SilentlyContinue
-New-Item -ItemType Directory -Force "$here/bin/test", "$here/bin/lingos", "$here/obj/windows", "$here/obj/linux" | Out-Null
+New-Item -ItemType Directory -Force "$here/bin/test", "$here/bin/lingos", "$here/obj" | Out-Null
 function src($names) { $names | ForEach-Object { "$here/src/$_.c" } }
 function build($what) { & $zig cc @flags @what | Out-Host; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }
 
@@ -32,20 +32,15 @@ function ctext($path) {
 $rows = foreach ($file in Get-ChildItem "$lingos/standard" -Filter *.ls) { "  { `"$($file.BaseName)`", `"$(ctext $file.FullName)`" }," }
 [IO.File]::WriteAllLines("$here/obj/standard.h", @("// standard.h - made by build.ps1: the standard functions.", "static const standard STANDARD[] = {") + $rows + "};")
 
-# The lingos built into the lingo client for one platform, as obj/<platform>/builtins.h for core.c's BUILTINS: each one's
-# name, its openapi.json as C text, and <name>_lingo, the function in its C that adds its phrases.
-function builtins($platform, $names) {
-  $lines = @("// builtins.h - made by build.ps1: the lingos built into the lingo client for $platform.")
-  foreach ($name in $names) { $lines += "void ${name}_lingo(void);" }
-  $lines += "static const builtin BUILTINS[] = {"
-  foreach ($name in $names) {
-    $lines += "  { `"$name`", `"$(ctext "$lingos/$name/openapi.json")`", ${name}_lingo },"
-  }
-  $lines += "};"
-  Set-Content "$here/obj/$platform/builtins.h" $lines
-}
-builtins "windows" @("onsay")
-builtins "linux" @("onsay")
+# The lingos built into the lingo client, as obj/builtins.h for core.c's BUILTINS: each one's name, its openapi.json as C
+# text, and <name>_lingo, the function in its C that adds its phrases.
+$names = @("onsay")
+$lines = @("// builtins.h - made by build.ps1: the lingos built into the lingo client.")
+foreach ($name in $names) { $lines += "void ${name}_lingo(void);" }
+$lines += "static const builtin BUILTINS[] = {"
+foreach ($name in $names) { $lines += "  { `"$name`", `"$(ctext "$lingos/$name/openapi.json")`", ${name}_lingo }," }
+$lines += "};"
+Set-Content "$here/obj/builtins.h" $lines
 
 $flags = "-std=c11", "-O2", "-Wall", "-Wextra", "-Wno-unused-parameter", "-I$here/obj", "-I$here/src"
 $both = "value", "run", "phrase", "std", "compile", "zip", "puff", "sign", "monocypher", "monocypher-ed25519", "core", "host"
@@ -57,13 +52,13 @@ $ffi = "$lingos/native/libffi"
 build ($win + "-DX86_WIN64", "-I$ffi/include", "-I$ffi/x86", "-c", "$ffi/x86/win64.S", "-o", "$here/obj/win64.o")
 $windows = (src ($both + "platform_win")) + "$lingos/onsay/onsay.c", "$lingos/windows/windows.c", "$lingos/native/native.c", "-I$lingos/onsay"
 $windows += "$ffi/prep_cif.c", "$ffi/types.c", "$ffi/x86/ffiw64.c", "$here/obj/win64.o"
-$windows += "-I$here/obj/windows", "-DLINGO_CORE", "-DFFI_BUILDING", "-DX86_WIN64", "-I$ffi/include", "-I$ffi/x86"
+$windows += "-DLINGO_CORE", "-DFFI_BUILDING", "-DX86_WIN64", "-I$ffi/include", "-I$ffi/x86"
 $windows += "-lwinhttp", "-lws2_32", "-luser32", "-lbcrypt", "-lcrypt32", "-lole32", "-loleaut32", "-lshell32", "-lgdi32"
 build ($win + $windows + "-o", "$here/bin/onsay-core.exe", "-Wl,--out-implib,$here/bin/onsay-core.lib")
 build ($win + $windows + "-DTEST", "-o", "$here/bin/test/onsay-core.exe")
 
 # Linux. -rdynamic shares the core's words with a native lingo's library, as onsay-core.lib does on Windows.
-$linux = (src ($both + "platform_linux")) + "$lingos/onsay/onsay.c", "$lingos/linux/linux.c", "-I$lingos/onsay", "-I$here/obj/linux", "-DLINGO_CORE"
+$linux = (src ($both + "platform_linux")) + "$lingos/onsay/onsay.c", "$lingos/linux/linux.c", "-I$lingos/onsay", "-DLINGO_CORE"
 foreach ($arch in @{ x64 = "x86_64"; arm64 = "aarch64" }.GetEnumerator()) {
   New-Item -ItemType Directory -Force "$here/bin/linux-$($arch.Key)" | Out-Null
   $target = "-target", "$($arch.Value)-linux-gnu.2.28", "-D_POSIX_C_SOURCE=200809L"

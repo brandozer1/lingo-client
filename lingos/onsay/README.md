@@ -27,7 +27,7 @@ the wire*.
 
   | Request | Answer |
   |---------|--------|
-  | `POST /onsay` `{prompt, session, mode}` | `{session, text, steps}` or `{session, questions, steps}`, the reply and every step it took. With no session, a new one. `mode` is `run`, the default, or `decision`, where the person picks every call |
+  | `POST /onsay` `{prompt, session, mode}` | `{session, text, steps}` or `{session, questions, steps}`, the reply and every step it took. With no session, a new one. `mode` is `run`, the default, or `list`, where the person picks every call |
   | `GET /onsay/sessions` | `[{session, prompt}]`, the newest first, each named by its first prompt |
   | `GET /onsay/sessions/<session>` | `{session, turns}`, each turn `{prompt, text}` or `{prompt, questions}`, and `messages`, what its loop added to the log |
   | `GET /onsay/sessions/<session>/live` | `{running, steps, questions}`: while a prompt of it runs, its newest 100 steps in plain words, each `{text, depth}`, and the questions it waits on the person for, as a prompt's answer has them, or `null` |
@@ -86,7 +86,9 @@ onsay-core core.json call onsay.sign_out         this computer forgets its sign 
 
 | File | Job |
 |------|-----|
-| `onsay.c` | the library: the connection, the checks, the policy, `/onsay`, `sent.log` and signing in, against `../../core/src/lingo.h` and `platform.h` |
+| `onsay.c` | the connection, the checks, the policy, `/onsay`, `sent.log` and signing in, against `../../core/src/lingo.h` and `platform.h` |
+| `calls_every.h`, `calls_device.h` | the tables of base calls: those every computer can run, and those that need a screen |
+| `calls_shared.c` | the base calls that are the same plain C everywhere, included by `../windows/windows.c` and `../linux/linux.c` |
 | `openapi.json` | what it is, and its two settings |
 
 `../../core/build.ps1` builds it into the lingo client for every platform, and into the test build,

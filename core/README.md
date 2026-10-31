@@ -143,8 +143,8 @@ onsay-core settings.json <verb> ...           does one thing and prints its answ
 | `manifest <lingo>` | prints a lingo's whole OpenAPI manifest, as the catalog has it, or why it can't load |
 | `call <lingo.function> [values...]` | runs a function of a lingo, or a native lingo's phrase, as this computer, its values in order, each JSON or text, and prints its value: `call memo.recall milk`, `call onsay.sign_in` |
 
-The windows lingo also writes a line of JSON on stdout for each thing the app draws: Onsay's pointer gliding and
-clicking, a ring around something on screen, and his panel (`show` in `../lingos/windows/windows.c`).
+The base calls also write a line of JSON on stdout for each thing an app draws: Onsay's pointer gliding and clicking, a
+ring around something on screen, his panel, and lines in the chat (`show` in `../lingos/windows/windows.c`).
 
 ## Control routes
 
@@ -155,7 +155,7 @@ answers what the command line prints, or `{error}` with a 400.
 | Route | Values | Answer |
 |-------|--------|--------|
 | `/.lingo/start`, `/.lingo/stop` | `lingo` | `{lingo, running}` |
-| `/.lingo/asks` | | the questions waiting, each `{id, lingo, need, path, caller}`, whether a lingo may, or `{id, lingo, questions, caller}`, a native lingo's questions for the person, like the Windows lingo's `chat.ask` (`lingo_ask`). Asking makes the app count as open for 10 seconds, so an app asks every second or so |
+| `/.lingo/asks` | | the questions waiting, each `{id, lingo, need, path, caller}`, whether a lingo may, or `{id, lingo, questions, caller}`, a native lingo's questions for the person, like `chat.ask` (`lingo_ask`). Asking makes the app count as open for 10 seconds, so an app asks every second or so |
 | `/.lingo/answer` | `id`, `answer`: `once`, `always` or `no`, or for questions the list of answers, in order | `null` |
 | `/.lingo/settings`, `/.lingo/set` | `lingo`, and `key` and `value` | as on the command line |
 | `/.lingo/manifest` | `lingo` | its whole manifest |
@@ -186,7 +186,7 @@ text of at most 4 MB sent with a `Content-Length`.
   has one with a phrase `<name>.serve`, like the onsay lingo's `onsay.serve`.
 - **Any other** is called function by function: `POST /<name>/<function>` with its values as a JSON record by name, or
   a list in order, or `GET` with its values in the query. `/<name>` alone is its `main`, and a native lingo's are
-  `/<name>/<group>/<function>`, like `/windows/window/list`. A value left out takes its default. The answer is the
+  `/<name>/<group>/<function>`, like `/onsay/window/list`. A value left out takes its default. The answer is the
   function's value as JSON.
 - **`GET /`** lists the lingos, `{lingos: [{name, route, running}]}`: for this computer every lingo, a broken one with
   its `error` in place of its route, and for anyone else each running lingo they may reach.
@@ -237,7 +237,7 @@ It reads the folder as it starts and again within 5 seconds of any change, to it
 file and every folder of a lingo's files. It loads the native lingos, compiles every Lingo lingo against all of them,
 checks each says in its `openapi.json` all its code needs, and sets aside any that can't load with the reason, like
 `broken.ls line 3: There's no lingo or group called nope here`, the rest loading without it. A Lingo lingo whose name is
-a native lingo's or one of its groups is set aside too: `input is already a part of windows, this computer's own lingo`.
+a native lingo's or one of its groups is set aside too: `input is already a part of onsay, this computer's own lingo`.
 Every lingo here loads, running or not, so a running one can call a stopped one by its dotted name.
 
 **A native lingo** is a library written in C against `src/lingo.h` and `src/platform.h`, linked with
@@ -260,7 +260,7 @@ the lingo's own functions when its `openapi.json`'s `x-lingo` says `keep` (`../d
 | `src/compile.c` | the compiler: lex, parse, a Lingo lingo's listing made from its code, what each function needs, every lingo loaded together, and a call of one linked down to native phrases |
 | `src/run.c` | the runner, and its step, time and memory limits |
 | `src/phrase.c` | the table of phrases this computer has |
-| `src/std.c` | the core lingo's `std` group: reaching inside values and converting them |
+| `src/std.c` | the `std` group: reaching inside values and converting them |
 | `src/core.h`, `src/core.c` | the engine: where Onsay is, settings, the floor phrases `compute`, `store`, `http` and `settings`, Onsay names resolved, `lingo(...)` and `use(...)` asked of a native lingo, `.lingo` files and folders, their manifests, running and stopped, the catalog and the hooks, the policy, callers, signatures and every check, the control verbs, this computer's keys, stops, requests answered at their routes, and pack |
 | `src/tlds.txt` | the web's top level domains, IANA's list, the same file Onsay keeps, made into `obj/tlds.h` by `build.ps1` for telling a name on the web from an Onsay name (*Names*) |
 | `src/sign.c` | SHA-256, base64, and Ed25519 on Monocypher |
@@ -278,10 +278,10 @@ the lingo's own functions when its `openapi.json`'s `x-lingo` says `keep` (`../d
 ## Build and test
 
 ```
-./build.ps1                                 bin/onsay-core.exe and bin/test/onsay-core.exe, with onsay, windows and native
+./build.ps1                                 bin/onsay-core.exe and bin/test/onsay-core.exe, with onsay and the base calls
                                             built in, bin/onsay-core.lib, bin/lingos (agent.lingo, the one lingo that
                                             ships, packed by the lingo client itself), and
-                                            bin/linux-x64/onsay-core and bin/linux-arm64/onsay-core, with onsay built in,
+                                            bin/linux-x64/onsay-core and bin/linux-arm64/onsay-core, with onsay and the base calls built in,
                                             for glibc 2.28 or later, all built on Windows with zig, one download, no
                                             installer
 node test/server.mjs                        a stand-in for Onsay, then in another terminal:
@@ -296,7 +296,7 @@ broken one made by the stand-in, all running under a policy it writes, the onsay
 request, down the onsay lingo's connection, signed by Onsay as the account's own or passed on from an address or a
 signed device, or to its port, 6970, or a command: the language and the core's phrases (`test/lingos/checks/checks.ls`),
 limits and stops, settings, `lingo(...)` and `use(...)` asked of the stand-in while it reaches this computer, web
-requests to Onsay names, resolved by the stand-in, the library, the windows lingo for real (`test/lingos/desk/desk.ls`), which may read the screen but never act on it, the
+requests to Onsay names, resolved by the stand-in, the library, the base calls for real (`test/lingos/desk/desk.ls`), which may read the screen but never act on it, the
 catalog, packing and loading, running and stopped, access by address, range, route, handle and device, signatures
 that check out and those that don't, blocks, the account policy pushed, fetched, kept and refused when older, what the
 ceiling clamped, grants, the ceiling, the root, the person's answers through an app, the decision log and its lines

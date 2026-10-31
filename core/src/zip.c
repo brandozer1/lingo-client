@@ -33,24 +33,38 @@ static void put(buf *b, uint32_t v, int bytes) {
 
 // Its end record names where the list of its files is, and each in the list where the file is.
 int zip_file(const char *zip, size_t n, const char *name, buf *out) {
-  const unsigned char *z = (const unsigned char *)zip, *end = NULL;
+  const unsigned char *z = (const unsigned char *)zip;
+  const unsigned char *end = NULL;
   for (size_t i = n >= 22 ? n - 22 : 0; n >= 22 && !end; i--) {
     if (num(z + i, 4) == 0x06054b50) end = z + i;
     if (!i || n - i > 22 + 65535) break;
   }
   if (!end) return 0;
-  size_t at = num(end + 16, 4), count = num(end + 10, 2), len = strlen(name);
+  size_t at = num(end + 16, 4);
+  size_t count = num(end + 10, 2);
+  size_t len = strlen(name);
   for (size_t k = 0; k < count && at + 46 <= n && num(z + at, 4) == 0x02014b50; k++) {
     const unsigned char *e = z + at;
-    size_t nl = num(e + 28, 2), method = num(e + 10, 2), packed = num(e + 20, 4), size = num(e + 24, 4), local = num(e + 42, 4);
+    size_t nl = num(e + 28, 2);
+    size_t method = num(e + 10, 2);
+    size_t packed = num(e + 20, 4);
+    size_t size = num(e + 24, 4);
+    size_t local = num(e + 42, 4);
     at += 46 + nl + num(e + 30, 2) + num(e + 32, 2);
     if (at > n || nl != len || memcmp(e + 46, name, len)) continue;
     if (local + 30 > n || num(z + local, 4) != 0x04034b50 || size > MOST) return 0;
     size_t from = local + 30 + num(z + local + 26, 2) + num(z + local + 28, 2);
     if (from > n || packed > n - from || (method != 0 && method != 8)) return 0;
     unsigned char *data = malloc(size + 1);
-    unsigned long got = size, used = packed;
-    int ok = method == 0 ? packed == size && (memcpy(data, z + from, size), 1) : !puff(data, &got, z + from, &used) && got == size;
+    unsigned long got = size;
+    unsigned long used = packed;
+    int ok;
+    if (method == 0) {
+      ok = packed == size;
+      if (ok) memcpy(data, z + from, size);
+    } else {
+      ok = !puff(data, &got, z + from, &used) && got == size;
+    }
     ok = ok && crc(data, size) == num(e + 16, 4);
     if (ok) buf_add(out, (const char *)data, size);
     if (ok && !out->s) buf_add(out, "", 0);
@@ -67,19 +81,51 @@ void zip_make(buf *out, int count, const char *const *names, const buf *files) {
   buf list = { 0 };
   for (int i = 0; i < count; i++) {
     const unsigned char *data = (const unsigned char *)(files[i].s ? files[i].s : "");
-    uint32_t sum = crc(data, files[i].n), size = (uint32_t)files[i].n, at = (uint32_t)out->n, nl = (uint32_t)strlen(names[i]);
-    put(out, 0x04034b50, 4), put(out, 20, 2), put(out, 0, 2), put(out, 0, 2), put(out, 0, 2), put(out, 33, 2);
-    put(out, sum, 4), put(out, size, 4), put(out, size, 4), put(out, nl, 2), put(out, 0, 2);
+    uint32_t sum = crc(data, files[i].n);
+    uint32_t size = (uint32_t)files[i].n;
+    uint32_t at = (uint32_t)out->n;
+    uint32_t nl = (uint32_t)strlen(names[i]);
+    put(out, 0x04034b50, 4);
+    put(out, 20, 2);
+    put(out, 0, 2);
+    put(out, 0, 2);
+    put(out, 0, 2);
+    put(out, 33, 2);
+    put(out, sum, 4);
+    put(out, size, 4);
+    put(out, size, 4);
+    put(out, nl, 2);
+    put(out, 0, 2);
     buf_add(out, names[i], nl);
     buf_add(out, (const char *)data, size);
-    put(&list, 0x02014b50, 4), put(&list, 20, 2), put(&list, 20, 2), put(&list, 0, 2), put(&list, 0, 2), put(&list, 0, 2), put(&list, 33, 2);
-    put(&list, sum, 4), put(&list, size, 4), put(&list, size, 4), put(&list, nl, 2), put(&list, 0, 2), put(&list, 0, 2);
-    put(&list, 0, 2), put(&list, 0, 2), put(&list, 0, 4), put(&list, at, 4);
+    put(&list, 0x02014b50, 4);
+    put(&list, 20, 2);
+    put(&list, 20, 2);
+    put(&list, 0, 2);
+    put(&list, 0, 2);
+    put(&list, 0, 2);
+    put(&list, 33, 2);
+    put(&list, sum, 4);
+    put(&list, size, 4);
+    put(&list, size, 4);
+    put(&list, nl, 2);
+    put(&list, 0, 2);
+    put(&list, 0, 2);
+    put(&list, 0, 2);
+    put(&list, 0, 2);
+    put(&list, 0, 4);
+    put(&list, at, 4);
     buf_add(&list, names[i], nl);
   }
   uint32_t at = (uint32_t)out->n;
   buf_add(out, list.s ? list.s : "", list.n);
-  put(out, 0x06054b50, 4), put(out, 0, 2), put(out, 0, 2), put(out, (uint32_t)count, 2), put(out, (uint32_t)count, 2);
-  put(out, (uint32_t)list.n, 4), put(out, at, 4), put(out, 0, 2);
+  put(out, 0x06054b50, 4);
+  put(out, 0, 2);
+  put(out, 0, 2);
+  put(out, (uint32_t)count, 2);
+  put(out, (uint32_t)count, 2);
+  put(out, (uint32_t)list.n, 4);
+  put(out, at, 4);
+  put(out, 0, 2);
   buf_free(&list);
 }

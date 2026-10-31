@@ -43,7 +43,10 @@ void pl_sleep(double seconds) {
   while (nanosleep(&t, &t) && errno == EINTR) {}
 }
 
-typedef struct { void (*fn)(void *); void *arg; } start;
+typedef struct {
+  void (*fn)(void *);
+  void *arg;
+} start;
 
 static void *begin(void *p) {
   start s = *(start *)p;
@@ -56,12 +59,17 @@ void pl_thread(void (*fn)(void *), void *arg) {
   start *s = malloc(sizeof *s);
   *s = (start){ fn, arg };
   pthread_t t;
-  if (pthread_create(&t, NULL, begin, s)) free(s);
-  else pthread_detach(t);
+  if (pthread_create(&t, NULL, begin, s))
+    free(s);
+  else
+    pthread_detach(t);
 }
 
 // Recursive, like the Windows gate, and timed on the monotonic clock, so a change of the time of day never ends a wait.
-struct pl_gate { pthread_mutex_t lock; pthread_cond_t wake; };
+struct pl_gate {
+  pthread_mutex_t lock;
+  pthread_cond_t wake;
+};
 
 pl_gate *pl_gate_new(void) {
   pl_gate *g = malloc(sizeof *g);
@@ -96,15 +104,37 @@ void pl_wait(pl_gate *g, double seconds) {
 typedef void CURL;
 struct curl_slist;
 enum {
-  CURLE_OK = 0, CURLE_UNSUPPORTED_PROTOCOL = 1, CURLE_URL_MALFORMAT = 3, CURLE_COULDNT_RESOLVE_HOST = 6,
-  CURLE_COULDNT_CONNECT = 7, CURLE_WRITE_ERROR = 23, CURLE_OPERATION_TIMEDOUT = 28, CURLE_SSL_CONNECT_ERROR = 35,
-  CURLE_TOO_MANY_REDIRECTS = 47, CURLE_PEER_FAILED_VERIFICATION = 60, CURLE_SSL_CACERT = 77, CURLE_AGAIN = 81,
-  CURLOPT_WRITEDATA = 10001, CURLOPT_URL = 10002, CURLOPT_POSTFIELDS = 10015, CURLOPT_USERAGENT = 10018,
-  CURLOPT_HTTPHEADER = 10023, CURLOPT_HEADERDATA = 10029, CURLOPT_CUSTOMREQUEST = 10036, CURLOPT_WRITEFUNCTION = 20011,
-  CURLOPT_HEADERFUNCTION = 20079, CURLOPT_NOBODY = 44, CURLOPT_FOLLOWLOCATION = 52, CURLOPT_POSTFIELDSIZE = 60,
-  CURLOPT_MAXREDIRS = 68, CURLOPT_NOSIGNAL = 99, CURLOPT_CONNECT_ONLY = 141, CURLOPT_TIMEOUT_MS = 155,
+  CURLE_OK = 0,
+  CURLE_UNSUPPORTED_PROTOCOL = 1,
+  CURLE_URL_MALFORMAT = 3,
+  CURLE_COULDNT_RESOLVE_HOST = 6,
+  CURLE_COULDNT_CONNECT = 7,
+  CURLE_WRITE_ERROR = 23,
+  CURLE_OPERATION_TIMEDOUT = 28,
+  CURLE_SSL_CONNECT_ERROR = 35,
+  CURLE_TOO_MANY_REDIRECTS = 47,
+  CURLE_PEER_FAILED_VERIFICATION = 60,
+  CURLE_SSL_CACERT = 77,
+  CURLE_AGAIN = 81,
+  CURLOPT_WRITEDATA = 10001,
+  CURLOPT_URL = 10002,
+  CURLOPT_POSTFIELDS = 10015,
+  CURLOPT_USERAGENT = 10018,
+  CURLOPT_HTTPHEADER = 10023,
+  CURLOPT_HEADERDATA = 10029,
+  CURLOPT_CUSTOMREQUEST = 10036,
+  CURLOPT_WRITEFUNCTION = 20011,
+  CURLOPT_HEADERFUNCTION = 20079,
+  CURLOPT_NOBODY = 44,
+  CURLOPT_FOLLOWLOCATION = 52,
+  CURLOPT_POSTFIELDSIZE = 60,
+  CURLOPT_MAXREDIRS = 68,
+  CURLOPT_NOSIGNAL = 99,
+  CURLOPT_CONNECT_ONLY = 141,
+  CURLOPT_TIMEOUT_MS = 155,
   CURLOPT_CONNECTTIMEOUT_MS = 156,
-  CURLINFO_RESPONSE_CODE = 0x200002, CURLINFO_ACTIVESOCKET = 0x500000 + 44,
+  CURLINFO_RESPONSE_CODE = 0x200002,
+  CURLINFO_ACTIVESOCKET = 0x500000 + 44,
   CURL_GLOBAL_ALL = 3,
 };
 
@@ -141,20 +171,23 @@ static void curl_load(void) {
   *(void **)&curl.slist_append = dlsym(m, "curl_slist_append");
   *(void **)&curl.slist_free_all = dlsym(m, "curl_slist_free_all");
   curl.ok = curl.global_init && curl.init && curl.cleanup && curl.setopt && curl.getinfo && curl.perform && curl.send &&
-            curl.recv && curl.strerror && curl.slist_append && curl.slist_free_all && !curl.global_init(CURL_GLOBAL_ALL);
+      curl.recv && curl.strerror && curl.slist_append && curl.slist_free_all && !curl.global_init(CURL_GLOBAL_ALL);
   signal(SIGPIPE, SIG_IGN);
 }
 
-#define NO_CURL "This computer has no libcurl, which the core needs to reach the web. Install it, like apt install libcurl4 (libcurl4t64 on newer Ubuntu) or dnf install libcurl"
+#define NO_CURL \
+  "This computer has no libcurl, which the core needs to reach the web. Install it, like apt install libcurl4 (libcurl4t64 on newer Ubuntu) or dnf install libcurl"
 
 static void why(buf *error, const char *what, int code) {
-  const char *plain = code == CURLE_COULDNT_CONNECT ? "nothing answered at that address"
-                    : code == CURLE_COULDNT_RESOLVE_HOST ? "that server name wasn't found"
-                    : code == CURLE_OPERATION_TIMEDOUT ? "it took too long"
-                    : code == CURLE_PEER_FAILED_VERIFICATION || code == CURLE_SSL_CACERT || code == CURLE_SSL_CONNECT_ERROR ? "its certificate wasn't trusted"
-                    : code == CURLE_URL_MALFORMAT || code == CURLE_UNSUPPORTED_PROTOCOL ? "that isn't a whole web address"
-                    : code == CURLE_TOO_MANY_REDIRECTS ? "it sent it on too many times"
-                    : curl.strerror(code);
+  const char *plain = curl.strerror(code);
+  if (code == CURLE_COULDNT_CONNECT) plain = "nothing answered at that address";
+  if (code == CURLE_COULDNT_RESOLVE_HOST) plain = "that server name wasn't found";
+  if (code == CURLE_OPERATION_TIMEDOUT) plain = "it took too long";
+  if (code == CURLE_PEER_FAILED_VERIFICATION || code == CURLE_SSL_CACERT || code == CURLE_SSL_CONNECT_ERROR) {
+    plain = "its certificate wasn't trusted";
+  }
+  if (code == CURLE_URL_MALFORMAT || code == CURLE_UNSUPPORTED_PROTOCOL) plain = "that isn't a whole web address";
+  if (code == CURLE_TOO_MANY_REDIRECTS) plain = "it sent it on too many times";
   buf_fmt(error, "%s: %s (curl %d)", what, plain, code);
 }
 
@@ -163,11 +196,11 @@ static void why(buf *error, const char *what, int code) {
 struct pl_link {
   CURL *c;
   int socket;
-  pthread_mutex_t io;        // around every curl_easy_send and curl_easy_recv, never held while waiting
+  pthread_mutex_t io;   // around every curl_easy_send and curl_easy_recv, never held while waiting
   pthread_mutex_t sending;   // one frame at a time, whole
   volatile int closed;
-  double until;              // while it opens, when to give up waiting
-  buf held;                  // what was read and isn't a whole frame yet
+  double until;   // while it opens, when to give up waiting
+  buf held;   // what was read and isn't a whole frame yet
 };
 
 // SHA-1, only for the server's Sec-WebSocket-Accept, which is base64 of SHA-1 of the key and the protocol's own GUID.
@@ -179,16 +212,43 @@ static void sha1(const unsigned char *s, size_t n, unsigned char digest[20]) {
   m[n] = 0x80;
   for (int i = 0; i < 8; i++) m[total - 1 - i] = (unsigned char)((unsigned long long)n * 8 >> (8 * i));
   for (size_t at = 0; at < total; at += 64) {
-    unsigned w[80], a = h[0], b = h[1], c = h[2], d = h[3], e = h[4];
-    for (int i = 0; i < 16; i++) w[i] = (unsigned)m[at + 4 * i] << 24 | (unsigned)m[at + 4 * i + 1] << 16 | (unsigned)m[at + 4 * i + 2] << 8 | m[at + 4 * i + 3];
-    for (int i = 16; i < 80; i++) { unsigned x = w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16]; w[i] = x << 1 | x >> 31; }
-    for (int i = 0; i < 80; i++) {
-      unsigned f = i < 20 ? (b & c) | (~b & d) : i < 40 ? b ^ c ^ d : i < 60 ? (b & c) | (b & d) | (c & d) : b ^ c ^ d;
-      unsigned k = i < 20 ? 0x5A827999 : i < 40 ? 0x6ED9EBA1 : i < 60 ? 0x8F1BBCDC : 0xCA62C1D6;
-      unsigned t = (a << 5 | a >> 27) + f + e + k + w[i];
-      e = d, d = c, c = b << 30 | b >> 2, b = a, a = t;
+    unsigned w[80];
+    unsigned a = h[0];
+    unsigned b = h[1];
+    unsigned c = h[2];
+    unsigned d = h[3];
+    unsigned e = h[4];
+    for (int i = 0; i < 16; i++)
+      w[i] = (unsigned)m[at + 4 * i] << 24 | (unsigned)m[at + 4 * i + 1] << 16 | (unsigned)m[at + 4 * i + 2] << 8 |
+          m[at + 4 * i + 3];
+    for (int i = 16; i < 80; i++) {
+      unsigned x = w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16];
+      w[i] = x << 1 | x >> 31;
     }
-    h[0] += a, h[1] += b, h[2] += c, h[3] += d, h[4] += e;
+    for (int i = 0; i < 80; i++) {
+      unsigned f = b ^ c ^ d;
+      unsigned k = 0xCA62C1D6;
+      if (i < 20) {
+        f = (b & c) | (~b & d);
+        k = 0x5A827999;
+      } else if (i < 40) {
+        k = 0x6ED9EBA1;
+      } else if (i < 60) {
+        f = (b & c) | (b & d) | (c & d);
+        k = 0x8F1BBCDC;
+      }
+      unsigned t = (a << 5 | a >> 27) + f + e + k + w[i];
+      e = d;
+      d = c;
+      c = b << 30 | b >> 2;
+      b = a;
+      a = t;
+    }
+    h[0] += a;
+    h[1] += b;
+    h[2] += c;
+    h[3] += d;
+    h[4] += e;
   }
   free(m);
   for (int i = 0; i < 20; i++) digest[i] = (unsigned char)(h[i / 4] >> (24 - 8 * (i % 4)));
@@ -197,7 +257,8 @@ static void sha1(const unsigned char *s, size_t n, unsigned char digest[20]) {
 // Waits for the socket to be ready, a second at a time so a close is seen. 0 once the link is closed, or out of time.
 static int ready(pl_link *l, short what) {
   struct pollfd p = { l->socket, what, 0 };
-  while (!l->closed && !(l->until && pl_now() > l->until)) if (poll(&p, 1, 1000) != 0) return !l->closed;
+  while (!l->closed && !(l->until && pl_now() > l->until))
+    if (poll(&p, 1, 1000) != 0) return !l->closed;
   return 0;
 }
 
@@ -210,7 +271,10 @@ static int read_more(pl_link *l) {
     pthread_mutex_lock(&l->io);
     int e = curl.recv(l->c, chunk, sizeof chunk, &got);
     pthread_mutex_unlock(&l->io);
-    if (e == CURLE_OK) { buf_add(&l->held, chunk, got); return got > 0; }
+    if (e == CURLE_OK) {
+      buf_add(&l->held, chunk, got);
+      return got > 0;
+    }
     if (e != CURLE_AGAIN || !ready(l, POLLIN)) return 0;
   }
 }
@@ -222,8 +286,11 @@ static int write_all(pl_link *l, const char *s, size_t n) {
     pthread_mutex_lock(&l->io);
     int e = curl.send(l->c, s, n, &sent);
     pthread_mutex_unlock(&l->io);
-    if (e == CURLE_OK) s += sent, n -= sent;
-    else if (e != CURLE_AGAIN || !ready(l, POLLOUT)) return 0;
+    if (e == CURLE_OK) {
+      s += sent;
+      n -= sent;
+    } else if (e != CURLE_AGAIN || !ready(l, POLLOUT))
+      return 0;
   }
   return 1;
 }
@@ -234,9 +301,16 @@ static int send_frame(pl_link *l, int op, const char *s, size_t n) {
   if (getrandom(mask, 4, 0) != 4) return 0;
   buf f = { 0 };
   buf_chr(&f, (char)(0x80 | op));
-  if (n < 126) buf_chr(&f, (char)(0x80 | n));
-  else if (n < 65536) { buf_chr(&f, (char)(0x80 | 126)); buf_chr(&f, (char)(n >> 8)); buf_chr(&f, (char)n); }
-  else { buf_chr(&f, (char)(0x80 | 127)); for (int i = 7; i >= 0; i--) buf_chr(&f, (char)((unsigned long long)n >> (8 * i))); }
+  if (n < 126)
+    buf_chr(&f, (char)(0x80 | n));
+  else if (n < 65536) {
+    buf_chr(&f, (char)(0x80 | 126));
+    buf_chr(&f, (char)(n >> 8));
+    buf_chr(&f, (char)n);
+  } else {
+    buf_chr(&f, (char)(0x80 | 127));
+    for (int i = 7; i >= 0; i--) buf_chr(&f, (char)((unsigned long long)n >> (8 * i)));
+  }
   buf_add(&f, (const char *)mask, 4);
   for (size_t i = 0; i < n; i++) buf_chr(&f, (char)(s[i] ^ mask[i & 3]));
   pthread_mutex_lock(&l->sending);
@@ -248,48 +322,72 @@ static int send_frame(pl_link *l, int op, const char *s, size_t n) {
 
 pl_link *pl_connect(const char *url, buf *error) {
   pthread_once(&curl_once, curl_load);
-  if (!curl.ok) { buf_str(error, NO_CURL); return NULL; }
+  if (!curl.ok) {
+    buf_str(error, NO_CURL);
+    return NULL;
+  }
   int secure = !strncmp(url, "wss://", 6);
-  if (!secure && strncmp(url, "ws://", 5)) { buf_str(error, "The server address: that isn't a whole web address"); return NULL; }
+  if (!secure && strncmp(url, "ws://", 5)) {
+    buf_str(error, "The server address: that isn't a whole web address");
+    return NULL;
+  }
   // curl opens the connection to the address as http or https, and the request to upgrade it is written here.
   unsigned char random[16], digest[20];
-  if ((size_t)getrandom(random, sizeof random, 0) != sizeof random) { buf_str(error, "This computer gave no random numbers"); return NULL; }
-  const char *host = url + (secure ? 6 : 5), *path = strchr(host, '/');
+  if ((size_t)getrandom(random, sizeof random, 0) != sizeof random) {
+    buf_str(error, "This computer gave no random numbers");
+    return NULL;
+  }
+  const char *host = url + (secure ? 6 : 5);
+  const char *path = strchr(host, '/');
   if (!path) path = host + strlen(host);
-  buf http = { 0 }, ask = { 0 }, key = { 0 }, expect = { 0 };
+  buf http = { 0 };
+  buf ask = { 0 };
+  buf key = { 0 };
+  buf expect = { 0 };
   buf_fmt(&http, "%s://%.*s", secure ? "https" : "http", (int)(path - host), host);
   base64(&key, random, sizeof random);
   buf_fmt(&expect, "%s258EAFA5-E914-47DA-95CA-C5AB0DC85B11", key.s);
   sha1((const unsigned char *)expect.s, expect.n, digest);
   expect.n = 0;
   base64(&expect, digest, sizeof digest);
-  buf_fmt(&ask, "GET %s HTTP/1.1\r\nHost: %.*s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: %s\r\n"
-                "Sec-WebSocket-Version: 13\r\nUser-Agent: onsay-core\r\n\r\n", *path ? path : "/", (int)(path - host), host, key.s);
+  buf_fmt(&ask,
+      "GET %s HTTP/1.1\r\nHost: %.*s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: %s\r\n"
+      "Sec-WebSocket-Version: 13\r\nUser-Agent: onsay-core\r\n\r\n",
+      *path ? path : "/", (int)(path - host), host, key.s);
 
   pl_link *l = calloc(1, sizeof *l);
   pthread_mutex_init(&l->io, NULL);
   pthread_mutex_init(&l->sending, NULL);
   l->socket = -1;
   l->c = curl.init();
-  long yes = 1, ms = 10000;
-  if (!l->c) buf_str(error, "Connecting: curl couldn't start");
+  long yes = 1;
+  long ms = 10000;
+  if (!l->c)
+    buf_str(error, "Connecting: curl couldn't start");
   else {
     curl.setopt(l->c, CURLOPT_URL, http.s);
     curl.setopt(l->c, CURLOPT_CONNECT_ONLY, yes);
     curl.setopt(l->c, CURLOPT_NOSIGNAL, yes);
     curl.setopt(l->c, CURLOPT_CONNECTTIMEOUT_MS, ms);
     int e = curl.perform(l->c);
-    if (e) why(error, "Connecting", e);
-    else if (curl.getinfo(l->c, CURLINFO_ACTIVESOCKET, &l->socket) || l->socket < 0) buf_str(error, "Connecting: curl gave no connection");
+    if (e)
+      why(error, "Connecting", e);
+    else if (curl.getinfo(l->c, CURLINFO_ACTIVESOCKET, &l->socket) || l->socket < 0)
+      buf_str(error, "Connecting: curl gave no connection");
   }
 
   // Its answer is read up to the blank line after its headers, within 10 seconds. Anything after it is the first frames.
   char *end = NULL;
   l->until = pl_now() + 10;
-  if (!error->n && !write_all(l, ask.s, ask.n)) buf_str(error, "Opening the connection: the request to open it couldn't be sent");
+  if (!error->n && !write_all(l, ask.s, ask.n))
+    buf_str(error, "Opening the connection: the request to open it couldn't be sent");
   while (!error->n && !(end = l->held.s ? strstr(l->held.s, "\r\n\r\n") : NULL)) {
-    if (!read_more(l)) buf_str(error, pl_now() > l->until ? "Opening the connection: it took too long" : "Opening the connection: the server closed it");
-    buf_chr(&l->held, 0), l->held.n--;   // a 0 after it, for strstr, never counted
+    if (!read_more(l))
+      buf_str(error,
+          pl_now() > l->until ? "Opening the connection: it took too long"
+                              : "Opening the connection: the server closed it");
+    buf_chr(&l->held, 0);
+    l->held.n--;   // a 0 after it, for strstr, never counted
   }
   l->until = 0;
   if (!error->n) {
@@ -303,13 +401,21 @@ pl_link *pl_connect(const char *url, buf *error) {
         while (*v == ' ') v++;
         accepted = !strncmp(v, expect.s, expect.n) && (v[expect.n] == '\r' || v[expect.n] == ' ');
       }
-    if (status != 101) buf_fmt(error, "The server answered %d instead of opening a connection", status);
-    else if (!accepted) buf_str(error, "The server's answer to opening the connection wasn't right");
+    if (status != 101)
+      buf_fmt(error, "The server answered %d instead of opening a connection", status);
+    else if (!accepted)
+      buf_str(error, "The server's answer to opening the connection wasn't right");
     memmove(l->held.s, l->held.s + head, l->held.n - head);
     l->held.n -= head;
   }
-  buf_free(&http), buf_free(&ask), buf_free(&key), buf_free(&expect);
-  if (error->n) { pl_free(l); return NULL; }
+  buf_free(&http);
+  buf_free(&ask);
+  buf_free(&key);
+  buf_free(&expect);
+  if (error->n) {
+    pl_free(l);
+    return NULL;
+  }
   return l;
 }
 
@@ -320,21 +426,41 @@ int pl_receive(pl_link *l, buf *out) {
   for (;;) {
     // Its length is in 7 bits, or in the 2 or 8 bytes after them, then a mask, which a server shouldn't send.
     unsigned char *h = (unsigned char *)l->held.s;
-    size_t n = l->held.n >= 2 ? h[1] & 127 : 0, size = n == 126 ? 2 : n == 127 ? 8 : 0;
+    size_t n = l->held.n >= 2 ? h[1] & 127 : 0;
+    size_t size = 0;
+    if (n == 126) size = 2;
+    if (n == 127) size = 8;
     size_t at = 2 + size + (l->held.n >= 2 && h[1] & 0x80 ? 4 : 0);
-    if (l->held.n < at) { if (!read_more(l)) return 0; continue; }
-    if (size) { n = 0; for (size_t i = 0; i < size; i++) n = n << 8 | h[2 + i]; }
+    if (l->held.n < at) {
+      if (!read_more(l)) return 0;
+      continue;
+    }
+    if (size) {
+      n = 0;
+      for (size_t i = 0; i < size; i++) n = n << 8 | h[2 + i];
+    }
     if (n > (1u << 30)) return 0;   // a message of more than a GB is no message at all
-    if (l->held.n < at + n) { if (!read_more(l)) return 0; continue; }
-    int op = h[0] & 15, fin = h[0] & 0x80;
+    if (l->held.n < at + n) {
+      if (!read_more(l)) return 0;
+      continue;
+    }
+    int op = h[0] & 15;
+    int fin = h[0] & 0x80;
     char *body = l->held.s + at;
-    if (h[1] & 0x80) for (size_t i = 0; i < n; i++) body[i] ^= (char)h[at - 4 + (i & 3)];
-    if (op == 8) { l->closed = 1; return 0; }
+    if (h[1] & 0x80)
+      for (size_t i = 0; i < n; i++) body[i] ^= (char)h[at - 4 + (i & 3)];
+    if (op == 8) {
+      l->closed = 1;
+      return 0;
+    }
     if (op == 9 && !send_frame(l, 10, body, n)) return 0;
     if (op <= 2) buf_add(out, body, n);
     memmove(l->held.s, l->held.s + at + n, l->held.n - at - n);
     l->held.n -= at + n;
-    if (op <= 2 && fin) { if (!out->s) buf_add(out, "", 0); return 1; }
+    if (op <= 2 && fin) {
+      if (!out->s) buf_add(out, "", 0);
+      return 1;
+    }
   }
 }
 
@@ -392,7 +518,8 @@ int pl_seal(const char *path, const void *data, size_t n) {
   buf temp = { 0 };
   buf_fmt(&temp, "%s.new", path);
   remove(temp.s);
-  int fd = open(temp.s, O_WRONLY | O_CREAT | O_EXCL, 0600), ok = fd >= 0 && write(fd, data, n) == (ssize_t)n;
+  int fd = open(temp.s, O_WRONLY | O_CREAT | O_EXCL, 0600);
+  int ok = fd >= 0 && write(fd, data, n) == (ssize_t)n;
   if (fd >= 0) ok = !fsync(fd) && !close(fd) && ok;
   ok = ok && !rename(temp.s, path);
   if (!ok) remove(temp.s);
@@ -428,7 +555,8 @@ int pl_folder(const char *path) {
   return ok;
 }
 
-void pl_list(const char *folder, void (*each)(const char *name, int folder, double size, double changed, void *arg), void *arg) {
+void pl_list(
+    const char *folder, void (*each)(const char *name, int folder, double size, double changed, void *arg), void *arg) {
   DIR *d = opendir(folder);
   if (!d) return;
   struct dirent *e;
@@ -438,7 +566,8 @@ void pl_list(const char *folder, void (*each)(const char *name, int folder, doub
     buf_fmt(&path, "%s/%s", folder, e->d_name);
     struct stat s;
     if (!stat(path.s, &s))
-      each(e->d_name, S_ISDIR(s.st_mode), (double)s.st_size, (double)s.st_mtim.tv_sec + (double)s.st_mtim.tv_nsec / 1e9, arg);
+      each(e->d_name, S_ISDIR(s.st_mode), (double)s.st_size, (double)s.st_mtim.tv_sec + (double)s.st_mtim.tv_nsec / 1e9,
+          arg);
     buf_free(&path);
   }
   closedir(d);
@@ -450,13 +579,17 @@ void pl_context(buf *out) {
   time_t now = time(NULL);
   struct tm t;
   localtime_r(&now, &t);
-  long offset = t.tm_gmtoff / 60, at = labs(offset);
-  buf_fmt(out, "{\"os\":\"linux\",\"time\":\"%04d-%02d-%02dT%02d:%02d:%02d%c%02ld:%02ld\"", t.tm_year + 1900, t.tm_mon + 1, t.tm_mday,
-    t.tm_hour, t.tm_min, t.tm_sec, offset < 0 ? '-' : '+', at / 60, at % 60);
-  char zone[256] = "", link[256] = "", *z = getenv("TZ");
+  long offset = t.tm_gmtoff / 60;
+  long at = labs(offset);
+  buf_fmt(out, "{\"os\":\"linux\",\"time\":\"%04d-%02d-%02dT%02d:%02d:%02d%c%02ld:%02ld\"", t.tm_year + 1900,
+      t.tm_mon + 1, t.tm_mday, t.tm_hour, t.tm_min, t.tm_sec, offset < 0 ? '-' : '+', at / 60, at % 60);
+  char zone[256] = "";
+  char link[256] = "";
+  char *z = getenv("TZ");
   FILE *f = NULL;
   ssize_t n = 0;
-  if (z && *z) snprintf(zone, sizeof zone, "%s", z + (*z == ':'));
+  if (z && *z)
+    snprintf(zone, sizeof zone, "%s", z + (*z == ':'));
   else if ((f = fopen("/etc/timezone", "r"))) {
     if (!fgets(zone, sizeof zone, f)) zone[0] = 0;
     fclose(f);
@@ -466,19 +599,31 @@ void pl_context(buf *out) {
     if ((z = strstr(link, "zoneinfo/"))) snprintf(zone, sizeof zone, "%s", z + 9);
   }
   zone[strcspn(zone, "\r\n")] = 0;
-  if (zone[0]) { buf_str(out, ",\"zone\":"); buf_json_str(out, zone, strlen(zone)); }
-  char language[64] = "", *lang = getenv("LANG");
-  if (lang && *lang && strcmp(lang, "C") && strncmp(lang, "C.", 2) && strcmp(lang, "POSIX")) snprintf(language, sizeof language, "%s", lang);
+  if (zone[0]) {
+    buf_str(out, ",\"zone\":");
+    buf_json_str(out, zone, strlen(zone));
+  }
+  char language[64] = "";
+  char *lang = getenv("LANG");
+  if (lang && *lang && strcmp(lang, "C") && strncmp(lang, "C.", 2) && strcmp(lang, "POSIX"))
+    snprintf(language, sizeof language, "%s", lang);
   language[strcspn(language, ".@")] = 0;
-  for (char *c = language; *c; c++) if (*c == '_') *c = '-';
-  if (language[0]) { buf_str(out, ",\"language\":"); buf_json_str(out, language, strlen(language)); }
+  for (char *c = language; *c; c++)
+    if (*c == '_') *c = '-';
+  if (language[0]) {
+    buf_str(out, ",\"language\":");
+    buf_json_str(out, language, strlen(language));
+  }
   buf_chr(out, '}');
 }
 
 // Never closed: its phrases are in the table from now on. The core is built with -rdynamic, so a library finds its words.
 lingo_entry pl_library(const char *path, buf *error) {
   void *m = dlopen(path, RTLD_NOW | RTLD_LOCAL);
-  if (!m) { buf_fmt(error, "Linux can't load it: %s", dlerror()); return NULL; }
+  if (!m) {
+    buf_fmt(error, "Linux can't load it: %s", dlerror());
+    return NULL;
+  }
   lingo_entry entry;
   *(void **)&entry = dlsym(m, "lingo_phrases");
   if (!entry) buf_str(error, "it has no lingo_phrases");
@@ -498,17 +643,26 @@ static size_t got_text(char *s, size_t size, size_t n, void *to) {
 
 static size_t got_header(char *s, size_t size, size_t n, void *to) {
   buf *raw = to;
-  if (size * n >= 5 && !strncmp(s, "HTTP/", 5)) raw->n = 0;
-  else buf_add(raw, s, size * n);
+  if (size * n >= 5 && !strncmp(s, "HTTP/", 5))
+    raw->n = 0;
+  else
+    buf_add(raw, s, size * n);
   return size * n;
 }
 
-val *pl_http(arena *a, const char *method, const char *url, val *headers, const char *body, size_t n, double seconds, buf *error) {
+val *pl_http(arena *a, const char *method, const char *url, val *headers, const char *body, size_t n, double seconds,
+    buf *error) {
   pthread_once(&curl_once, curl_load);
-  buf text = { 0 }, raw = { 0 };
-  long status = 0, yes = 1, most = 10;
+  buf text = { 0 };
+  buf raw = { 0 };
+  long status = 0;
+  long yes = 1;
+  long most = 10;
   val *out = NULL;
-  if (!curl.ok) { buf_str(error, NO_CURL); return NULL; }
+  if (!curl.ok) {
+    buf_str(error, NO_CURL);
+    return NULL;
+  }
   // Expect: left empty, so curl never waits a second for a go ahead before sending a body.
   struct curl_slist *head = curl.slist_append(NULL, "Expect:");
   for (size_t i = 0; i < headers->r.n; i++) {
@@ -518,7 +672,8 @@ val *pl_http(arena *a, const char *method, const char *url, val *headers, const 
     buf_free(&line);
   }
   CURL *c = curl.init();
-  if (!c) buf_str(error, "curl couldn't start");
+  if (!c)
+    buf_str(error, "curl couldn't start");
   else {
     curl.setopt(c, CURLOPT_URL, url);
     curl.setopt(c, CURLOPT_NOSIGNAL, yes);
@@ -532,7 +687,8 @@ val *pl_http(arena *a, const char *method, const char *url, val *headers, const 
     curl.setopt(c, CURLOPT_HEADERFUNCTION, got_header);
     curl.setopt(c, CURLOPT_HEADERDATA, &raw);
     // GET without a body is curl's own. HEAD reads no body. Anything else sends its body, even an empty one.
-    if (!strcmp(method, "HEAD")) curl.setopt(c, CURLOPT_NOBODY, yes);
+    if (!strcmp(method, "HEAD"))
+      curl.setopt(c, CURLOPT_NOBODY, yes);
     else if (strcmp(method, "GET") || n) {
       curl.setopt(c, CURLOPT_POSTFIELDSIZE, (long)n);
       curl.setopt(c, CURLOPT_POSTFIELDS, body);
@@ -540,13 +696,15 @@ val *pl_http(arena *a, const char *method, const char *url, val *headers, const 
     }
     int e = curl.perform(c);
     curl.getinfo(c, CURLINFO_RESPONSE_CODE, &status);
-    if (text.n > ROOM) buf_fmt(error, "%s answered with more than 4 MB", url);
+    if (text.n > ROOM)
+      buf_fmt(error, "%s answered with more than 4 MB", url);
     else if (e) {
       buf where = { 0 };
       buf_fmt(&where, "%s couldn't be reached", url);
       why(error, where.s, e);
       buf_free(&where);
-    } else if (!utf8_ok(text.s ? text.s : "", text.n)) buf_fmt(error, "%s answered with something that isn't text, like a picture or a file", url);
+    } else if (!utf8_ok(text.s ? text.s : "", text.n))
+      buf_fmt(error, "%s answered with something that isn't text, like a picture or a file", url);
     else {
       out = v_rec(a);
       rec_set(a, out, "status", v_num(a, (double)status));
@@ -556,28 +714,40 @@ val *pl_http(arena *a, const char *method, const char *url, val *headers, const 
     curl.cleanup(c);
   }
   curl.slist_free_all(head);
-  buf_free(&text), buf_free(&raw);
+  buf_free(&text);
+  buf_free(&raw);
   return out;
 }
 
 ////////// 6. PORT //////////
 
-struct pl_socket { int s; };
+struct pl_socket {
+  int s;
+};
 
 // Everywhere: IPv6 and IPv4 on one socket, or IPv4 alone on a server without IPv6. Else 127.0.0.1 alone.
 pl_socket *pl_listen(int port, int everywhere, buf *error) {
   struct sockaddr_in four = { 0 };
   struct sockaddr_in6 six = { 0 };   // its address all zeros: every one, IPv4 too once V6ONLY is off
-  int no = 0, yes = 1, s = everywhere ? socket(AF_INET6, SOCK_STREAM, 0) : -1, v6 = s >= 0;
-  four.sin_family = AF_INET, four.sin_port = htons((unsigned short)port), four.sin_addr.s_addr = htonl(everywhere ? INADDR_ANY : INADDR_LOOPBACK);
-  six.sin6_family = AF_INET6, six.sin6_port = htons((unsigned short)port);
+  int no = 0;
+  int yes = 1;
+  int s = everywhere ? socket(AF_INET6, SOCK_STREAM, 0) : -1;
+  int v6 = s >= 0;
+  four.sin_family = AF_INET;
+  four.sin_port = htons((unsigned short)port);
+  four.sin_addr.s_addr = htonl(everywhere ? INADDR_ANY : INADDR_LOOPBACK);
+  six.sin6_family = AF_INET6;
+  six.sin6_port = htons((unsigned short)port);
   if (!v6) s = socket(AF_INET, SOCK_STREAM, 0);
   if (s >= 0) {
-    setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes);   // so a restart doesn't wait for the last one's connections
+    setsockopt(
+        s, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes);   // so a restart doesn't wait for the last one's connections
     if (v6) setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY, &no, sizeof no);
   }
-  if (s < 0 || bind(s, v6 ? (struct sockaddr *)&six : (struct sockaddr *)&four, v6 ? sizeof six : sizeof four) || listen(s, SOMAXCONN)) {
-    buf_fmt(error, "Port %d couldn't be opened: %s", port, errno == EADDRINUSE ? "another program is using it" : strerror(errno));
+  if (s < 0 || bind(s, v6 ? (struct sockaddr *)&six : (struct sockaddr *)&four, v6 ? sizeof six : sizeof four) ||
+      listen(s, SOMAXCONN)) {
+    buf_fmt(error, "Port %d couldn't be opened: %s", port,
+        errno == EADDRINUSE ? "another program is using it" : strerror(errno));
     if (s >= 0) close(s);
     return NULL;
   }
@@ -598,7 +768,10 @@ pl_socket *pl_accept(pl_socket *port, buf *from) {
   setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, &quiet, sizeof quiet);
   setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, &quiet, sizeof quiet);
   char text[64] = "";
-  inet_ntop(at.ss_family, at.ss_family == AF_INET ? (void *)&((struct sockaddr_in *)&at)->sin_addr : (void *)&((struct sockaddr_in6 *)&at)->sin6_addr, text, sizeof text);
+  inet_ntop(at.ss_family,
+      at.ss_family == AF_INET ? (void *)&((struct sockaddr_in *)&at)->sin_addr
+                              : (void *)&((struct sockaddr_in6 *)&at)->sin6_addr,
+      text, sizeof text);
   buf_str(from, strncmp(text, "::ffff:", 7) || !strchr(text, '.') ? text : text + 7);
   pl_socket *s = malloc(sizeof *s);
   s->s = c;
@@ -611,7 +784,8 @@ int pl_take(pl_socket *c, char *to, size_t n) {
 }
 
 int pl_give(pl_socket *c, const char *data, size_t n) {
-  for (ssize_t sent; n; data += sent, n -= (size_t)sent) if ((sent = send(c->s, data, n, MSG_NOSIGNAL)) <= 0) return 0;
+  for (ssize_t sent; n; data += sent, n -= (size_t)sent)
+    if ((sent = send(c->s, data, n, MSG_NOSIGNAL)) <= 0) return 0;
   return 1;
 }
 

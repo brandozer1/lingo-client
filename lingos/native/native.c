@@ -1,12 +1,12 @@
-// native.c - the native lingo, for Windows: call a function in Windows or any DLL directly, by its name and the shape of
+// native.c - the base call native.call, on Windows alone: call a function in Windows or any DLL directly, by its name and the shape of
 // what it takes and returns, so any of them can be run without code written for each one. Built into the lingo client for
-// Windows x64 by core/build.ps1, with a small vendored part of libffi (libffi/, MIT) to arrange the call. Needs the run permission,
+// Windows x64 by core/build.ps1 and added by windows.c, with a small vendored part of libffi (libffi/, MIT) to arrange the call. Needs the run permission,
 // since a call can do anything the computer can.
 //
 // 1. type(name)              -> the libffi type for a layout name, or NULL
 //    call(r, a)              -> native.call(library, function, returns, args): loads library, finds function, calls it
 //                              with args and gives back its answer as returns says
-// 2. lingo_phrases()         -> the one phrase, called by the core on load
+// 2. native_calls()          -> the one call, added as the lingo client starts (windows.c base_calls)
 #include "lingo.h"
 #include <ffi.h>
 #include <stdint.h>
@@ -37,23 +37,58 @@ static ffi_type *type(const char *name) {
 }
 
 // One argument's room, big enough for any scalar or a pointer, and its address is what libffi is given.
-typedef union { int8_t i8; uint8_t u8; int16_t i16; uint16_t u16; int32_t i32; uint32_t u32; int64_t i64; uint64_t u64; float f32; double f64; void *ptr; } slot;
+typedef union {
+  int8_t i8;
+  uint8_t u8;
+  int16_t i16;
+  uint16_t u16;
+  int32_t i32;
+  uint32_t u32;
+  int64_t i64;
+  uint64_t u64;
+  float f32;
+  double f64;
+  void *ptr;
+} slot;
 
 // A number put into a slot as the layout's width, or a text's bytes as a pointer.
 static void put(run *r, slot *s, const char *t, val *v) {
-  if (!strcmp(t, "text") || !strcmp(t, "cstring")) { s->ptr = (void *)str(r, v); return; }
-  if (!strcmp(t, "pointer")) { s->ptr = (void *)(uintptr_t)num_of(r, v, "a pointer"); return; }
+  if (!strcmp(t, "text") || !strcmp(t, "cstring")) {
+    s->ptr = (void *)str(r, v);
+    return;
+  }
+  if (!strcmp(t, "pointer")) {
+    s->ptr = (void *)(uintptr_t)num_of(r, v, "a pointer");
+    return;
+  }
   double n = num_of(r, v, "an argument");
-  if (!strcmp(t, "i8")) s->i8 = (int8_t)n; else if (!strcmp(t, "u8")) s->u8 = (uint8_t)n;
-  else if (!strcmp(t, "i16")) s->i16 = (int16_t)n; else if (!strcmp(t, "u16")) s->u16 = (uint16_t)n;
-  else if (!strcmp(t, "i32")) s->i32 = (int32_t)n; else if (!strcmp(t, "u32")) s->u32 = (uint32_t)n;
-  else if (!strcmp(t, "i64")) s->i64 = (int64_t)n; else if (!strcmp(t, "u64")) s->u64 = (uint64_t)n;
-  else if (!strcmp(t, "f32")) s->f32 = (float)n; else if (!strcmp(t, "f64")) s->f64 = n;
+  if (!strcmp(t, "i8"))
+    s->i8 = (int8_t)n;
+  else if (!strcmp(t, "u8"))
+    s->u8 = (uint8_t)n;
+  else if (!strcmp(t, "i16"))
+    s->i16 = (int16_t)n;
+  else if (!strcmp(t, "u16"))
+    s->u16 = (uint16_t)n;
+  else if (!strcmp(t, "i32"))
+    s->i32 = (int32_t)n;
+  else if (!strcmp(t, "u32"))
+    s->u32 = (uint32_t)n;
+  else if (!strcmp(t, "i64"))
+    s->i64 = (int64_t)n;
+  else if (!strcmp(t, "u64"))
+    s->u64 = (uint64_t)n;
+  else if (!strcmp(t, "f32"))
+    s->f32 = (float)n;
+  else if (!strcmp(t, "f64"))
+    s->f64 = n;
 }
 
 // 1.
 static val *call(run *r, val **a) {
-  const char *library = str(r, a[0]), *function = str(r, a[1]), *ret = str(r, a[2]);
+  const char *library = str(r, a[0]);
+  const char *function = str(r, a[1]);
+  const char *ret = str(r, a[2]);
   val *args = a[3] && a[3]->k == V_LIST ? a[3] : NULL;
   size_t n = args ? args->l.n : 0;
   ffi_type *rtype = type(ret);
@@ -70,13 +105,20 @@ static val *call(run *r, val **a) {
     if (arg->k != V_REC) fail(r, "phrase", "each argument is a record like {type: \"i32\", value: 5}");
     const char *t = str(r, rec_get(arg, "type") ? rec_get(arg, "type") : NOTHING);
     atypes[i] = type(t);
-    if (!atypes[i] || atypes[i] == &ffi_type_void) fail(r, "phrase", "native.call doesn't know the argument type %s", t);
+    if (!atypes[i] || atypes[i] == &ffi_type_void)
+      fail(r, "phrase", "native.call doesn't know the argument type %s", t);
     put(r, &slots[i], t, rec_get(arg, "value") ? rec_get(arg, "value") : NOTHING);
     avalues[i] = &slots[i];
   }
   ffi_cif cif;
-  if (ffi_prep_cif(&cif, FFI_DEFAULT_ABI, (unsigned)n, rtype, atypes) != FFI_OK) fail(r, "phrase", "native.call couldn't arrange the call to %s", function);
-  union { ffi_arg i; float f32; double f64; void *ptr; } out;
+  if (ffi_prep_cif(&cif, FFI_DEFAULT_ABI, (unsigned)n, rtype, atypes) != FFI_OK)
+    fail(r, "phrase", "native.call couldn't arrange the call to %s", function);
+  union {
+    ffi_arg i;
+    float f32;
+    double f64;
+    void *ptr;
+  } out;
   ffi_call(&cif, FFI_FN(sym), &out, avalues);
   if (!strcmp(ret, "none")) return NOTHING;
   if (!strcmp(ret, "f32")) return v_num(r->a, out.f32);
@@ -95,8 +137,10 @@ static val *call(run *r, val **a) {
 
 // Called once as the lingo client starts (windows.c base_calls).
 void native_calls(void) {
-  phrase_add("native", "run", "call(library, function, returns, args=nothing) -> value: calls a function in Windows or a DLL "
-             "by name. library is its file, like \"kernel32.dll\", or \"\" for this program. returns and each argument's type is "
-             "one of i8 u8 i16 u16 i32 u32 i64 u64 (whole numbers), f32 f64 (decimals), pointer, text, cstring, or none. args is "
-             "a list of {type, value}", call);
+  phrase_add("native", "run",
+      "call(library, function, returns, args=nothing) -> value: calls a function in Windows or a DLL "
+      "by name. library is its file, like \"kernel32.dll\", or \"\" for this program. returns and each argument's type is "
+      "one of i8 u8 i16 u16 i32 u32 i64 u64 (whole numbers), f32 f64 (decimals), pointer, text, cstring, or none. args is "
+      "a list of {type, value}",
+      call);
 }

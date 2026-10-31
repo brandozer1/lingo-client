@@ -32,7 +32,7 @@ links them through the lingos they use, the same C on every computer, and `run.c
 13. The tree: what the compiler gives
 14. Laid out and dense
 15. The core: what every computer has
-16. The Windows lingos
+16. The base calls
 
 ## 1. Words and layout
 
@@ -203,8 +203,8 @@ levels as it needs to tell it apart, so `media.player.play()` is the phrase `pla
 **Local things need no operator.** A dotted call is always to something on this computer, checked before the program
 runs, its name and how many values it takes, as below:
 
-- **A group the core or a native lingo has,** like `std.length(x)`, `store.get(key)`, `http.send(...)` or the Windows
-  lingo's `files.read(path)` and `window.list()`. A file is reached by its path, as text, through `files`:
+- **A group the core or a native lingo has,** like `std.length(x)`, `store.get(key)`, `http.send(...)` or the base
+  calls' `files.read(path)` and `window.list()`. A file is reached by its path, as text, through `files`:
   `files.read("~/notes/today.txt")`.
 - **A standard function,** with nothing to install or import: `text.split(s, ",")`, `list.sort(rows, "price")`,
   `json.get(v, "a.b")`, `request.get(address)` (section 15).
@@ -213,8 +213,8 @@ runs, its name and how many values it takes, as below:
 - **Anything else doesn't compile,** and says to use `use(...)`: `There's no lingo or group called notes here. To reach
   one somewhere else, write use("its address"), like use("laptop.brandon/notes/add")`.
 - **Inside a `try`, a group this computer hasn't got compiles,** and fails with `unknown` as the line runs, which the
-  `catch` takes: how a lingo uses what only some computers have, like the Windows lingo's chat, and does without it
-  elsewhere: `try {answers = chat.ask(questions)} catch e {return {questions: questions}}`. A group it has is checked
+  `catch` takes: how a lingo uses what only some computers have and does without it elsewhere:
+  `try {answers = maps.route(from, to)} catch e {return {error: "This computer has no maps"}}`. A group it has is checked
   as ever, so a misspelled phrase still doesn't compile.
 
 **`use(address, values)`** reaches anything somewhere else, in one line, and gives back its answer, like `lingo(...)` part
@@ -384,7 +384,7 @@ code calling them can't tell them apart:
 
 **What a model reads.** The onsay lingo tells Onsay what every running lingo shares, its catalog: each lingo's whole
 manifest (section 11), every function with what it does and its values as JSON Schema. A native phrase says what it
-gives in its `description`, the way the Windows lingo writes it: `-> [{name,path,size,folder,changed}]` is a list of those records, `x?` is x or
+gives in its `description`, the way the base calls write it: `-> [{name,path,size,folder,changed}]` is a list of those records, `x?` is x or
 nothing, `a|b` is either, and `bool` is true or false.
 
 **Needs** are what a phrase uses on the computer, from one shared list: `net`, `store`, `files.read`, `files.write`,
@@ -549,8 +549,8 @@ JSON record by name, `{"k": "milk"}`, or a list in order, or `GET /memo/recall?k
 value as JSON (`core/README.md`, *Requests*).
 
 **A native lingo** is its library and its `openapi.json`, like `notes.lingo` holding `notes.dll`, which adds its
-phrases as it loads (`core/README.md`). The lingos built into the lingo client, onsay everywhere and windows and native
-on Windows, are native lingos compiled into it: never in the lingos folder, always running, `built in` as their program. Its paths are made from those phrases. A folder with neither an `openapi.json`
+phrases as it loads (`core/README.md`). The onsay lingo, built into the lingo client on every
+computer, is a native lingo compiled into it: never in the lingos folder, always running, `built in` as its program. Its paths are made from those phrases. A folder with neither an `openapi.json`
 nor a program isn't a lingo and is left alone.
 
 **Loading.** The lingo client compiles every lingo in its folder when it loads it, so a broken one is set aside with
@@ -719,15 +719,13 @@ catalog, and they run as part of the lingo calling them, under its permissions.
 A lingo in the folder can't take one of these names. Whether text or a list holds something is the operator `in`. What is around a `lingo(...)`, the computer and its time, goes with it, so no phrase
 says what the computer is.
 
-## 16. The Windows lingos
+## 16. The base calls
 
-The lingo client for Windows has two native lingos built in, from `lingos/`, beside onsay, which every computer has
-(`lingos/onsay/README.md`). The one lingo every install ships is `agent`, from `lingo-library`. Their phrases,
-with what each gives, does and needs, are in the catalog, and in `windows_lingo` and `native_lingo` in their C.
-
-- **The base calls**, the same names on every computer, at `/onsay/<group>/<call>`, for this account's own devices and
-  anyone with the prompt key. A call a device can't do says so when called, so a lingo written on one computer works on
-  any other. They are not a lingo, and no app list shows them. Linux has `files`, `commands` and `chat` so far:
+The base calls have the same names on every computer, at `/onsay/<group>/<call>`, for this account's own devices and
+anyone with the prompt key. A call a device can't do says so when called, so a lingo written on one computer works on
+any other. They are not a lingo, and no app list shows them. With what each gives, does and needs, they are in the
+catalog, and in the tables `lingos/onsay/calls_every.h` and `calls_device.h`. Linux has `files`, `commands` and `chat` so
+far. The one lingo every install ships beside them is `agent`, from `lingo-library`.
 
   | Group       | Phrases                                                              |
   |-------------|----------------------------------------------------------------------|
@@ -735,19 +733,19 @@ with what each gives, does and needs, are in the catalog, and in `windows_lingo`
   | `controls`  | `find`, `list`, `read`, `press`, `fill`, `toggle`, `pick`, `scroll`, `wait_for` |
   | `files`     | `read`, `write`, `add_to`, `edit`, `exists`, `list`, `find`, `search`, `copy`, `move`, `delete`, `make_folder` |
   | `clipboard` | `read`, `write`                                                      |
-  | `commands`  | `run`, `running`, `stop`                                             |
+  | `commands`  | `run`, `start`, `output`, `running`, `stop`                          |
   | `notify`    | `show`                                                               |
   | `panel`     | `show`, `hide`: a small window of Onsay's own showing a page of HTML |
   | `input`     | the mouse and keyboard the way a person uses them, through Onsay's own pointer: `cursor`, `click_text`, `click_on`, `type_into`, `type`, `paste`, `shortcut`, `type_lines`, `scroll_to_text`, `wait_for_text`, `copy_all`, `point_text`, `point_on`, `point_at`, `stop_pointing`, `click_in`, `move_in`, `drag_in`, `scroll_in`, `position_in` |
   | `look`      | the screen read: `screenshot`, `elements`, `overview`, `focused`, `page`, `lines`, `buttons`, `fields`, `near`, `find_text`, `open_windows` |
   | `chat`      | the person's Onsay chat on this computer, for any lingo running for them: `ask`, `say`, `step` |
 
-- **`native`**, a base call on Windows only: `native.call(library, function, returns, args)` calls any function in Windows or a DLL by
+On Windows alone there is also `native.call(library, function, returns, args)` calls any function in Windows or a DLL by
   its name and layout, needing `run`.
 
 Conventions that matter in practice:
 - **Paths:** write them with `/`, as in `"~/notes/today.txt"`, so text never needs escapes. A path may start with `~`
-  (home) or `downloads`, `desktop` or `documents`, which are found through Windows even when they've been moved. Any
+  (home) or `downloads`, `desktop` or `documents`, which on Windows are found even when they've been moved. Any
   other path that doesn't start at a drive starts at the person's home.
 - **Onsay's pointer:** every phrase that clicks, moves, drags, scrolls, presses, types, pastes or fills shows it, with
   no asking: his arrow glides there and a click ripples, and where he types it is a text cursor that ticks while the

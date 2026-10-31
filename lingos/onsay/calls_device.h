@@ -1,7 +1,7 @@
 // calls_device.h - the base calls that need a screen or a desktop: windows, controls, the clipboard, notifications, Onsay's panel, input and look.
-// One call, one line: CALL(group, what it needs, its words, its function). A file that includes this says what CALL does, and
-// WINDOW, CONTROL and FILE_ are what those things are, written out where a call gives one. Every computer has every call
-// under the same name, so a lingo written on one works on any other, and a call a device can't do says so when called.
+// One call, one line: CALL(group, what it needs, its words, its function). A file that includes this says what CALL does,
+// and calls_shared.c what WINDOW, CONTROL and FILE_ are. Every computer has every call under the same name, so a lingo
+// written on one works on any other, and a call a device can't do says so when called.
 CALL("window", "screen.read", "list() -> [" WINDOW "]: every window open on this computer, front to back, with its id, app, title and place", win_list)
 CALL("window", "screen.read", "current() -> " WINDOW ": the one in front, never Onsay's own chat", win_front)
 CALL("window", "screen.act", "open(target) -> " WINDOW "?: opens an app, file, folder or web address, like notepad, target being its name or path", win_open)

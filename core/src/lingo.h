@@ -54,6 +54,7 @@ arena *arena_new(void);
 void arena_free(arena *a);
 void *arena_get(arena *a, size_t size);
 size_t arena_used(arena *a);
+char *arena_fmt(arena *a, const char *fmt, ...);   // text made in an arena, like printf
 
 extern val V_NOTHING_VAL, V_TRUE_VAL, V_FALSE_VAL;
 #define NOTHING (&V_NOTHING_VAL)
@@ -76,7 +77,8 @@ const char *kind_name(val *x);
 void header_add(arena *a, val *headers, const char *name, size_t n, const char *value, size_t vn);
 val *header_lines(arena *a, const char *s);   // "Name: value" lines, each ending \r\n, as that record
 
-// UTF-8: how many characters, where character i starts, and whether bytes are text at all.
+// UTF-8: how many characters, where character i starts, how wide a character is, and whether bytes are text at all.
+size_t utf8_width(unsigned char first);
 size_t utf8_count(const char *s, size_t len);
 size_t utf8_offset(const char *s, size_t len, size_t index);
 int utf8_ok(const char *s, size_t len);

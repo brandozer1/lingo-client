@@ -17,8 +17,15 @@
 
 ////////// 1. ARENA //////////
 
-typedef struct chunk { struct chunk *next; size_t used, size; _Alignas(16) char data[]; } chunk;
-struct arena { chunk *head; size_t total; };
+typedef struct chunk {
+  struct chunk *next;
+  size_t used, size;
+  _Alignas(16) char data[];
+} chunk;
+struct arena {
+  chunk *head;
+  size_t total;
+};
 
 #define CHUNK 65536
 
@@ -30,7 +37,10 @@ arena *arena_new(void) {
 
 void arena_free(arena *a) {
   if (!a) return;
-  for (chunk *c = a->head, *n; c; c = n) { n = c->next; free(c); }
+  for (chunk *c = a->head, *n; c; c = n) {
+    n = c->next;
+    free(c);
+  }
   free(a);
 }
 
@@ -42,7 +52,13 @@ void *arena_get(arena *a, size_t size) {
     chunk *own = malloc(sizeof(chunk) + size);
     if (!own) abort();
     own->size = own->used = size;
-    if (c) { own->next = c->next; c->next = own; } else { own->next = NULL; a->head = own; }
+    if (c) {
+      own->next = c->next;
+      c->next = own;
+    } else {
+      own->next = NULL;
+      a->head = own;
+    }
     a->total += size;
     memset(own->data, 0, size);
     return own->data;
@@ -64,9 +80,23 @@ void *arena_get(arena *a, size_t size) {
 
 size_t arena_used(arena *a) { return a->total; }
 
+char *arena_fmt(arena *a, const char *fmt, ...) {
+  va_list ap, again;
+  va_start(ap, fmt);
+  va_copy(again, ap);
+  int n = vsnprintf(NULL, 0, fmt, ap);
+  va_end(ap);
+  char *s = arena_get(a, (size_t)n + 1);
+  vsnprintf(s, (size_t)n + 1, fmt, again);
+  va_end(again);
+  return s;
+}
+
 ////////// 2. VALUES //////////
 
-val V_NOTHING_VAL = { .k = V_NOTHING }, V_TRUE_VAL = { .k = V_BOOL, .b = 1 }, V_FALSE_VAL = { .k = V_BOOL, .b = 0 };
+val V_NOTHING_VAL = { .k = V_NOTHING };
+val V_TRUE_VAL = { .k = V_BOOL, .b = 1 };
+val V_FALSE_VAL = { .k = V_BOOL, .b = 0 };
 
 val *v_num(arena *a, double n) {
   val *v = arena_get(a, sizeof *v);
@@ -110,17 +140,25 @@ void list_push(arena *a, val *list, val *x) {
 }
 
 val *rec_get(val *r, const char *key) {
-  for (size_t i = 0; r && r->k == V_REC && i < r->r.n; i++) if (!strcmp(r->r.key[i], key)) return r->r.v[i];
+  for (size_t i = 0; r && r->k == V_REC && i < r->r.n; i++)
+    if (!strcmp(r->r.key[i], key)) return r->r.v[i];
   return NULL;
 }
 
 void rec_set(arena *a, val *r, const char *key, val *x) {
-  for (size_t i = 0; i < r->r.n; i++) if (!strcmp(r->r.key[i], key)) { r->r.v[i] = x; return; }
+  for (size_t i = 0; i < r->r.n; i++)
+    if (!strcmp(r->r.key[i], key)) {
+      r->r.v[i] = x;
+      return;
+    }
   if (r->r.n == r->r.cap) {
     size_t cap = r->r.cap ? r->r.cap * 2 : 8;
     char **k = arena_get(a, cap * sizeof *k);
     val **v = arena_get(a, cap * sizeof *v);
-    if (r->r.n) { memcpy(k, r->r.key, r->r.n * sizeof *k); memcpy(v, r->r.v, r->r.n * sizeof *v); }
+    if (r->r.n) {
+      memcpy(k, r->r.key, r->r.n * sizeof *k);
+      memcpy(v, r->r.v, r->r.n * sizeof *v);
+    }
     r->r.key = k;
     r->r.v = v;
     r->r.cap = cap;
@@ -138,20 +176,27 @@ const char *text_or(val *r, const char *key, const char *fallback) {
 }
 
 void header_add(arena *a, val *headers, const char *name, size_t n, const char *value, size_t vn) {
-  buf low = { 0 }, both = { 0 };
+  buf low = { 0 };
+  buf both = { 0 };
   for (size_t i = 0; i < n; i++) buf_chr(&low, (char)(name[i] >= 'A' && name[i] <= 'Z' ? name[i] + 32 : name[i]));
   val *had = rec_get(headers, low.s ? low.s : "");
-  if (had) { buf_add(&both, had->t.s, had->t.len); buf_str(&both, ", "); }
+  if (had) {
+    buf_add(&both, had->t.s, had->t.len);
+    buf_str(&both, ", ");
+  }
   buf_add(&both, value, vn);
   rec_set(a, headers, low.s ? low.s : "", v_text(a, both.s ? both.s : "", both.n));
-  buf_free(&low), buf_free(&both);
+  buf_free(&low);
+  buf_free(&both);
 }
 
 val *header_lines(arena *a, const char *s) {
   val *out = v_rec(a);
   for (const char *end; *s; s = *end ? end + 2 : end) {
     if (!(end = strstr(s, "\r\n"))) end = s + strlen(s);
-    const char *colon = memchr(s, ':', (size_t)(end - s)), *v = colon, *stop = end;
+    const char *colon = memchr(s, ':', (size_t)(end - s));
+    const char *v = colon;
+    const char *stop = end;
     if (!colon || colon == s) continue;   // the status line
     while (++v < end && (*v == ' ' || *v == '\t')) {}
     while (stop > v && (stop[-1] == ' ' || stop[-1] == '\t')) stop--;
@@ -185,7 +230,8 @@ int v_same(val *a, val *b) {
     case V_TEXT: return a->t.len == b->t.len && !memcmp(a->t.s, b->t.s, a->t.len);
     case V_LIST:
       if (a->l.n != b->l.n) return 0;
-      for (size_t i = 0; i < a->l.n; i++) if (!v_same(a->l.v[i], b->l.v[i])) return 0;
+      for (size_t i = 0; i < a->l.n; i++)
+        if (!v_same(a->l.v[i], b->l.v[i])) return 0;
       return 1;
     case V_REC:
       if (a->r.n != b->r.n) return 0;
@@ -211,7 +257,8 @@ static int cont(unsigned char c) { return (c & 0xC0) == 0x80; }
 
 size_t utf8_count(const char *s, size_t len) {
   size_t n = 0;
-  for (size_t i = 0; i < len; i++) if (!cont((unsigned char)s[i])) n++;
+  for (size_t i = 0; i < len; i++)
+    if (!cont((unsigned char)s[i])) n++;
   return n;
 }
 
@@ -225,13 +272,23 @@ size_t utf8_offset(const char *s, size_t len, size_t index) {
   return len;
 }
 
+// How many bytes the character starting with this byte has, or 0 when no character starts with it.
+size_t utf8_width(unsigned char first) {
+  if (first < 0x80) return 1;
+  if ((first & 0xE0) == 0xC0) return 2;
+  if ((first & 0xF0) == 0xE0) return 3;
+  if ((first & 0xF8) == 0xF0) return 4;
+  return 0;
+}
+
 // 1 when every character is whole, 0 for bytes that aren't text.
 int utf8_ok(const char *s, size_t len) {
   for (size_t i = 0; i < len;) {
     unsigned char c = (unsigned char)s[i];
-    size_t w = c < 0x80 ? 1 : (c & 0xE0) == 0xC0 ? 2 : (c & 0xF0) == 0xE0 ? 3 : (c & 0xF8) == 0xF0 ? 4 : 0;
+    size_t w = utf8_width(c);
     if (!w || i + w > len) return 0;
-    for (size_t k = 1; k < w; k++) if (!cont((unsigned char)s[i + k])) return 0;
+    for (size_t k = 1; k < w; k++)
+      if (!cont((unsigned char)s[i + k])) return 0;
     i += w;
   }
   return 1;
@@ -263,7 +320,10 @@ void buf_fmt(buf *b, const char *fmt, ...) {
   int n = vsnprintf(small, sizeof small, fmt, ap);
   va_end(ap);
   if (n < 0) return;
-  if ((size_t)n < sizeof small) { buf_add(b, small, (size_t)n); return; }
+  if ((size_t)n < sizeof small) {
+    buf_add(b, small, (size_t)n);
+    return;
+  }
   char *big = malloc((size_t)n + 1);
   if (!big) abort();
   va_start(ap, fmt);
@@ -273,16 +333,29 @@ void buf_fmt(buf *b, const char *fmt, ...) {
   free(big);
 }
 
-void buf_free(buf *b) { free(b->s); b->s = NULL; b->n = b->cap = 0; }
+void buf_free(buf *b) {
+  free(b->s);
+  b->s = NULL;
+  b->n = b->cap = 0;
+}
 
 ////////// 5. NUMBERS //////////
 
 /* JavaScript's rule: the fewest digits that read back as the same number, then laid out plainly between 1e-7 and 1e21,
    and with an exponent outside that. 3 is "3", 0.1 is "0.1", 1e21 is "1e+21". */
 void buf_num(buf *b, double n) {
-  if (isnan(n)) { buf_str(b, "NaN"); return; }
-  if (isinf(n)) { buf_str(b, n < 0 ? "-Infinity" : "Infinity"); return; }
-  if (n == 0) { buf_chr(b, '0'); return; }
+  if (isnan(n)) {
+    buf_str(b, "NaN");
+    return;
+  }
+  if (isinf(n)) {
+    buf_str(b, n < 0 ? "-Infinity" : "Infinity");
+    return;
+  }
+  if (n == 0) {
+    buf_chr(b, '0');
+    return;
+  }
   char tmp[40];
   for (int p = 1; p <= 17; p++) {
     snprintf(tmp, sizeof tmp, "%.*e", p - 1, n);
@@ -290,10 +363,14 @@ void buf_num(buf *b, double n) {
   }
   // tmp is like -1.2345e+05: the sign, the digits without the point, and the exponent.
   const char *s = tmp;
-  if (*s == '-') { buf_chr(b, '-'); s++; }
+  if (*s == '-') {
+    buf_chr(b, '-');
+    s++;
+  }
   char digits[24];
   int k = 0;
-  for (; *s && *s != 'e'; s++) if (*s != '.') digits[k++] = *s;
+  for (; *s && *s != 'e'; s++)
+    if (*s != '.') digits[k++] = *s;
   while (k > 1 && digits[k - 1] == '0') k--;
   digits[k] = 0;
   int point = atoi(s + 1) + 1;   // where the point goes, counted from the first digit
@@ -310,7 +387,10 @@ void buf_num(buf *b, double n) {
     buf_add(b, digits, (size_t)k);
   } else {
     buf_chr(b, digits[0]);
-    if (k > 1) { buf_chr(b, '.'); buf_add(b, digits + 1, (size_t)(k - 1)); }
+    if (k > 1) {
+      buf_chr(b, '.');
+      buf_add(b, digits + 1, (size_t)(k - 1));
+    }
     buf_fmt(b, "e%c%d", point - 1 < 0 ? '-' : '+', abs(point - 1));
   }
 }
@@ -330,8 +410,10 @@ void buf_json_str(buf *b, const char *s, size_t n) {
       case '\b': buf_str(b, "\\b"); break;
       case '\f': buf_str(b, "\\f"); break;
       default:
-        if (c < 0x20) buf_fmt(b, "\\u%04x", c);
-        else buf_chr(b, (char)c);
+        if (c < 0x20)
+          buf_fmt(b, "\\u%04x", c);
+        else
+          buf_chr(b, (char)c);
     }
   }
   buf_chr(b, '"');
@@ -342,13 +424,18 @@ void buf_json(buf *b, val *x) {
     case V_NOTHING: buf_str(b, "null"); break;
     case V_BOOL: buf_str(b, x->b ? "true" : "false"); break;
     case V_NUM:
-      if (isnan(x->n) || isinf(x->n)) buf_str(b, "null");
-      else buf_num(b, x->n);
+      if (isnan(x->n) || isinf(x->n))
+        buf_str(b, "null");
+      else
+        buf_num(b, x->n);
       break;
     case V_TEXT: buf_json_str(b, x->t.s, x->t.len); break;
     case V_LIST:
       buf_chr(b, '[');
-      for (size_t i = 0; i < x->l.n; i++) { if (i) buf_chr(b, ','); buf_json(b, x->l.v[i]); }
+      for (size_t i = 0; i < x->l.n; i++) {
+        if (i) buf_chr(b, ',');
+        buf_json(b, x->l.v[i]);
+      }
       buf_chr(b, ']');
       break;
     case V_REC:
@@ -376,17 +463,42 @@ void buf_text(buf *b, val *x) {
 
 ////////// 7. JSON IN //////////
 
-typedef struct { arena *a; const char *s, *end; const char *error; int depth; } reader;
+typedef struct {
+  arena *a;
+  const char *s, *end;
+  const char *error;
+  int depth;
+} reader;
 
-static void skip(reader *r) { while (r->s < r->end && (*r->s == ' ' || *r->s == '\n' || *r->s == '\r' || *r->s == '\t')) r->s++; }
-static val *bad(reader *r, const char *why) { if (!r->error) r->error = why; return NULL; }
+static void skip(reader *r) {
+  while (r->s < r->end && (*r->s == ' ' || *r->s == '\n' || *r->s == '\r' || *r->s == '\t')) r->s++;
+}
+static val *bad(reader *r, const char *why) {
+  if (!r->error) r->error = why;
+  return NULL;
+}
 
 static void put_utf8(buf *b, uint32_t c) {
   char o[4];
-  if (c < 0x80) { o[0] = (char)c; buf_add(b, o, 1); }
-  else if (c < 0x800) { o[0] = (char)(0xC0 | c >> 6); o[1] = (char)(0x80 | (c & 63)); buf_add(b, o, 2); }
-  else if (c < 0x10000) { o[0] = (char)(0xE0 | c >> 12); o[1] = (char)(0x80 | (c >> 6 & 63)); o[2] = (char)(0x80 | (c & 63)); buf_add(b, o, 3); }
-  else { o[0] = (char)(0xF0 | c >> 18); o[1] = (char)(0x80 | (c >> 12 & 63)); o[2] = (char)(0x80 | (c >> 6 & 63)); o[3] = (char)(0x80 | (c & 63)); buf_add(b, o, 4); }
+  if (c < 0x80) {
+    o[0] = (char)c;
+    buf_add(b, o, 1);
+  } else if (c < 0x800) {
+    o[0] = (char)(0xC0 | c >> 6);
+    o[1] = (char)(0x80 | (c & 63));
+    buf_add(b, o, 2);
+  } else if (c < 0x10000) {
+    o[0] = (char)(0xE0 | c >> 12);
+    o[1] = (char)(0x80 | (c >> 6 & 63));
+    o[2] = (char)(0x80 | (c & 63));
+    buf_add(b, o, 3);
+  } else {
+    o[0] = (char)(0xF0 | c >> 18);
+    o[1] = (char)(0x80 | (c >> 12 & 63));
+    o[2] = (char)(0x80 | (c >> 6 & 63));
+    o[3] = (char)(0x80 | (c & 63));
+    buf_add(b, o, 4);
+  }
 }
 
 static int hex4(reader *r, uint32_t *out) {
@@ -395,10 +507,14 @@ static int hex4(reader *r, uint32_t *out) {
   for (int i = 0; i < 4; i++) {
     char c = r->s[i];
     v <<= 4;
-    if (c >= '0' && c <= '9') v |= (uint32_t)(c - '0');
-    else if (c >= 'a' && c <= 'f') v |= (uint32_t)(c - 'a' + 10);
-    else if (c >= 'A' && c <= 'F') v |= (uint32_t)(c - 'A' + 10);
-    else return 0;
+    if (c >= '0' && c <= '9')
+      v |= (uint32_t)(c - '0');
+    else if (c >= 'a' && c <= 'f')
+      v |= (uint32_t)(c - 'a' + 10);
+    else if (c >= 'A' && c <= 'F')
+      v |= (uint32_t)(c - 'A' + 10);
+    else
+      return 0;
   }
   r->s += 4;
   *out = v;
@@ -410,11 +526,16 @@ static int string_in(reader *r, buf *b) {
   while (r->s < r->end) {
     char c = *r->s++;
     if (c == '"') return 1;
-    if (c != '\\') { buf_chr(b, c); continue; }
+    if (c != '\\') {
+      buf_chr(b, c);
+      continue;
+    }
     if (r->s >= r->end) return 0;
     char e = *r->s++;
     switch (e) {
-      case '"': case '\\': case '/': buf_chr(b, e); break;
+      case '"':
+      case '\\':
+      case '/': buf_chr(b, e); break;
       case 'n': buf_chr(b, '\n'); break;
       case 't': buf_chr(b, '\t'); break;
       case 'r': buf_chr(b, '\r'); break;
@@ -447,49 +568,87 @@ static val *value_in(reader *r) {
     r->s++;
     out = v_rec(r->a);
     skip(r);
-    if (r->s < r->end && *r->s == '}') { r->s++; r->depth--; return out; }
+    if (r->s < r->end && *r->s == '}') {
+      r->s++;
+      r->depth--;
+      return out;
+    }
     for (;;) {
       skip(r);
       if (r->s >= r->end || *r->s != '"') return bad(r, "a part name must be text");
       r->s++;
       buf key = { 0 };
-      if (!string_in(r, &key)) { buf_free(&key); return bad(r, "a part name never ends"); }
+      if (!string_in(r, &key)) {
+        buf_free(&key);
+        return bad(r, "a part name never ends");
+      }
       skip(r);
-      if (r->s >= r->end || *r->s != ':') { buf_free(&key); return bad(r, "a : is missing"); }
+      if (r->s >= r->end || *r->s != ':') {
+        buf_free(&key);
+        return bad(r, "a : is missing");
+      }
       r->s++;
       val *v = value_in(r);
-      if (!v) { buf_free(&key); return NULL; }
+      if (!v) {
+        buf_free(&key);
+        return NULL;
+      }
       rec_set(r->a, out, key.s ? key.s : "", v);
       buf_free(&key);
       skip(r);
-      if (r->s < r->end && *r->s == ',') { r->s++; continue; }
-      if (r->s < r->end && *r->s == '}') { r->s++; break; }
+      if (r->s < r->end && *r->s == ',') {
+        r->s++;
+        continue;
+      }
+      if (r->s < r->end && *r->s == '}') {
+        r->s++;
+        break;
+      }
       return bad(r, "a , or } is missing");
     }
   } else if (c == '[') {
     r->s++;
     out = v_list(r->a);
     skip(r);
-    if (r->s < r->end && *r->s == ']') { r->s++; r->depth--; return out; }
+    if (r->s < r->end && *r->s == ']') {
+      r->s++;
+      r->depth--;
+      return out;
+    }
     for (;;) {
       val *v = value_in(r);
       if (!v) return NULL;
       list_push(r->a, out, v);
       skip(r);
-      if (r->s < r->end && *r->s == ',') { r->s++; continue; }
-      if (r->s < r->end && *r->s == ']') { r->s++; break; }
+      if (r->s < r->end && *r->s == ',') {
+        r->s++;
+        continue;
+      }
+      if (r->s < r->end && *r->s == ']') {
+        r->s++;
+        break;
+      }
       return bad(r, "a , or ] is missing");
     }
   } else if (c == '"') {
     r->s++;
     buf t = { 0 };
-    if (!string_in(r, &t)) { buf_free(&t); return bad(r, "text never ends"); }
+    if (!string_in(r, &t)) {
+      buf_free(&t);
+      return bad(r, "text never ends");
+    }
     out = v_text(r->a, t.s ? t.s : "", t.n);
     buf_free(&t);
-  } else if (r->end - r->s >= 4 && !memcmp(r->s, "true", 4)) { r->s += 4; out = VBOOL(1); }
-  else if (r->end - r->s >= 5 && !memcmp(r->s, "false", 5)) { r->s += 5; out = VBOOL(0); }
-  else if (r->end - r->s >= 4 && !memcmp(r->s, "null", 4)) { r->s += 4; out = NOTHING; }
-  else if (c == '-' || (c >= '0' && c <= '9')) {
+  } else if (r->end - r->s >= 4 && !memcmp(r->s, "true", 4)) {
+    r->s += 4;
+    out = VBOOL(1);
+  } else if (r->end - r->s >= 5 && !memcmp(r->s, "false", 5)) {
+    r->s += 5;
+    out = VBOOL(0);
+  } else if (r->end - r->s >= 4 && !memcmp(r->s, "null", 4)) {
+    r->s += 4;
+    out = NOTHING;
+  } else if (c == '-' || (c >= '0' && c <= '9')) {
     char tmp[64];
     size_t n = 0;
     while (r->s < r->end && n < sizeof tmp - 1 && strchr("+-0123456789.eE", *r->s)) tmp[n++] = *r->s++;
@@ -498,7 +657,8 @@ static val *value_in(reader *r) {
     double d = strtod(tmp, &stop);
     if (stop != tmp + n) return bad(r, "a number is not written right");
     out = v_num(r->a, d);
-  } else return bad(r, "something that isn't JSON");
+  } else
+    return bad(r, "something that isn't JSON");
   r->depth--;
   return out;
 }
@@ -507,7 +667,10 @@ val *json_parse(arena *a, const char *s, size_t n, const char **error) {
   reader r = { a, s, s + n, NULL, 0 };
   val *v = value_in(&r);
   skip(&r);
-  if (v && r.s != r.end) { v = NULL; r.error = "there is more after the JSON"; }
+  if (v && r.s != r.end) {
+    v = NULL;
+    r.error = "there is more after the JSON";
+  }
   if (error) *error = v ? NULL : r.error;
   return v;
 }

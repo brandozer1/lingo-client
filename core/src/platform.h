@@ -88,7 +88,7 @@ int pl_give(pl_socket *c, const char *data, size_t n);     // all of it, or 0
 void pl_hang_up(pl_socket *c);                              // closes it and frees it
 
 #ifdef _WIN32
-// UTF-8 to and from Windows' UTF-16, for Windows lingos. win_wide's text is freed with free.
+// UTF-8 to and from Windows' UTF-16, for what is written for Windows alone. win_wide's text is freed with free.
 wchar_t *win_wide(const char *s);
 void win_narrow(buf *out, const wchar_t *w, int len);   // len < 0: up to its 0
 #endif

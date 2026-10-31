@@ -1,4 +1,4 @@
-// agent.ls - The library's AI: Onsay's own, there the moment the computer is signed in, or your own key for Claude,
+// agent.ls - Your AI helper: Onsay's own AI, there the moment the computer is signed in, or your own key for Claude,
 // ChatGPT, OpenRouter, or any service that answers the way OpenAI does, like Ollama on your own computer. It talks with
 // the person and uses any lingo it needs on the way, or gives a program one answer.
 //
