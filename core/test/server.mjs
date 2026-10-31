@@ -1104,13 +1104,17 @@ const session = (link) => {
     report('catalog: a Lingo lingo from a .lingo file, its whole manifest made from its code, never the code', same(Object.keys(entry('memo') ?? {}), ['name', 'openapi']) &&
       about('memo') === "things to remember, kept in Onsay's own storage on this device." && ops('memo').length === 4 && entry('memo').openapi.openapi === '3.1.0' &&
       recall?.description === 'What was kept under that name.' && recall['x-lingo-calls'] === 0 && 'k' in (schema(recall)?.properties ?? {}) && !JSON.stringify(entry('memo')).includes('store.get'))
+    report('catalog: every value of every base call has a type, and every call says what it gives or nothing', ops('onsay').filter((o) => !o['x-lingo-internal']).every((o) => Object.entries(schema(o)?.properties ?? {}).every(([k, v]) => v.type || v.anyOf || ['x', 'value'].includes(k))))
+    report('catalog: a meaning tells a path from a sentence', schema(phrase('onsay', 'files.read'))?.properties.path.format === 'path' && schema(phrase('onsay', 'commands.run'))?.properties.command.format === 'command')
+    report('catalog: a Lingo lingo says its types in its openapi.json', schema(phrase('agent', 'agent.ask'))?.properties.prompt.type === 'string' && schema(phrase('agent', 'agent.ask'))?.properties.model.default === null)
     report('catalog: each function counts its lingo(...) calls', phrase('asker', 'asker.kept')?.['x-lingo-calls'] === 1 && phrase('asker', 'asker.forecast')?.['x-lingo-calls'] === 0)
     report('catalog: the base calls are at /onsay, what would sign it out never, and a lingo called core or windows is no more', !!phrase('onsay', 'http.send') && !!phrase('onsay', 'files.read') && !!phrase('onsay', 'commands.start') && !!phrase('onsay', 'lingo.ways') && !phrase('onsay', 'onsay.sign_out') && !phrase('onsay', 'lingo.setting') && !entry('core') && !entry('windows') && !entry('native'))
     if (phrase('onsay', 'input.click_text')) {
       const click = phrase('onsay', 'input.click_text'), ids = ops('onsay').map((o) => o['x-lingo-function'])
       report('catalog: windows, built into the lingo client, with what it is', builtIn('onsay') && about('onsay')?.length > 0)
-      report('windows: each phrase says what it gives and does, with its values', click?.description.startsWith('-> {x,y,text}: rings and clicks') &&
-        same(schema(click), { type: 'object', properties: { words: {}, window: { default: null }, nth: { default: 0 } }, required: ['words'] }))
+      report('windows: each call says what it does and gives, every value typed', click?.description.startsWith('rings and clicks') &&
+        same(schema(click), { type: 'object', properties: { words: { type: 'string' }, window: { type: ['integer', 'object', 'null'], format: 'window', default: null }, nth: { type: 'integer', default: 0 } }, required: ['words'] }) &&
+        same(click.responses['200'].content['application/json'].schema, { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, text: { type: 'string' } }, required: ['x', 'y', 'text'] }))
       report('windows: one layer, input and look, the low level groups gone', ['look.screenshot', 'input.type', 'input.point_at', 'input.cursor'].every((id) => ids.includes(id)) &&
         !ids.some((id) => /^(mouse|keyboard|screen|pointer)\.|^look\.see$|^input\.move_and_click$/.test(id)))
     } else report('catalog: windows set aside where it can\'t load', !!entry('windows')?.error)
@@ -1131,7 +1135,7 @@ const session = (link) => {
     report('the build ships one lingo, the agent, and it says what each function does', same(shipped, ['agent.lingo']) && about('agent') && !ops('agent').some((o) => !o.description))
     report('standard functions are no app: no entry in the catalog, and nothing to install', !['text', 'list', 'math', 'json', 'url', 'request', 'time', 'encode'].some((g) => entry(g)))
     report('hello: the lingo client, its version, its device key and its catalog, and nothing else', same(Object.keys(hello), ['type', 'token', 'client', 'version', 'key', 'catalog']) &&
-      hello.client === 'lingo-client' && hello.version === '0.17.1' && /^ed25519:[A-Za-z0-9+/]{43}=$/.test(hello.key) && Array.isArray(hello.catalog))
+      hello.client === 'lingo-client' && hello.version === '0.18.0' && /^ed25519:[A-Za-z0-9+/]{43}=$/.test(hello.key) && Array.isArray(hello.catalog))
     report('catalog: onsay, built in, ready, its door for prompts never in the index', builtIn('onsay') && phrase('onsay', 'onsay.serve')?.['x-lingo-internal'] === true)
     for (const [name, test, lingo] of WEB_CASES) {
       if (lingo && !has(lingo)) { skipped++; console.log(`  skip  ${name}: this core has no ${lingo}`); continue }

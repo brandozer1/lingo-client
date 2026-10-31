@@ -409,27 +409,27 @@ static val *setting_(run *r, val **a), *settings_get(run *r, val **a), *settings
 // lingo.run, lingo.use and lingo.setting are lingo(...), use(...) and setting(...), the language's own, in no listing.
 static void floor_phrases(void) {
   phrase_add("compute", "none", "now() -> number: seconds since 1970", time_);
-  phrase_add("compute", "none", "wait(seconds): at most 60", wait_);
-  phrase_add("compute", "none", "log(x): a line in the lingo client's log", log_);
-  phrase_add("store", "store", "get(key) -> text?: Onsay's own storage on this computer", get);
-  phrase_add("store", "store", "put(key, value): kept as text", put);
-  phrase_add("store", "store", "keys(prefix=\"\") -> [text]: sorted", keys);
-  phrase_add("store", "store", "delete(key)", delete_);
+  phrase_add("compute", "none", "wait(seconds: number): at most 60", wait_);
+  phrase_add("compute", "none", "log(x: any): a line in the lingo client's log", log_);
+  phrase_add("store", "store", "get(key: text) -> text?: Onsay's own storage on this computer", get);
+  phrase_add("store", "store", "put(key: text, value: any): kept as text", put);
+  phrase_add("store", "store", "keys(prefix: text=\"\") -> [text]: sorted", keys);
+  phrase_add("store", "store", "delete(key: text)", delete_);
   phrase_add("http", "net",
-      "send(method, url, headers=nothing, body=nothing, timeout=30) -> {status,headers,text}: one request, "
+      "send(method: text, url: url, headers: record=nothing, body: text=nothing, timeout: number=30) -> {status: whole, headers: record, text: text}: one request, "
       "headers a record, body text, redirects followed, at most 4 MB back",
       send_);
   phrase_add("settings", "none",
-      "get(lingo) -> [record]: every setting of a lingo, as its openapi.json and its code say, each "
+      "get(lingo: text) -> [record]: every setting of a lingo, as its openapi.json and its code say, each "
       "with its value now",
       settings_get);
-  phrase_add("settings", "none", "set(lingo, key, value): kept wherever that lingo keeps its settings", settings_set);
-  phrase_add("lingo", "none", "run(ask, values=nothing, gives=\"\")", lingo_run);
+  phrase_add("settings", "none", "set(lingo: text, key: text, value: any): kept wherever that lingo keeps its settings", settings_set);
+  phrase_add("lingo", "none", "run(ask: text, values: record=nothing, gives: text=\"\")", lingo_run);
   phrase_add("lingo", "none",
-      "ways(ask, values=nothing) -> [{does,where,address,inputs,needs}]: the best ways to do it, best first, nothing run",
+      "ways(ask: text, values: record=nothing) -> [{does: text, where: text, address: url, inputs: record, needs?: [text]}]: the best ways to do it, best first, nothing run",
       lingo_ways);
-  phrase_add("lingo", "none", "use(address, values=nothing)", lingo_use);
-  phrase_add("lingo", "none", "setting(key, reference)", setting_);
+  phrase_add("lingo", "none", "use(address: url, values: record=nothing)", lingo_use);
+  phrase_add("lingo", "none", "setting(key: text, reference: text)", setting_);
 }
 
 ////////// 3. LINGOS //////////
@@ -779,10 +779,19 @@ static val *described(arena *a, val *e) {
     const char *local = !strncmp(id, name, strlen(name)) && id[strlen(name)] == '.' ? id + strlen(name) + 1 : id;
     const char *does = text_or(f, "does", "");
     const char *words = does;
-    if (!strncmp(does, "->", 2)) {   // a native's does starts with what it gives
-      const char *colon = strstr(does, ": ");
-      words = colon ? colon + 2 : "";
+    // A lingo written in Lingo has no types in its code, so its openapi.json may say them, by function and value, its
+    // answer as "->". A native's are in its signatures.
+    val *own = rec_get(rec_get(rec_get(given, "x-lingo"), "types"), local);
+    for (size_t k = 0; own && own->k == V_REC && takes && k < takes->r.n; k++) {
+      val *type = rec_get(own, takes->r.key[k]);
+      val *fallback = rec_get(takes->r.v[k], "default");
+      if (!type || type->k != V_TEXT) continue;
+      val *made = type_schema(a, type->t.s);
+      if (fallback) rec_set(a, made, "default", fallback);
+      takes->r.v[k] = made;
     }
+    const char *gives = text_or(f, "gives", NULL);
+    if (!gives && own && own->k == V_REC) gives = text_or(own, "->", NULL);
     int serve = !strcmp(local, "serve");
     buf path = { 0 };
     buf_str(&path, route);
@@ -808,6 +817,13 @@ static val *described(arena *a, val *e) {
     rec_set(a, ok, "description",
         v_cstr(a,
             serve ? "What serve gives, for any method and any path under its route" : "The function's value, as JSON"));
+    if (gives) {
+      val *answer = v_rec(a);
+      val *json = v_rec(a);
+      rec_set(a, json, "schema", type_schema(a, gives));
+      rec_set(a, answer, "application/json", json);
+      rec_set(a, ok, "content", answer);
+    }
     rec_set(a, responses, "200", ok);
     rec_set(a, op, "responses", responses);
     rec_set(a, op, "x-lingo-function", v_cstr(a, id));

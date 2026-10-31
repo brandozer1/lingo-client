@@ -1,5 +1,8 @@
 {
   "x-lingo": {
+    "types": {
+      "ask": { "prompt": "text", "messages": "list", "model": "text", "->": "text|record" }
+    },
     "settings": [
       { "name": "claude_key", "title": "Claude API key", "about": "A Claude API key, from console.anthropic.com. One key is enough.", "secret": true },
       { "name": "openai_key", "title": "ChatGPT API key", "about": "A ChatGPT (OpenAI) API key, from platform.openai.com. One key is enough.", "secret": true },

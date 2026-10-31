@@ -1522,7 +1522,8 @@ val *lingo_load(arena *a, val *natives, val *stacked, const char **message) {
       val *required = v_list(a);
       if (rec_get(p, "needs")) rec_set(a, native, rec_get(p, "id")->t.s, rec_get(p, "needs"));
       for (size_t m = 0; m < params->l.n; m++) {
-        val *one = v_rec(a);
+        val *given = rec_get(params->l.v[m], "type");
+        val *one = given ? type_schema(a, given->t.s) : v_rec(a);
         val *d = rec_get(params->l.v[m], "default");
         val *pn = rec_get(params->l.v[m], "name");
         if (d)

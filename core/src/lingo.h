@@ -106,17 +106,20 @@ typedef val *(*phrase_fn)(run *r, val **args);
 typedef struct {
   const char *id;      // group.name
   const char *needs;   // everything it needs on the device, like "screen.act, screen.read", or "none"
-  const char *does;    // its line after the signature, like "-> [text]: sorted"
+  const char *does;    // its words, after the signature and what it gives, like "sorted"
+  const char *gives;   // what it gives, in the type words of phrase.c, like "[text]", or NULL
   phrase_fn fn;
   size_t lingo;        // the native lingo it is of, by number, core being 0
   int count;           // how many values it takes, read from its line
   char **params;
+  char **types;        // each param's type, like "path", or NULL
   val **defaults;      // NULL where a value has no default, NOTHING where it is nothing
 } phrase;
 
 typedef void (*lingo_entry)(void);   // a library's lingo_phrases, which calls phrase_add for each of its phrases
 // line is its signature, then -> what it gives and : what it does, as it needs, like "keys(prefix=\"\") -> [text]: sorted".
 void phrase_add(const char *group, const char *needs, const char *line, phrase_fn fn);
+val *type_schema(arena *a, const char *words);   // a type in words, like "[path]" or "{code: whole, out?: text}", as JSON Schema
 phrase *phrase_find(const char *id);
 void native_begin(size_t lingo);              // the phrases added from now on are native lingo number lingo's
 val *native_phrases(arena *a, size_t lingo);  // its phrases as the compiler reads them: [{id, params: [{name, default?}], does, needs}]

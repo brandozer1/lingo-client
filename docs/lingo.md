@@ -514,6 +514,11 @@ native lingo, which has no comments to read, and `x-lingo` with its settings, a 
   can't work without it, and `secret`, true for a key or a password, which a form hides. A required one with no value
   and no default is named in the catalog as `x-lingo.missing`, never its value, so Onsay won't pick the lingo on that
   computer until it is set.
+- **`types`**, which a lingo written in Lingo should give, says what its functions take and give, since its code doesn't:
+  `{"types": {"now": {"city": "text", "->": "{temp: number, sky?: text}"}}}`. The words are `text`, `number`, `whole`,
+  `bool`, `list`, `record`, `any` and `nothing`, meanings like `path`, `folder`, `command`, `url`, `pattern`, `app`
+  and `window`, `[one]`, `{field: type, maybe?: type}`, `one|other` and `one?`. A native lingo writes the same words in its
+  signatures: `read(path: path) -> text`. A value left untyped takes anything, and is still listed.
 - **`keep`**, which most lingos leave out, names two of the lingo's own functions that keep its settings wherever its
   maker wants them: `read(key)` gives one's value and `write(key, value)` keeps one. Inside them, `setting(...)` of
   that lingo reads the lingo client's own file. Without it, the lingo client keeps them in its own folder,

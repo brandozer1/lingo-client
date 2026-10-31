@@ -11,9 +11,9 @@
 #include "platform.h"
 
 // What windows, controls and files are, written out where a call gives one (calls_every.h and calls_device.h).
-#define WINDOW "{id,app,title,x,y,w,h,focused,minimized}"
-#define CONTROL "{id,role,name,value,x,y,w,h,enabled,focused,can}"
-#define FILE_ "{name,path,size,folder,changed}"
+#define WINDOW "{id: whole, app: text, title: text, x: number, y: number, w: number, h: number, focused: bool, minimized: bool}"
+#define CONTROL "{id: any, role: text, name: text, value: any, x: number, y: number, w: number, h: number, enabled: bool, focused: bool, can: [text]}"
+#define FILE_ "{name: text, path: path, size: number, folder: bool, changed: text}"
 
 #define SEARCH_MOST 5000000   // the biggest file files.search reads, in bytes
 #define SEARCH_LINE 300   // the most of a line it gives back, in bytes

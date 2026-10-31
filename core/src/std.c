@@ -145,14 +145,14 @@ static val *from_bytes(run *r, val **a) {
 ////////// 3. STD_PHRASES //////////
 
 void std_phrases(void) {
-  phrase_add("std", "none", "length(x) -> number: items, characters or parts", len);
-  phrase_add("std", "none", "keys(r) -> list: a record's part names", keys);
+  phrase_add("std", "none", "length(x: any) -> number: items, characters or parts", len);
+  phrase_add("std", "none", "keys(r: record) -> [text]: a record's part names", keys);
   phrase_add(
-      "std", "none", "slice(x, from, to=nothing) -> list|text: to not included, negative counts from the end", slice);
-  phrase_add("std", "none", "number(x) -> number?: from text like \"$1,204.50\"", num);
-  phrase_add("std", "none", "text(x) -> text", text);
-  phrase_add("std", "none", "to_json(x) -> text", json);
-  phrase_add("std", "none", "from_json(text) -> any: from JSON", parse);
-  phrase_add("std", "none", "bytes(text) -> [number]: its UTF-8 bytes, each 0 to 255", bytes);
-  phrase_add("std", "none", "from_bytes(list) -> text: UTF-8 bytes back to text", from_bytes);
+      "std", "none", "slice(x: any, from: whole, to: whole=nothing) -> list|text: to not included, negative counts from the end", slice);
+  phrase_add("std", "none", "number(x: any) -> number?: from text like \"$1,204.50\"", num);
+  phrase_add("std", "none", "text(x: any) -> text", text);
+  phrase_add("std", "none", "to_json(x: any) -> text", json);
+  phrase_add("std", "none", "from_json(text: text) -> any: from JSON", parse);
+  phrase_add("std", "none", "bytes(text: text) -> [number]: its UTF-8 bytes, each 0 to 255", bytes);
+  phrase_add("std", "none", "from_bytes(list: [number]) -> text: UTF-8 bytes back to text", from_bytes);
 }

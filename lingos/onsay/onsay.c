@@ -1302,19 +1302,19 @@ void onsay_lingo(void) {
   logging = pl_gate_new();
   lingo_hook(&hooks);
   phrase_add("onsay", "store",
-      "serve(request): /onsay, where prompts come in with this computer's prompt key, each answered by Onsay, "
+      "serve(request: record): /onsay, where prompts come in with this computer's prompt key, each answered by Onsay, "
       "and the sessions they make",
       serve);
   phrase_add("onsay", "net, store",
-      "sign_in(name=nothing) -> {url,code}, or {handle,key} on the command line: signs this computer in to "
+      "sign_in(name: text=nothing) -> {url,code}, or {handle,key} on the command line: signs this computer in to "
       "Onsay from any device's browser, at the address given with the code; status says when it is done",
       sign_in);
   phrase_add("onsay", "none", "sign_out(): this computer forgets its sign in and its key", sign_out);
   phrase_add("onsay", "net",
-      "devices() -> [{name,online,seen}]: the account's computers, whether each is online, and when each was last seen",
+      "devices() -> [{name: text, online: bool, seen?: text}]: the account's computers, whether each is online, and when each was last seen",
       devices);
   phrase_add("onsay", "none",
-      "status() -> {signed_in,signing_in,failed,running,connected,handle,device,key}: whether this computer is signed in to "
+      "status() -> {signed_in: bool, signing_in?: bool, failed?: text, running: bool, connected?: bool, handle?: text, device?: text, key?: text}: whether this computer is signed in to "
       "Onsay, and as what",
       status);
   base_calls();
