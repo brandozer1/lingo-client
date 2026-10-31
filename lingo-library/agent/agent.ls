@@ -246,8 +246,8 @@ fn guide(ai) {
     "to see what a computer has or what can do something, then run the one you choose with use. use(address, values) reaches what an address names and gives back its answer: a lingo's function, like " +
     "laptop.brandon/weather/now with the value city, or a web address, when the person or an answer names one. A tool that " +
     "fails says why: try another way, or tell the person. Only when you truly need something only the person can tell " +
-    "you, call questions with one or two short questions, with choices when there are a few likely answers. Never ask " +
-    "questions in your reply. When you have what you need, reply." +
+    "you, call questions with one or two short questions, with choices whenever there are likely answers. An answer of " +
+    "Skipped means go on without it: use a default, try another way, or say what you couldn't do. Never ask questions in your reply. When you have what you need, reply." +
     (ai.place == nothing ? "" : "\n\nYou are running on {ai.place.me}. The person's computers:{ai.place.computers}")
 }
 
@@ -266,8 +266,9 @@ fn described(kind) {
     }},
     {name: "questions", does: "Asks the person one or two short questions and gives back their answers. Where they can't be asked now, it ends your turn and their answers come as their next message. Only for what only they can tell you", takes: {
       questions: {type: "array", description: "One or two questions", items: {type: "object", properties: {
-        question: {type: "string", description: "The question, short and plain"},
-        choices: {type: "array", items: {type: "string"}, description: "A few likely answers to pick from, or none to type one"},
+        question: {type: "string", description: "The question, short and plain, like which window should I type into"},
+        why: {type: "string", description: "What the answer is for, in a few plain words"},
+        choices: {type: "array", items: {type: "string"}, description: "A few likely answers to pick from, best first. Give them whenever you can. They can also type their own or skip"},
       }, required: ["question"]}},
     }},
   ]
@@ -310,14 +311,21 @@ fn cut(text) {
   return std.slice(text, 0, most) + "\n(cut here: {std.length(text) - most} more characters)"
 }
 
-// The questions the model asks, at most two, in the questions format: a question with choices as {question, choices},
-// else its words, answered by typing. For the agent's own use.
+// The questions the model asks, at most two, in the questions format: {question, why, choices}, why and choices when it
+// gave them, else its words alone. The app adds Something else and Skip. For the agent's own use.
 fn asked(list) {
   out = []
   for q in list ?? [] {
     words = std.text(q.question ?? q)
     if std.length(out) < 2 and words != "" {
-      out += [std.length(q.choices ?? []) > 0 ? {question: words, choices: q.choices} : words]
+      if std.length(q.choices ?? []) > 0 or q.why != nothing {
+        card = {question: words}
+        if q.why != nothing {card.why = q.why}
+        if std.length(q.choices ?? []) > 0 {card.choices = q.choices}
+        out += [card]
+      } else {
+        out += [words]
+      }
     }
   }
   return out

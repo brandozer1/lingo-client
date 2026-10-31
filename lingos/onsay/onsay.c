@@ -787,6 +787,8 @@ static val *serve(run *r, val **v) {
       list_push(a, ways, v_cstr(a, "None of these"));
       rec_set(a, card, "question", v_cstr(a, "Which should I do?"));
       rec_set(a, card, "choices", ways);
+      rec_set(a, card, "other", VBOOL(0));
+      rec_set(a, card, "skip", VBOOL(0));
       list_push(a, questions, card);
       pl_enter(lock);
       step(&t, "Waiting for you to choose", 0);

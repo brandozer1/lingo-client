@@ -839,7 +839,7 @@ const WEB_CASES = [
     await web(`/onsay/sessions/${session}/answers`, { method: 'POST', body: { answers: ['None of these'] }, headers })
     const none = await refused
     return decided.at(-1).mode === 'list' && live?.running === true && same(live.steps, [{ text: 'Understanding what you asked', depth: 0 }, { text: 'Waiting for you to choose', depth: 0 }]) &&
-      same(live.questions, [{ question: 'Which should I do?', choices: ['The first, on this computer', 'The second, on this computer', 'None of these'] }]) && sent.status === 200 &&
+      same(live.questions, [{ question: 'Which should I do?', choices: ['The first, on this computer', 'The second, on this computer', 'None of these'], other: false, skip: false }]) && sent.status === 200 &&
       done.json?.text === 'you picked: ["hi Ana","hi Ana"]' && done.json.steps.some((s) => s.text === 'Picked: The second') && done.json.session === session &&
       same(after, { running: false, steps: [], questions: null }) && again.status === 404 && none.json?.text === "Okay, I didn't do any of those. Say it another way and I'll look again."
   }],
@@ -1128,7 +1128,7 @@ const session = (link) => {
     report('the build ships one lingo, the agent, and it says what each function does', same(shipped, ['agent.lingo']) && about('agent') && !ops('agent').some((o) => !o.description))
     report('standard functions are no app: no entry in the catalog, and nothing to install', !['text', 'list', 'math', 'json', 'url', 'request', 'time', 'encode'].some((g) => entry(g)))
     report('hello: the lingo client, its version, its device key and its catalog, and nothing else', same(Object.keys(hello), ['type', 'token', 'client', 'version', 'key', 'catalog']) &&
-      hello.client === 'lingo-client' && hello.version === '0.16.2' && /^ed25519:[A-Za-z0-9+/]{43}=$/.test(hello.key) && Array.isArray(hello.catalog))
+      hello.client === 'lingo-client' && hello.version === '0.16.3' && /^ed25519:[A-Za-z0-9+/]{43}=$/.test(hello.key) && Array.isArray(hello.catalog))
     report('catalog: onsay, built in, ready, sharing /onsay alone', builtIn('onsay') && ops('onsay').length === 1 && phrase('onsay', 'onsay.serve') !== undefined)
     for (const [name, test, lingo] of WEB_CASES) {
       if (lingo && !has(lingo)) { skipped++; console.log(`  skip  ${name}: this core has no ${lingo}`); continue }
