@@ -22,7 +22,7 @@
 
 #include "lingo.h"
 
-#define CORE_VERSION "0.16.3"
+#define CORE_VERSION "0.16.4"
 #define CORE_LOOK 5   // seconds between looks at the lingos folder
 
 /* Where Onsay is, built in: its API, which the onsay lingo talks to and whose resolve endpoint the lingo client asks where
@@ -33,7 +33,7 @@
 #define ONSAY_KEY "ed25519:6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw="
 #else
 #define ONSAY "https://api.onsay.dev"
-#define ONSAY_KEY "ed25519:JAyqe6gpH0e2k51yjygP66uAo92x0ebK8q3w+y/B4Tw="
+#define ONSAY_KEY "ed25519:4DnM32U1FzXfVh3ahkdILlt7yNwfM84Ofj7Aohoe1QE="
 #endif
 #define RESOLVE "/resolve/"   // on ONSAY, then the name
 
