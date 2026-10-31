@@ -2,6 +2,16 @@
 // lingos folder by its dotted name, all as they run.
 
 // What was kept under a name, asked through lingo(...).
+fn started() {
+  id = commands.start("echo started-ok").id
+  for i in 1..40 {
+    got = commands.output(id)
+    if not got.running {return got}
+    compute.wait(0.5)
+  }
+  return got
+}
+
 fn ways(task) {
   return lingo.ways(task, {name: "x"})
 }

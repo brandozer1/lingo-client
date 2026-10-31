@@ -8,7 +8,7 @@ nothing more. With the onsay lingo running and signed in, Onsay and the person's
 and its lingos can ask Onsay for anything with `lingo(...)`.
 
 A lingo is a `.lingo` file: its program, written in Lingo, a small language made for AI to read and write, or a native
-library for the computer, like `windows`, and its `openapi.json`, which says what each of its routes takes and needs
+library for the computer, and its `openapi.json`, which says what each of its routes takes and needs
 ([`docs/lingo.md`](docs/lingo.md)). The lingo client is written in C and built with Zig for Windows and Linux. It is
 Apache 2.0 licensed and made to be built on: add lingos, or wrap it in your own app.
 
@@ -17,7 +17,7 @@ Apache 2.0 licensed and made to be built on: add lingos, or wrap it in your own 
 | Folder | What it is |
 |--------|------------|
 | `core/` | The lingo client: its settings, its policy and who may call, its command line, its hooks for native lingos, and building and testing it. See its README |
-| `lingos/` | The native lingos it ships, in C: `onsay` (its connection to Onsay, signing in and `/onsay`, see its README), `windows` (Windows itself) and `native` (any Windows function, by its layout) |
+| `lingos/` | What is built in, in C: `onsay` (its connection to Onsay, signing in and `/onsay`, see its README, and the tables of base calls every computer has), `windows` and `linux` (those calls on each platform), `native` (the Windows call `native.call`), and `standard` (the standard functions, in Lingo) |
 | `lingos/standard/` | The standard functions built into the language, written in Lingo: `text`, `list`, `json`, `request` and more |
 | `lingo-library/` | Lingos that aren't built in: `agent`, the one that ships, and `writer`. See its README |
 | `docs/` | `lingo.md`: the language, and what a lingo and its `.lingo` file are |

@@ -1031,6 +1031,8 @@ static val *devices(run *r, val **v) {
 
 ////////// 7. ITS PHRASES //////////
 
+void base_calls(void);   // the calls every computer has, built for its platform: windows.c or linux.c
+
 // Called once as the lingo client starts (core.c, BUILTINS).
 void onsay_lingo(void) {
   static const lingo_hooks hooks = { "public", running, decided, ask, key };
@@ -1044,4 +1046,5 @@ void onsay_lingo(void) {
   phrase_add("onsay", "net", "devices() -> [{name,online,seen}]: the account's computers, whether each is online, and when each was last seen", devices);
   phrase_add("onsay", "none", "status() -> {signed_in,signing_in,failed,running,connected,handle,device,key}: whether this computer is signed in to "
              "Onsay, and as what", status);
+  base_calls();
 }

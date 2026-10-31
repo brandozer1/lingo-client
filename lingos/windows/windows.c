@@ -1,4 +1,4 @@
-// windows.c - the Windows lingo, built into the lingo client for Windows (build.ps1): windows, controls, files, the clipboard,
+// windows.c - the base calls on Windows, built into the lingo client for Windows (build.ps1): windows, controls, files, the clipboard,
 // commands, notifications, Onsay's panel, input (the mouse and keyboard as a person uses them), look (the screen read) and
 // chat (the person's Onsay chat). OCR and notifications have no C API, so they go through Windows PowerShell. Positions are
 // physical desktop pixels. What the app draws, Onsay's pointer, its rings, his panel and lines in the chat, goes out as a
@@ -14,7 +14,8 @@
 // 8. input                    the mouse and keyboard the way a person uses them: words on screen, controls by name, places in a window
 // 9. look                     the screen read as text, and a picture of it
 // 10. chat                    ask, say and step: questions for the person in Onsay's chat, waited for, and lines in it
-// 11. lingo_phrases()         -> every phrase joined to its function, called by the core on load
+// 11. base_calls()            -> every call joined to its function (../onsay/calls_every.h and calls_device.h), called as the
+//                               lingo client starts (onsay_lingo)
 #define COBJMACROS
 #include <initguid.h>
 #include <windows.h>
@@ -1472,6 +1473,70 @@ static val *shell_run(run *r, val **a) {
   return rec;
 }
 
+// Where a started command keeps what commands.output reads: <temp>\onsay-<id>.<what>.
+static const char *kept_at(run *r, const char *id, const char *what) {
+  wchar_t dir[MAX_PATH];
+  GetTempPathW(MAX_PATH, dir);
+  val *folder = wtext(r, dir, -1);
+  buf b = { 0 };
+  buf_fmt(&b, "%sonsay-%s.%s", folder->t.s, id, what);
+  const char *out = v_text(r->a, b.s, b.n)->t.s;
+  buf_free(&b);
+  return out;
+}
+
+// In the background, on after this call returns: PowerShell writes its output, its process id and its exit code to files.
+static val *shell_start(run *r, val **a) {
+  unsigned long long random_id = 0;
+  pl_random(&random_id, sizeof random_id);
+  buf id = { 0 }, s = { 0 }, none = { 0 };
+  buf_fmt(&id, "%llu", random_id);
+  val *given = v_text(r->a, id.s, id.n);
+  buf_free(&id);
+  const char *log = kept_at(r, given->t.s, "log"), *code = kept_at(r, given->t.s, "code"), *pid = kept_at(r, given->t.s, "pid");
+  buf_str(&s, "Set-Content -LiteralPath ");
+  ps_quote(&s, pid);
+  buf_str(&s, " -Value $PID\n$c=0\ntry { Invoke-Expression ");
+  ps_quote(&s, str(r, a[0]));
+  buf_str(&s, " *>&1 | Out-File -Encoding utf8 -LiteralPath ");
+  ps_quote(&s, log);
+  buf_str(&s, "; if ($LASTEXITCODE) { $c=$LASTEXITCODE } elseif (-not $?) { $c=1 } } catch { $_ | Out-File -Append -Encoding utf8 -LiteralPath ");
+  ps_quote(&s, log);
+  buf_str(&s, "; $c=1 }\nSet-Content -LiteralPath ");
+  ps_quote(&s, code);
+  buf_str(&s, " -Value $c");
+  powershell(r, s.s, 0, 0, &none);
+  buf_free(&s), buf_free(&none);
+  val *rec = v_rec(r->a);
+  put(r, rec, "id", given);
+  return rec;
+}
+
+// What a started command has written so far, and its exit code once it ended.
+static val *shell_output(run *r, val **a) {
+  const char *id = str(r, a[0]);
+  if (!*id || strspn(id, "0123456789") != strlen(id)) fail(r, "phrase", "that isn't the id of a started command");
+  buf log = { 0 }, code = { 0 }, pid = { 0 };
+  int began = pl_read(kept_at(r, id, "pid"), &pid);
+  if (!began) {
+    // It may only just have been started, before PowerShell has written anything.
+    nap(r, 1);
+    began = pl_read(kept_at(r, id, "pid"), &pid);
+    if (!began) fail(r, "phrase", "no started command has that id");
+  }
+  // Whether it ended first, so all it wrote is read once it has.
+  int ended = pl_read(kept_at(r, id, "code"), &code);
+  pl_read(kept_at(r, id, "log"), &log);
+  size_t skip = log.n >= 3 && !memcmp(log.s, "\xEF\xBB\xBF", 3) ? 3 : 0;
+  val *rec = v_rec(r->a);
+  put(r, rec, "running", VBOOL(!ended));
+  put(r, rec, "code", ended ? v_num(r->a, atoi(code.s + (code.n >= 3 && !memcmp(code.s, "\xEF\xBB\xBF", 3) ? 3 : 0))) : NOTHING);
+  if (began) put_num(r, rec, "pid", atoi(pid.s + (pid.n >= 3 && !memcmp(pid.s, "\xEF\xBB\xBF", 3) ? 3 : 0)));
+  put(r, rec, "out", v_text(r->a, log.n ? log.s + skip : "", log.n - skip));
+  buf_free(&log), buf_free(&code), buf_free(&pid);
+  return rec;
+}
+
 static val *shell_processes(run *r, val **a) {
   val *out = v_list(r->a);
   HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
@@ -2012,139 +2077,23 @@ static val *chat_step(run *r, val **a) { return chat_line(r, "step", a[0]); }
 
 ////////// 11. LINGO_PHRASES //////////
 
-// What windows, controls and files are, written out where a phrase gives one.
+// What windows, controls and files are, written out where a call gives one.
 #define WINDOW "{id,app,title,x,y,w,h,focused,minimized}"
 #define CONTROL "{id,role,name,value,x,y,w,h,enabled,focused,can}"
 #define FILE_ "{name,path,size,folder,changed}"
 
-// Called once as the lingo client starts (core.c, BUILTINS).
-void windows_lingo(void) {
+void native_calls(void);   // native.c
+
+// Called once as the lingo client starts (onsay_lingo).
+void base_calls(void) {
   // Every position is a real pixel, on every monitor, whatever its scale.
   typedef BOOL(WINAPI * aware_fn)(HANDLE);
   aware_fn aware = (aware_fn)(void *)GetProcAddress(GetModuleHandleW(L"user32.dll"), "SetProcessDpiAwarenessContext");
   if (aware) aware((HANDLE)-4);   // per monitor aware, version 2
 
-  phrase_add("window", "screen.read", "list() -> [" WINDOW "]: every window open on this computer, front to back, with its id, app, title and place", win_list);
-  phrase_add("window", "screen.read", "current() -> " WINDOW ": the one in front, never Onsay's own chat", win_front);
-  phrase_add("window", "screen.act", "open(target) -> " WINDOW "?: opens an app, file, folder or web address, like notepad, target being its name or path", win_open);
-  phrase_add("window", "screen.read", "wait_for(match, seconds=10) -> " WINDOW ": match {app} or {title}, part of the text is enough", win_wait);
-  phrase_add("window", "screen.act", "focus(id): brings a window to the front and gives it the keyboard", win_focus);
-  phrase_add("window", "screen.act", "close(id): closes a window", win_close);
-  phrase_add("window", "screen.act", "resize(id, how): minimizes, maximizes or restores a window, how being min, max or normal", win_size);
-  phrase_add("window", "screen.act", "move(id, x=nothing, y=nothing, w=nothing, h=nothing): moves a window on the screen or changes its size, in pixels", win_move);
-
-  phrase_add("controls", "screen.read", "find(win, match) -> [" CONTROL "]: match {name,role,value}, part of the text is enough", ui_find);
-  phrase_add("controls", "screen.read", "list(win, max=80) -> [" CONTROL "]: the buttons, boxes, menus and other controls in a window", ui_all);
-  phrase_add("controls", "screen.read", "read(win) -> text: every word of a page or document", ui_text);
-  phrase_add("controls", "screen.act", "press(control): presses a button or other control found with controls.find", ui_press);
-  phrase_add("controls", "screen.act", "fill(control, text): replaces the text in a box found with controls.find", ui_fill);
-  phrase_add("controls", "screen.act", "toggle(control): ticks or unticks a checkbox or switch", ui_toggle);
-  phrase_add("controls", "screen.act", "pick(control, option): a dropdown or list option, by name", ui_choose);
-  phrase_add("controls", "screen.act", "scroll(control, amount): scrolls a list or page inside a window, positive up", ui_scroll);
-  phrase_add("controls", "screen.read", "wait_for(win, match, seconds=10) -> " CONTROL ": waits until a control matching {name,role,value} shows in a window", ui_wait);
-
-  phrase_add("files", "files.read", "read(path) -> text: the text of a file on this computer", fs_read);
-  phrase_add("files", "files.write", "write(path, text): writes a whole text file, replacing what is there", fs_write);
-  phrase_add("files", "files.write", "add_to(path, text): adds text to the end of a file", fs_append);
-  phrase_add("files", "files.read, files.write", "edit(path, find, with, all=false) -> {replaced}: exact words in a file replaced by others, refused when they "
-             "are there more than once unless all is true", fs_edit);
-  phrase_add("files", "files.read", "exists(path) -> bool: whether a file or folder is there", fs_exists);
-  phrase_add("files", "files.read", "list(folder, pattern=\"*\") -> [" FILE_ "]: the files and folders in a folder, like the desktop or downloads", fs_list);
-  phrase_add("files", "files.read", "find(folder, pattern=\"*\") -> [" FILE_ "]: finds files and folders by name in a folder and every folder inside it", fs_find);
-  phrase_add("files", "files.read", "search(folder, words, pattern=\"*\", most=100) -> [{path,line,text}]: every line holding those words, in any case, in the "
-             "text files of a folder and every folder inside, or those whose names match pattern", fs_search);
-  phrase_add("files", "files.write", "copy(from, to): copies a file or folder, into to if it is a folder", fs_copy);
-  phrase_add("files", "files.write", "move(from, to): moves or renames a file or folder, into to if it is a folder", fs_move);
-  phrase_add("files", "files.write", "delete(path): deletes a file or folder, to the Recycle Bin", fs_delete);
-  phrase_add("files", "files.write", "make_folder(path): makes a new folder", fs_folder);
-
-  phrase_add("clipboard", "screen.read", "read() -> text: the text copied to the clipboard", clip_get);
-  phrase_add("clipboard", "screen.act", "write(text): copies text to the clipboard", clip_set);
-
-  phrase_add("commands", "run", "run(command) -> {code,out}: runs any command or script in Windows PowerShell on this computer, and gives its exit code and output. For anything no other function does", shell_run);
-  phrase_add("commands", "none", "running() -> [{pid,name,memory}]: the programs and processes running now, memory in MB", shell_processes);
-  phrase_add("commands", "run", "stop(pid): ends a running program or process", shell_stop);
-
-  phrase_add("notify", "none", "show(title, text): shows a Windows notification", note_toast);
-
-  phrase_add("panel", "none", "show(html, title=\"\", width=480, height=360): draws a small rounded window of Onsay's own on screen, beside him, "
-             "showing html: a page, a table, a chart, a picture or an answer laid out. It stays until hidden or the person closes it, and "
-             "showing again replaces it. Scripts in it run, with no reach to this computer", panel_show);
-  phrase_add("panel", "none", "hide(): takes the window away", panel_hide);
-
-  // input: the mouse and keyboard the way a person uses them. A window, where one is taken, may be nothing for the main
-  // screen.
-  phrase_add("input", "none", "cursor(how=nothing) -> text: says which pointer Onsay clicks with, virtual or real, or switches it. It moves "
-             "and clicks nothing. virtual, the default, never touches the user's mouse, and its clicks may be ignored by browsers, games "
-             "and some apps. real moves and clicks the real mouse and works everywhere. Given how, it changes until changed again", mouse_mode);
-  phrase_add("input", "screen.act, screen.read", "click_text(words, window=nothing, nth=0) -> {x,y,text}: rings and clicks those words where "
-             "they are on screen, read by OCR. nth picks a later one when they show more than once. Fails when they aren't there", input_click_text);
-  phrase_add("input", "screen.act, screen.read", "click_on(window, match) -> " CONTROL ": rings and clicks the first control in the window "
-             "matching {name,role,value}", input_click_on);
-  phrase_add("input", "screen.act, screen.read", "type_into(window, match, text): clicks the control matching {name,role,value}, clears it and "
-             "types text", input_type_into);
-  phrase_add("input", "screen.act", "type(text): types it where the cursor is, a new line as enter", input_type);
-  phrase_add("input", "screen.act, screen.read", "paste(text): puts text where the cursor is through the clipboard, fast for long text, then "
-             "gives the clipboard back what it had", input_paste);
-  phrase_add("input", "screen.act", "shortcut(combo, times=1, gap=0.1): presses a combo like \"ctrl+s\", times over, gap seconds apart", input_shortcut);
-  phrase_add("input", "screen.act", "type_lines(lines): types each line of a list, pressing enter after each", input_type_lines);
-  phrase_add("input", "screen.act, screen.read", "scroll_to_text(words, window=nothing, tries=10) -> {x,y,text}?: scrolls down until those "
-             "words are on screen and gives where they are, or nothing", input_scroll_to_text);
-  phrase_add("input", "screen.read", "wait_for_text(words, window=nothing, seconds=10) -> {x,y,text}?: waits until those words show on screen "
-             "and gives where they are, or nothing when time runs out. Only for waiting on something to appear: it does nothing itself",
-             input_wait_for_text);
-  phrase_add("input", "screen.act, screen.read", "copy_all(window) -> text: brings the window to the front, selects everything in it and copies "
-             "it, and gives the text", input_copy_all);
-  phrase_add("input", "screen.read", "point_text(words, say=\"\", window=nothing, seconds=10) -> {x,y,w,h,text}: rings those words on screen "
-             "and has Onsay beside them say say, to show the user something. Clicks nothing", input_point_text);
-  phrase_add("input", "screen.read", "point_on(window, match, say=\"\", seconds=10) -> " CONTROL ": rings the control matching "
-             "{name,role,value} and has Onsay beside it say say. Clicks nothing", input_point_on);
-  phrase_add("input", "none", "point_at(x, y, w, h, say=\"\", seconds=10): rings that box on screen, in pixels, with Onsay beside it saying say",
-             input_point_at);
-  phrase_add("input", "none", "stop_pointing(): takes the ring away", show_clear);
-  phrase_add("input", "screen.act, screen.read", "click_in(window, x, y, how=\"left\") -> {x,y}: clicks a place in a window, wherever the window "
-             "is now: x, y from its top left in pixels, or between -1 and 1 a share of its size, 0.5 the middle, and below 0 back from its "
-             "right or bottom. how is left, double or right. window may be a match like {app}, brought to the front first", input_click_in);
-  phrase_add("input", "screen.act, screen.read", "move_in(window=nothing, x=0.5, y=0.5, seconds=0) -> {x,y}: moves the mouse pointer, gliding "
-             "it to a place in a window, or on the screen with no window, the middle unless given. x, y the same way as click_in, at a "
-             "hand's pace or over seconds", input_move_in);
-  phrase_add("input", "screen.act, screen.read", "move_along(points, window=nothing, seconds=0) -> {x,y}: moves the mouse pointer through a list of "
-             "places in turn, tracing a path or shape like a circle, each [x, y] the same way as click_in. At a hand's pace, or over seconds in all. "
-             "Clicks nothing", input_move_along);
-  phrase_add("input", "screen.act, screen.read", "drag_in(window, x1, y1, x2, y2): drags from one place in a window to another, the same way as "
-             "click_in", input_drag_in);
-  phrase_add("input", "screen.act, screen.read", "scroll_in(window, amount, x=0.5, y=0.5) -> {x,y}: scrolls at a place in a window, the middle "
-             "unless given, positive up", input_scroll_in);
-  phrase_add("input", "screen.read", "position_in(window, x, y) -> {x,y}: the place on screen of a place in a window, without touching "
-             "anything", input_where_in);
-
-  // look: the screen read as text, and a picture of it. With no window, controls are the front window's, and words the
-  // whole screen's.
-  phrase_add("look", "screen.read", "screenshot(window=nothing, box=nothing) -> {path,x,y,w,h}: a picture of a window, or the main screen, "
-             "saved as a PNG file. box {x,y,w,h} in the window's pixels keeps only that part", look_screenshot);
-  phrase_add("look", "screen.read", "elements(window=nothing, box=nothing) -> [{id,kind,name,x,y,w,h}]: everything on screen that can be told "
-             "apart, numbered: the controls Windows knows, buttons, links, boxes, tabs, checkboxes and icons, with their names, and every "
-             "line of text OCR reads. Places in the window's pixels for input.click_in, or the screen's when no window is given", look_elements);
-  phrase_add("look", "screen.read", "overview(window=nothing) -> {app,title,focused,pressable,fields}: a window in brief: what it is, what has "
-             "the keyboard, and the names of what can be pressed and typed in. The front window when none is given", look_overview);
-  phrase_add("look", "screen.read", "focused(window=nothing) -> " CONTROL "?: the control that has the keyboard now", look_focused);
-  phrase_add("look", "screen.read", "page(window=nothing) -> text: every word of a window, from its own text, or read off the screen when it "
-             "gives none", look_page);
-  phrase_add("look", "screen.read", "lines(window=nothing) -> [text]: the lines of text on screen, top to bottom, read by OCR. The whole screen "
-             "when no window is given", look_lines);
-  phrase_add("look", "screen.read", "buttons(window=nothing, most=60) -> [{name,role,x,y}]: the buttons, links, tabs, menu items and boxes to "
-             "tick, by name, with where to click them", look_pressable);
-  phrase_add("look", "screen.read", "fields(window=nothing) -> [{name,role,value,x,y}]: the boxes to type in and the dropdowns, with what is in "
-             "them now", look_fields);
-  phrase_add("look", "screen.read", "near(words, window=nothing, distance=150) -> [text]: the other lines on screen within distance pixels of "
-             "those words, closest first: what a label belongs to, or the value beside it", look_near);
-  phrase_add("look", "screen.read", "find_text(words, window=nothing) -> [{text,x,y,w,h}]: every line on screen with those words in it, and where "
-             "it is", look_locate);
-  phrase_add("look", "screen.read", "open_windows() -> [{app,title}]: the windows open now, front to back, in brief", look_open_windows);
-
-  phrase_add("chat", "none", "ask(questions, seconds=120) -> [text]?: asks the person questions in Onsay's chat on this computer and waits for "
-             "their answers, in order, so the work goes on with them. Each question is text, answered by typing, or {question, choices}, "
-             "answered by picking one. Nothing when nobody answered in seconds. Fails when no Onsay app is open to ask", chat_ask);
-  phrase_add("chat", "none", "say(text): tells the person something in Onsay's chat on this computer while the work goes on", chat_say);
-  phrase_add("chat", "none", "step(text): shows what is being done now as a step under the person's message in Onsay's chat on this computer", chat_step);
+#define CALL(group, needs, line, fn) phrase_add(group, needs, line, fn);
+#include "calls_every.h"
+#include "calls_device.h"
+#undef CALL
+  native_calls();
 }

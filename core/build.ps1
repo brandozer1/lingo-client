@@ -1,9 +1,9 @@
 # build.ps1 - builds the lingo client and packs the lingos it ships, from C with zig's C compiler (one download, no installer).
-#   bin/onsay-core.exe          the lingo client for Windows, with onsay, windows and native built in
+#   bin/onsay-core.exe          the lingo client for Windows, with onsay and the base calls built in
 #   bin/onsay-core.lib          what it shares with native lingos, to build their libraries against
 #   bin/test/onsay-core.exe     the same, its onsay talking to test/server.mjs. Same file name, since a native library binds to it
 #   bin/lingos/                 agent.lingo, the one lingo that ships, packed by the lingo client itself
-#   bin/linux-x64/onsay-core    the lingo client for Linux, with onsay built in, and bin/linux-arm64/onsay-core. glibc 2.28
+#   bin/linux-x64/onsay-core    the lingo client for Linux, with onsay and the base calls built in, and bin/linux-arm64/onsay-core. glibc 2.28
 #                               or later, and libcurl, which it loads as it starts, so it builds here with nothing of
 #                               Linux's installed
 # What is only made on the way, like win64.o, tlds.h, builtins.h and standard.h, goes in obj/.
@@ -44,7 +44,7 @@ function builtins($platform, $names) {
   $lines += "};"
   Set-Content "$here/obj/$platform/builtins.h" $lines
 }
-builtins "windows" @("onsay", "windows", "native")
+builtins "windows" @("onsay")
 builtins "linux" @("onsay")
 
 $flags = "-std=c11", "-O2", "-Wall", "-Wextra", "-Wno-unused-parameter", "-I$here/obj", "-I$here/src"
@@ -55,7 +55,7 @@ $both = "value", "run", "phrase", "std", "compile", "zip", "puff", "sign", "mono
 $win = "-target", "x86_64-windows-gnu"
 $ffi = "$lingos/native/libffi"
 build ($win + "-DX86_WIN64", "-I$ffi/include", "-I$ffi/x86", "-c", "$ffi/x86/win64.S", "-o", "$here/obj/win64.o")
-$windows = (src ($both + "platform_win")) + "$lingos/onsay/onsay.c", "$lingos/windows/windows.c", "$lingos/native/native.c"
+$windows = (src ($both + "platform_win")) + "$lingos/onsay/onsay.c", "$lingos/windows/windows.c", "$lingos/native/native.c", "-I$lingos/onsay"
 $windows += "$ffi/prep_cif.c", "$ffi/types.c", "$ffi/x86/ffiw64.c", "$here/obj/win64.o"
 $windows += "-I$here/obj/windows", "-DLINGO_CORE", "-DFFI_BUILDING", "-DX86_WIN64", "-I$ffi/include", "-I$ffi/x86"
 $windows += "-lwinhttp", "-lws2_32", "-luser32", "-lbcrypt", "-lcrypt32", "-lole32", "-loleaut32", "-lshell32", "-lgdi32"
@@ -63,7 +63,7 @@ build ($win + $windows + "-o", "$here/bin/onsay-core.exe", "-Wl,--out-implib,$he
 build ($win + $windows + "-DTEST", "-o", "$here/bin/test/onsay-core.exe")
 
 # Linux. -rdynamic shares the core's words with a native lingo's library, as onsay-core.lib does on Windows.
-$linux = (src ($both + "platform_linux")) + "$lingos/onsay/onsay.c", "-I$here/obj/linux", "-DLINGO_CORE"
+$linux = (src ($both + "platform_linux")) + "$lingos/onsay/onsay.c", "$lingos/linux/linux.c", "-I$lingos/onsay", "-I$here/obj/linux", "-DLINGO_CORE"
 foreach ($arch in @{ x64 = "x86_64"; arm64 = "aarch64" }.GetEnumerator()) {
   New-Item -ItemType Directory -Force "$here/bin/linux-$($arch.Key)" | Out-Null
   $target = "-target", "$($arch.Value)-linux-gnu.2.28", "-D_POSIX_C_SOURCE=200809L"

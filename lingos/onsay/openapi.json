@@ -1,7 +1,7 @@
 {
   "info": {
     "version": "1.0.0",
-    "description": "Connects this computer to Onsay, so Onsay answers what you ask in the chat, your other devices can reach this computer, and the programs on it can ask Onsay for help. Its lingos ask Onsay with lingo(...) and use(...), and /onsay takes prompts from anyone with its prompt key, each answered by Onsay."
+    "description": "Everything this computer can do by itself, the same calls on every computer: run commands, read, write, edit and search files, send web requests, keep text, and, where it has a screen, see and use its windows, mouse and keyboard. /onsay takes prompts from anyone with its prompt key, each answered by Onsay, and its calls answer this account's own devices and anyone with that key."
   },
   "x-lingo": {
     "settings": [

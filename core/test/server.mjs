@@ -44,8 +44,8 @@ const POLICY = {
     access: [{ who: 'public', lingos: 'page' }],
     grants: {
       desk: ['screen.read', 'run', 'files.read ~/onsay-test', 'files.write ~/onsay-test'],
-      windows: ['screen.read', 'files.read ~/no-such-file-here.txt', 'screen.act'],
-      native: ['run'],
+      onsay: ['screen.read', 'files.read ~/no-such-file-here.txt', 'screen.act', 'run'],
+      asker: ['run'],
     },
   },
   defaults: { access: [{ who: 'ip 192.0.2.60', lingos: 'memo' }] },
@@ -278,33 +278,33 @@ const CASES = [
   { path: '/checks/rounds', check: gives([3, 1, -2, -2, 2, 2, 'b', 1200, 1.3, -1, 2, 0, 0]) },
   { path: '/checks/days', check: (r) => r.status === 200 && same(r.json.slice(0, 6), [59, 0.4166666666666667, 0.10416087962962962, 2.5, null, 1792325100]) && /nope isn't a time/.test(r.json[6]) },
   // native: an OS function called by its layout, values in order, run granted.
-  { lingo: 'native', name: 'native: an OS function with no values, a whole number back', path: '/native/native/call', values: ['kernel32.dll', 'GetTickCount', 'u32', []], check: (r) => r.status === 200 && r.json > 0 },
-  { lingo: 'native', name: 'native: a text value passed in', path: '/native/call', values: ['kernel32.dll', 'lstrlenA', 'i32', [{ type: 'text', value: 'hello' }]], check: gives(5) },
-  { lingo: 'native', name: 'native: a function that is not there', path: '/native/native/call', values: ['kernel32.dll', 'NoSuchFunction', 'i32', []], check: fails(500, /was not found/) },
+  { lingo: 'onsay', windows: true, name: 'native: an OS function with no values, a whole number back', path: '/onsay/native/call', values: ['kernel32.dll', 'GetTickCount', 'u32', []], check: (r) => r.status === 200 && r.json > 0 },
+  { lingo: 'onsay', windows: true, name: 'native: a text value passed in', path: '/onsay/native/call', values: ['kernel32.dll', 'lstrlenA', 'i32', [{ type: 'text', value: 'hello' }]], check: gives(5) },
+  { lingo: 'onsay', windows: true, name: 'native: a function that is not there', path: '/onsay/native/call', values: ['kernel32.dll', 'NoSuchFunction', 'i32', []], check: fails(500, /was not found/) },
   // windows, for real, on this computer, from desk.ls and by its routes, under the grants in POLICY. The ceiling leaves
   // out screen.act, so nothing is clicked or typed.
-  { lingo: 'windows', path: '/desk/windows_open', check: gives([true, true, true]) },
-  { lingo: 'windows', path: '/desk/controls_read', check: gives([true, true]) },
-  { lingo: 'windows', name: 'grants: files outside the home, in the folder granted', path: '/desk/files_used', check: gives(['héllo there', false, true, 2, 'c.txt', 12, false]) },
-  { lingo: 'windows', name: 'windows: a missing file, its path granted', path: '/windows/files/read', values: { path: '~/no-such-file-here.txt' }, check: fails(500, /doesn't exist/) },
-  { lingo: 'windows', name: 'windows: the clipboard', path: '/windows/clipboard/read', check: (r) => r.status === 200 && typeof r.json === 'string' },
-  { lingo: 'windows', path: '/desk/commands_run', check: gives([0, '5', true]) },
-  { lingo: 'windows', name: 'windows: a command stopped', path: '/desk/command_slow', stopAfter: 1500, check: fails(500, STOPPED) },
-  { lingo: 'windows', path: '/desk/screen_read', check: gives([true, true, true, true]) },
-  { lingo: 'windows', name: 'the ceiling: typing is refused, granted or not', path: '/windows/input/type', values: { text: 'x' }, check: fails(403, /never allows/) },
-  { lingo: 'windows', name: 'input: wait for words that never show', path: '/windows/input/wait_for_text', values: { words: 'zq-never-on-screen-qz', seconds: 1 }, check: gives(null) },
-  { lingo: 'windows', name: 'the ceiling: a click is refused', path: '/desk/click_a_word', check: (r) => r.status === 403 },
-  { lingo: 'windows', name: 'look: open windows', path: '/windows/look/open_windows', check: (r) => r.status === 200 && r.json.length > 0 && r.json.every((w) => w.app !== undefined && w.title) },
-  { lingo: 'windows', name: 'look: a window in brief', path: '/desk/overview', check: (r) => r.status === 200 && typeof r.json.title === 'string' && Array.isArray(r.json.pressable) && Array.isArray(r.json.fields) },
-  { lingo: 'windows', name: 'look: lines, where one is, and what is near it', path: '/desk/lines_near', check: gives([true, true, true]) },
-  { lingo: 'windows', name: 'input: the pointer mode', path: '/desk/cursor_modes', check: gives(['virtual', 'real', 'virtual']) },
-  { lingo: 'windows', name: 'input: a mode it has not', path: '/windows/input/cursor', values: { how: 'ghost' }, check: fails(500, /virtual or real/) },
-  { lingo: 'windows', name: 'input: point at words on screen', path: '/desk/point_at_words', check: gives([true, true, true]) },
-  { lingo: 'windows', name: 'input: point at a box, then stop', path: '/windows/input/point_at', values: [10, 10, 60, 20, 'here', 1], check: (r) => gives(null)(r) },
-  { lingo: 'windows', path: '/windows/input/stop_pointing', check: gives(null) },
-  { lingo: 'windows', name: 'input: places in a window, and on the main screen', path: '/desk/places', check: gives([true, true, true, true, true, true, true, true]) },
-  { lingo: 'windows', name: 'the ceiling: a click in a window is refused', path: '/desk/click_in_window', check: (r) => r.status === 403 },
-  { lingo: 'windows', name: 'look: elements, numbered and placed', path: '/desk/elements', check: gives(true) },
+  { lingo: 'onsay', windows: true, path: '/desk/windows_open', check: gives([true, true, true]) },
+  { lingo: 'onsay', windows: true, path: '/desk/controls_read', check: gives([true, true]) },
+  { lingo: 'onsay', windows: true, name: 'grants: files outside the home, in the folder granted', path: '/desk/files_used', check: gives(['héllo there', false, true, 2, 'c.txt', 12, false]) },
+  { lingo: 'onsay', windows: true, name: 'windows: a missing file, its path granted', path: '/onsay/files/read', values: { path: '~/no-such-file-here.txt' }, check: fails(500, /doesn't exist/) },
+  { lingo: 'onsay', windows: true, name: 'windows: the clipboard', path: '/onsay/clipboard/read', check: (r) => r.status === 200 && typeof r.json === 'string' },
+  { lingo: 'onsay', windows: true, path: '/desk/commands_run', check: gives([0, '5', true]) },
+  { lingo: 'onsay', windows: true, name: 'windows: a command stopped', path: '/desk/command_slow', stopAfter: 1500, check: fails(500, STOPPED) },
+  { lingo: 'onsay', windows: true, path: '/desk/screen_read', check: gives([true, true, true, true]) },
+  { lingo: 'onsay', windows: true, name: 'the ceiling: typing is refused, granted or not', path: '/onsay/input/type', values: { text: 'x' }, check: fails(403, /never allows/) },
+  { lingo: 'onsay', windows: true, name: 'input: wait for words that never show', path: '/onsay/input/wait_for_text', values: { words: 'zq-never-on-screen-qz', seconds: 1 }, check: gives(null) },
+  { lingo: 'onsay', windows: true, name: 'the ceiling: a click is refused', path: '/desk/click_a_word', check: (r) => r.status === 403 },
+  { lingo: 'onsay', windows: true, name: 'look: open windows', path: '/onsay/look/open_windows', check: (r) => r.status === 200 && r.json.length > 0 && r.json.every((w) => w.app !== undefined && w.title) },
+  { lingo: 'onsay', windows: true, name: 'look: a window in brief', path: '/desk/overview', check: (r) => r.status === 200 && typeof r.json.title === 'string' && Array.isArray(r.json.pressable) && Array.isArray(r.json.fields) },
+  { lingo: 'onsay', windows: true, name: 'look: lines, where one is, and what is near it', path: '/desk/lines_near', check: gives([true, true, true]) },
+  { lingo: 'onsay', windows: true, name: 'input: the pointer mode', path: '/desk/cursor_modes', check: gives(['virtual', 'real', 'virtual']) },
+  { lingo: 'onsay', windows: true, name: 'input: a mode it has not', path: '/onsay/input/cursor', values: { how: 'ghost' }, check: fails(500, /virtual or real/) },
+  { lingo: 'onsay', windows: true, name: 'input: point at words on screen', path: '/desk/point_at_words', check: gives([true, true, true]) },
+  { lingo: 'onsay', windows: true, name: 'input: point at a box, then stop', path: '/onsay/input/point_at', values: [10, 10, 60, 20, 'here', 1], check: (r) => gives(null)(r) },
+  { lingo: 'onsay', windows: true, path: '/onsay/input/stop_pointing', check: gives(null) },
+  { lingo: 'onsay', windows: true, name: 'input: places in a window, and on the main screen', path: '/desk/places', check: gives([true, true, true, true, true, true, true, true]) },
+  { lingo: 'onsay', windows: true, name: 'the ceiling: a click in a window is refused', path: '/desk/click_in_window', check: (r) => r.status === 403 },
+  { lingo: 'onsay', windows: true, name: 'look: elements, numbered and placed', path: '/desk/elements', check: gives(true) },
   // lingo(...): asked of Onsay as the program reaches it, here the stand-in (LINGO below), and the program goes on with
   // the answer. Requests Onsay sends meanwhile are answered inside the waiting one.
   {
@@ -317,9 +317,10 @@ const CASES = [
   { name: 'lingo(...) with words worked out as it runs', path: '/checks/capital_of_japan', check: (r) => gives('Tokyo')(r) && asked.gives === '' },
   { name: "lingo(...): Onsay reaches this computer's lingos while it waits", path: '/checks/only_here', check: (r) => gives('heard: 2 litres')(r) && device?.status === 200 },
   { name: 'lingo.ways asks for the ways and runs nothing', path: '/asker/ways', values: { task: 'the ways to do it' }, check: (r) => r.status === 200 && r.json?.[0]?.address === 'laptop.tester/memo/all' && asked.mode === 'list' && !('gives' in asked) },
-  { name: 'core: this account reaches its calls by request', path: '/core/compute/now', values: {}, check: (r) => r.status === 200 && r.json > 0 },
-  { name: "core: the language's own are never reached by a request", path: '/core/lingo/use', values: { address: 'x' }, check: fails(404, /core has no function lingo\.use/) },
-  { name: 'core: the settings are never reached by a request', path: '/core/settings/get', values: { lingo: 'prefs' }, check: fails(404, /core has no function settings\.get/) },
+  { name: 'base calls: this account reaches them at /onsay', path: '/onsay/compute/now', values: {}, check: (r) => r.status === 200 && r.json > 0 },
+  { name: 'base calls: a background command, then what it wrote', path: '/asker/started', check: (r) => r.status === 200 && /started-ok/.test(r.json?.out) && r.json.running === false && r.json.code === 0 },
+  { name: 'base calls: what would sign this computer out is never reached by a request', path: '/onsay/sign_out', values: {}, check: (r) => r.status === 401 },
+  { name: 'base calls: a secret setting is never given to a request', path: '/onsay/settings/get', values: { lingo: 'onsay' }, check: (r) => r.status === 200 && r.json.find((x) => x.name === 'prompt_key')?.value === 'set' },
   { name: "a lingo's own lingo(...), saying the request it runs for", path: '/asker/kept', values: { k: 'eggs' }, check: (r) => gives('kept: eggs')(r) && asked.for === `r${next}` },
   {
     name: 'a lingo reaching one elsewhere with use(...), asked of Onsay at its address',
@@ -347,7 +348,7 @@ const CASES = [
       every.some((m) => m.ask === 'something only this device knows' && m.asking === 'agent.ask'),
   },
   {
-    lingo: 'windows',
+    lingo: 'onsay',
     name: "agent.ask: its own tools work on this computer with no trip to Onsay: write, edit, refused when the words are there twice, search and read",
     path: '/agent/ask', values: { prompt: 'work on the notes' },
     check: (r) => {
@@ -468,7 +469,7 @@ const WEB_CASES = [
   ['web: a body in chunks is a 411, and one over 4 MB a 413', async () =>
     (await raw('POST /memo/recall HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n')).startsWith('HTTP/1.1 411') &&
     (await raw('POST /memo/recall HTTP/1.1\r\nContent-Length: 5000000\r\n\r\n')).startsWith('HTTP/1.1 413')],
-  ['web: a need above the ceiling is a 403', async () => (await post('/windows/input/type', ['x'])).status === 403, 'windows'],
+  ['web: a need above the ceiling is a 403', async () => (await post('/onsay/input/type', ['x'])).status === 403, 'onsay'],
   ['proxied: a request through Onsay is answered as the port answers it', async (send) => {
     const r = await send('/hello/text?name=Bo', undefined, { as: undefined })
     return r.status === 200 && r.body === 'hi Bo' && r.base64 === false && r.headers['content-type'].startsWith('text/plain')
@@ -483,7 +484,7 @@ const WEB_CASES = [
   }],
   ["me: the account's own request, signed by Onsay, reaches every running lingo by the defaults, natives too", async (send) => {
     const [a, b] = [await send('/memo/recall?k=milk'), await send('/')]
-    return a.status === 200 && a.json === '2 litres' && b.json.lingos.some((l) => l.name === 'memo') && (!has('windows') || b.json.lingos.some((l) => l.name === 'windows')) &&
+    return a.status === 200 && a.json === '2 litres' && b.json.lingos.some((l) => l.name === 'memo') && (!has('onsay') || b.json.lingos.some((l) => l.name === 'onsay')) &&
       decisions().some((d) => d.caller === 'me' && d.lingo === 'memo' && d.why === 'rule: me')
   }],
   ["me: one whose signature doesn't check out, or that is too old, is a 401, and never runs", async (send) => {
@@ -497,10 +498,12 @@ const WEB_CASES = [
     const r = await send('/memo/recall?k=milk', undefined, { as: undefined, headers: signedBy('laptop', 'laptop.tester', 'GET', '/memo/recall?k=milk') })
     return r.status === 200 && r.json === '2 litres' && decisions().some((d) => d.caller === 'laptop.tester' && d.why === 'rule: my devices' && d.allowed)
   }],
-  ['core: anyone else is kept out, even with a rule naming it', async (send) => {
-    command('share', 'core', 'ip 203.0.113.0/24')
-    const r = await send('/core/compute/now', {}, from('203.0.113.9'))
-    return r.status === 404
+  ['base calls: anyone else is kept out though /onsay is open to them, and the prompt key lets them in', async (send) => {
+    const key = JSON.parse(readFileSync(new URL('onsay.json', SETTINGS), 'utf8')).prompt_key
+    const none = await send('/onsay/compute/now', {}, from('203.0.113.9'))
+    const keyed = from('203.0.113.9')
+    const yes = await send('/onsay/compute/now', {}, { ...keyed, headers: { ...keyed.headers, authorization: `Bearer ${key}` } })
+    return none.status === 404 && yes.status === 200
   }],
   ['signed: a device of another handle reaches only what is shared with that handle', async (send) => {
     const ask = () => send('/memo/recall?k=milk', undefined, { as: undefined, headers: signedBy('phone', 'phone.james', 'GET', '/memo/recall?k=milk') })
@@ -577,7 +580,7 @@ const WEB_CASES = [
   }],
   ['control: the policy, the ceiling clamping its grants', async () => {
     const r = await control('policy')
-    return same(r.json.ceiling, POLICY.ceiling) && same(r.json.grants.windows, ['screen.read', 'files.read ~/no-such-file-here.txt']) && r.json.local.overrides.grants.windows.includes('screen.act') &&
+    return same(r.json.ceiling, POLICY.ceiling) && same(r.json.grants.onsay, ['screen.read', 'files.read ~/no-such-file-here.txt', 'run']) && r.json.local.overrides.grants.onsay.includes('screen.act') &&
       r.json.account === null
   }],
   ['control: settings and set', async () => {
@@ -654,10 +657,10 @@ const WEB_CASES = [
       same(recall.requestBody.content['application/json'].schema, { type: 'object', properties: { k: {} }, required: ['k'] })
   }],
   ['windows, built in: its manifest made from its phrases', async () => {
-    const m = command('manifest', 'windows')
-    const type = m.paths['/windows/input/type']?.post
+    const m = command('manifest', 'onsay')
+    const type = m.paths['/onsay/input/type']?.post
     return same(type?.['x-lingo-needs'], ['screen.act']) && type['x-lingo-function'] === 'input.type' && m['x-lingo'].program === 'built in'
-  }, 'windows'],
+  }, 'onsay'],
   ['a built-in lingo always runs: stopping it is refused, saying why', async () => {
     let why = ''
     try { execFileSync(EXE, ['test/onsay.json', 'stop', 'onsay'], { cwd: CORE, encoding: 'utf8', stdio: ['ignore', 'ignore', 'pipe'] }) } catch (e) { why = e.stderr }
@@ -696,13 +699,13 @@ const WEB_CASES = [
   ['the root: a file inside this lingo client\'s home is routine, no grant or app needed', async () => {
     writeFileSync(INSIDE, 'in here')
     return gives('in here')(await post('/chores/read', { path: INSIDE }))
-  }, 'windows'],
+  }, 'onsay'],
   ['asks: with no app open, a need that takes a yes is refused, saying how to grant it', async () => {
     writeFileSync(OUTSIDE, 'out there')
     const [a, b] = [await post('/chores/run_it'), await post('/chores/read', { path: OUTSIDE })]
     return fails(403, /chores needs run here, which takes a yes from the person, and no app is open to ask them. To allow it, grant it: grant chores "run"/)(a) &&
       fails(403, /chores needs files\.read .*outside\.txt here/)(b) && decisions().some((d) => d.lingo === 'chores' && d.need === 'run' && d.why === 'no app to ask')
-  }, 'windows'],
+  }, 'onsay'],
   ['asks: an app answers once, then no, then always, kept as a grant', async () => {
     const a = app(['once', 'no', 'always'])
     await pause(400)
@@ -713,7 +716,7 @@ const WEB_CASES = [
     return same(r.map((x) => x.status), [200, 403, 200, 200]) && r[0].json === '7' && /The person said no to chores using run/.test(r[1].json.error) && a.seen.length === 3 &&
       same(Object.keys(a.seen[0]), ['id', 'lingo', 'need', 'path', 'caller']) && a.seen[0].lingo === 'chores' && a.seen[0].need === 'run' && a.seen[0].caller === 'this computer' &&
       policyFile().overrides.grants.chores.includes('run') && ['asked: once', 'asked: no', 'asked: always', 'granted: run'].every((why) => d.some((l) => l.lingo === 'chores' && l.why === why))
-  }, 'windows'],
+  }, 'onsay'],
   ['asks: a file outside the home asked with its path', async () => {
     const a = app(['once'])
     await pause(400)
@@ -721,22 +724,22 @@ const WEB_CASES = [
     a.stop()
     rmSync(OUTSIDE)
     return gives('out there')(r) && a.seen.length === 1 && a.seen[0].need === 'files.read' && /outside\.txt$/.test(a.seen[0].path)
-  }, 'windows'],
+  }, 'onsay'],
   ["chat.ask: the person's answers, from the app, go back to the lingo asking, in order", async () => {
     const a = app([['Rome', 'May']])
     await pause(400)
-    const r = await post('/windows/chat/ask', { questions: [{ question: 'Where to?', choices: ['Rome', 'Oslo'] }, 'When?'] })
+    const r = await post('/onsay/chat/ask', { questions: [{ question: 'Where to?', choices: ['Rome', 'Oslo'] }, 'When?'] })
     a.stop()
-    return gives(['Rome', 'May'])(r) && a.seen.length === 1 && same(Object.keys(a.seen[0]), ['id', 'lingo', 'questions', 'caller']) && a.seen[0].lingo === 'windows' &&
+    return gives(['Rome', 'May'])(r) && a.seen.length === 1 && same(Object.keys(a.seen[0]), ['id', 'lingo', 'questions', 'caller']) && a.seen[0].lingo === 'onsay' &&
       same(a.seen[0].questions, [{ question: 'Where to?', choices: ['Rome', 'Oslo'] }, 'When?'])
-  }, 'windows'],
+  }, 'onsay'],
   ['chat.ask: nobody answering in its seconds gives nothing, and an answer that is not a list is refused', async () => {
     const a = app(['once'])
     await pause(400)
-    const started = Date.now(), r = await post('/windows/chat/ask', { questions: 'What city?', seconds: 1 })
+    const started = Date.now(), r = await post('/onsay/chat/ask', { questions: 'What city?', seconds: 1 })
     a.stop()
     return gives(null)(r) && Date.now() - started < 4000 && a.seen.length === 1 && same(a.seen[0].questions, ['What city?'])
-  }, 'windows'],
+  }, 'onsay'],
   ["agent.ask: its questions are asked in the person's chat with chat.ask, and its model goes on with their answers in the same turn", async () => {
     keep('agent', { openai_key: 'test-key', url: AI })
     const a = app([['Rome', 'May']])
@@ -745,23 +748,23 @@ const WEB_CASES = [
     a.stop()
     return r.status === 200 && r.json.text === 'gpt-5-mini heard: Where to? Rome\nWhen? May' && same(r.json.messages.map((m) => m.role), ['assistant', 'tool', 'assistant']) &&
       r.json.messages[1].content === 'Where to? Rome\nWhen? May' && same(a.seen[0]?.questions, [{ question: 'Where to?', choices: ['Rome', 'Oslo'] }, 'When?'])
-  }, 'windows'],
+  }, 'onsay'],
   ['chat.say and chat.step: a line for the app to draw in the chat, on the output', async () => {
     const said = command('call', 'chat.say', 'Halfway there'), stepped = command('call', 'chat.step', 'Reading the page')
     return String(said).includes('{"show":"say","text":"Halfway there"}') && String(stepped).includes('{"show":"step","text":"Reading the page"}')
-  }, 'windows'],
+  }, 'onsay'],
   ['load: a lingo whose openapi.json says less than its code needs is set aside with why', async () => {
     const r = await web('/')
     return r.json.lingos.some((l) => l.name === 'liar' && /liar\.ls: liar\.fetch needs net, which its openapi\.json doesn't say/.test(l.error))
   }],
   ['policy: a new version pushed is fetched, checked, kept for this device, and what the ceiling clamped sent back', async (send) => {
-    policies.push({ version: 2, policy: { access: [{ who: 'me', lingos: '*' }, { who: 'my devices', lingos: '*' }], grants: { [DEVICE]: { windows: ['screen.read', 'screen.act'] } }, offline: 'defaults' } })
+    policies.push({ version: 2, policy: { access: [{ who: 'me', lingos: '*' }, { who: 'my devices', lingos: '*' }], grants: { [DEVICE]: { onsay: ['screen.read', 'screen.act'] } }, offline: 'defaults' } })
     current.send({ type: 'policy', version: 2 })
     const got = await soon(() => applied.some((m) => m.version === 2))
     const kept = JSON.parse(readFileSync(new URL('policy.account.json', DATA), 'utf8')), a = applied.find((m) => m.version === 2)
     const r = await send('/memo/recall?k=milk')
-    return got && same(a.clamped, { windows: ['screen.act'] }) && kept.version === 2 && kept.device === DEVICE && same(kept.grants[DEVICE].windows, ['screen.read', 'screen.act']) &&
-      same((await control('policy')).json.grants.windows, ['screen.read', 'files.read ~/no-such-file-here.txt']) && r.status === 200
+    return got && same(a.clamped, { onsay: ['screen.act'] }) && kept.version === 2 && kept.device === DEVICE && same(kept.grants[DEVICE].onsay, ['screen.read', 'screen.act']) &&
+      same((await control('policy')).json.grants.onsay, ['screen.read', 'files.read ~/no-such-file-here.txt', 'run']) && r.status === 200
   }],
   ["policy: an older version, and one whose signature doesn't check out, are refused", async () => {
     policies.push({ version: 1, policy: { access: [], grants: {}, offline: 'defaults' } })
@@ -1102,10 +1105,10 @@ const session = (link) => {
       about('memo') === "things to remember, kept in Onsay's own storage on this device." && ops('memo').length === 4 && entry('memo').openapi.openapi === '3.1.0' &&
       recall?.description === 'What was kept under that name.' && recall['x-lingo-calls'] === 0 && 'k' in (schema(recall)?.properties ?? {}) && !JSON.stringify(entry('memo')).includes('store.get'))
     report('catalog: each function counts its lingo(...) calls', phrase('asker', 'asker.kept')?.['x-lingo-calls'] === 1 && phrase('asker', 'asker.forecast')?.['x-lingo-calls'] === 0)
-    report('catalog: core lists what a request may reach, never the language\'s own or the settings', !!phrase('core', 'http.send') && !phrase('core', 'lingo.run') && !phrase('core', 'settings.get'))
-    if (has('windows')) {
-      const click = phrase('windows', 'input.click_text'), ids = ops('windows').map((o) => o['x-lingo-function'])
-      report('catalog: windows, built into the lingo client, with what it is', builtIn('windows') && about('windows')?.length > 0)
+    report('catalog: the base calls are at /onsay, what would sign it out never, and a lingo called core or windows is no more', !!phrase('onsay', 'http.send') && !!phrase('onsay', 'files.read') && !!phrase('onsay', 'commands.start') && !!phrase('onsay', 'lingo.ways') && !phrase('onsay', 'onsay.sign_out') && !phrase('onsay', 'lingo.setting') && !entry('core') && !entry('windows') && !entry('native'))
+    if (phrase('onsay', 'input.click_text')) {
+      const click = phrase('onsay', 'input.click_text'), ids = ops('onsay').map((o) => o['x-lingo-function'])
+      report('catalog: windows, built into the lingo client, with what it is', builtIn('onsay') && about('onsay')?.length > 0)
       report('windows: each phrase says what it gives and does, with its values', click?.description.startsWith('-> {x,y,text}: rings and clicks') &&
         same(schema(click), { type: 'object', properties: { words: {}, window: { default: null }, nth: { default: 0 } }, required: ['words'] }))
       report('windows: one layer, input and look, the low level groups gone', ['look.screenshot', 'input.type', 'input.point_at', 'input.cursor'].every((id) => ids.includes(id)) &&
@@ -1116,20 +1119,20 @@ const session = (link) => {
     report('catalog: agent is the one AI lingo, ready on every core, with one function to ask it', has('agent') && phrase('agent', 'agent.ask') && !phrase('agent', 'agent.answer') && !entry('openrouter'))
     report("catalog: a helper whose comment says it is for its lingo's own use is marked x-lingo-internal, and nothing else", phrase('agent', 'agent.described')?.['x-lingo-internal'] === true &&
       !('x-lingo-internal' in phrase('agent', 'agent.ask')) && !ops('memo').some((o) => 'x-lingo-internal' in o))
-    if (has('native')) report('catalog: native is ready, one phrase that calls into Windows', phrase('native', 'native.call') !== undefined)
+    report('catalog: native is ready, one phrase that calls into Windows', phrase('onsay', 'native.call') !== undefined)
     report('catalog: a native without its library', /nolibrary\.dll/.test(entry('nolibrary').error))
     report('catalog: a broken one says why', /^broken\.ls line 3: There's no lingo or group called nope here.*use\(/.test(entry('broken').error))
     report('catalog: a phrase spelled wrong says what there is', /There's no phrase std\.lenn/.test(entry('typo').error))
     report('catalog: a Lingo lingo can\'t hide a group of windows', !!entry('input')?.error &&
-      (has('windows') ? /already a part of windows/ : /no lingo or group called pointer/).test(entry('input').error))
+      (has('onsay') ? /already a part of onsay/ : /no lingo or group called pointer/).test(entry('input').error))
     report('catalog: a folder with no openapi.json and no program is not a lingo', !entry('notalingo'))
     report('catalog: a .lingo file that is not a zip says so', /isn't a \.lingo file/.test(entry('notazip').error))
     const shipped = readdirSync(new URL('lingos/', BUILT))
     report('the build ships one lingo, the agent, and it says what each function does', same(shipped, ['agent.lingo']) && about('agent') && !ops('agent').some((o) => !o.description))
     report('standard functions are no app: no entry in the catalog, and nothing to install', !['text', 'list', 'math', 'json', 'url', 'request', 'time', 'encode'].some((g) => entry(g)))
     report('hello: the lingo client, its version, its device key and its catalog, and nothing else', same(Object.keys(hello), ['type', 'token', 'client', 'version', 'key', 'catalog']) &&
-      hello.client === 'lingo-client' && hello.version === '0.16.4' && /^ed25519:[A-Za-z0-9+/]{43}=$/.test(hello.key) && Array.isArray(hello.catalog))
-    report('catalog: onsay, built in, ready, sharing /onsay alone', builtIn('onsay') && ops('onsay').length === 1 && phrase('onsay', 'onsay.serve') !== undefined)
+      hello.client === 'lingo-client' && hello.version === '0.17.0' && /^ed25519:[A-Za-z0-9+/]{43}=$/.test(hello.key) && Array.isArray(hello.catalog))
+    report('catalog: onsay, built in, ready, its door for prompts never in the index', builtIn('onsay') && phrase('onsay', 'onsay.serve')?.['x-lingo-internal'] === true)
     for (const [name, test, lingo] of WEB_CASES) {
       if (lingo && !has(lingo)) { skipped++; console.log(`  skip  ${name}: this core has no ${lingo}`); continue }
       const started = Date.now()

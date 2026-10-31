@@ -372,11 +372,10 @@ typedef struct { const char *name; const char *manifest; lingo_entry entry; } bu
 #include "builtins.h"
 #define BUILTIN "built in"   // what a built-in lingo's from and program say
 
-// core's own manifest. Its calls are every computer's floor: the language's own and the settings are never reached by a
-// request, so they are in no catalog, and only this account's own devices reach the rest (let_in).
-#define CORE_MANIFEST "{\"info\":{\"version\":\"1.0.0\",\"description\":\"What every lingo client can do by itself on its computer: send a web request from that computer, wait, write to its log, tell the time, and keep text in its own storage.\"}}"
-static int core_private(const char *lingo, const char *id) {
-  return !strcmp(lingo, "core") && (!strncmp(id, "lingo.", 6) || !strncmp(id, "settings.", 9));
+// A call of the onsay lingo no request ever reaches: what would sign this computer out, reach a setting's value by its
+// lingo's reference, or what a caller can as well do itself.
+static int private_call(const char *id) {
+  return !strcmp(id, "onsay.sign_in") || !strcmp(id, "onsay.sign_out") || !strcmp(id, "lingo.setting") || !strcmp(id, "lingo.use");
 }
 
 /* The standard functions every lingo can call with nothing to install, like text.split, list.sort and request.get, from
@@ -549,8 +548,16 @@ static const char *route_of(arena *a, val *e) {
 static val *shared(arena *a, const char *name) {
   val *own = rec_get(rec_get(rec_get(device, "lingos"), name), "phrases"), *out = v_list(a);
   const char *serve = fmt(a, "%s.serve", name);
+  // The onsay lingo holds the base calls, its own and the core's, every one at /onsay beside its door for prompts.
+  if (!strcmp(name, "onsay")) {
+    val *lists[2] = { own, rec_get(rec_get(rec_get(device, "lingos"), "core"), "phrases") };
+    for (int k = 0; k < 2; k++)
+      for (size_t i = 0; lists[k] && i < lists[k]->l.n; i++)
+        if (!private_call(text_or(lists[k]->l.v[i], "id", ""))) list_push(a, out, lists[k]->l.v[i]);
+    return out;
+  }
   for (size_t i = 0; own && i < own->l.n; i++) if (!strcmp(text_or(own->l.v[i], "id", ""), serve)) { list_push(a, out, own->l.v[i]); return out; }
-  for (size_t i = 0; own && i < own->l.n; i++) if (!core_private(name, text_or(own->l.v[i], "id", ""))) list_push(a, out, own->l.v[i]);
+  for (size_t i = 0; own && i < own->l.n; i++) list_push(a, out, own->l.v[i]);
   return out;
 }
 
@@ -606,7 +613,7 @@ static val *described(arena *a, val *e) {
     val *f = fns->l.v[i], *op = v_rec(a), *item = v_rec(a), *says = rec_get(f, "does"), *schema = rec_get(f, "inputSchema"), *takes = rec_get(schema, "properties");
     const char *id = text_or(f, "id", ""), *local = !strncmp(id, name, strlen(name)) && id[strlen(name)] == '.' ? id + strlen(name) + 1 : id, *does = text_or(f, "does", "");
     const char *words = strncmp(does, "->", 2) ? does : strstr(does, ": ") ? strstr(does, ": ") + 2 : "";   // a native's does starts with what it gives
-    int serve = !strcmp(local, "serve") && fns->l.n == 1;
+    int serve = !strcmp(local, "serve");
     buf path = { 0 };
     buf_str(&path, route);
     if (!serve && strcmp(local, "main")) { buf_chr(&path, '/'); for (const char *c = local; *c; c++) buf_chr(&path, *c == '.' ? '/' : *c); }
@@ -626,7 +633,7 @@ static val *described(arena *a, val *e) {
     rec_set(a, op, "x-lingo-function", v_cstr(a, id));
     rec_set(a, op, "x-lingo-needs", rec_get(f, "needs") ? rec_get(f, "needs") : v_list(a));
     rec_set(a, op, "x-lingo-calls", rec_get(f, "lingos") ? rec_get(f, "lingos") : v_num(a, 0));
-    if (strstr(does, "'s own use")) rec_set(a, op, "x-lingo-internal", VBOOL(1));
+    if (strstr(does, "'s own use") || (serve && !strcmp(name, "onsay"))) rec_set(a, op, "x-lingo-internal", VBOOL(1));
     rec_set(a, item, serve ? "get" : "post", op);
     rec_set(a, paths, v_text(a, path.s, path.n)->t.s, item);
     buf_free(&path);
@@ -673,14 +680,6 @@ static int load(const char *extra) {
     rec_set(a, e, "running", VBOOL(1));
     list_push(a, found, e);
   }
-  val *floor = v_rec(a);
-  rec_set(a, floor, "name", v_cstr(a, "core"));
-  rec_set(a, floor, "from", v_cstr(a, BUILTIN));
-  rec_set(a, floor, "program", v_cstr(a, BUILTIN));
-  rec_set(a, floor, "manifest", json_parse(a, CORE_MANIFEST, strlen(CORE_MANIFEST), NULL));
-  rec_set(a, floor, "running", VBOOL(1));
-  list_push(a, found, floor);
-
   if (extra) {
     buf path = { 0 };
     buf_str(&path, extra);
@@ -929,7 +928,6 @@ static int names(const char *who, const caller *c) {
    which rule decided. */
 static int let_in(arena *a, val *p, const caller *c, const char *lingo, const char *rest, const char **why) {
   val *block = rec_get(p, "block"), *access = rec_get(p, "access");
-  if (!strcmp(lingo, "core") && !names("me", c) && !names("my devices", c)) { *why = "core is for this account's own devices"; return 0; }
   for (size_t i = 0; i < block->l.n; i++)
     if (block->l.v[i]->k == V_TEXT && names(fmt(a, "ip %s", block->l.v[i]->t.s), c)) { *why = fmt(a, "blocked: %s", block->l.v[i]->t.s); return 0; }
   for (size_t i = 0; i < access->l.n; i++) {
@@ -1271,8 +1269,12 @@ static val *setting_(run *r, val **a) {
 static val *settings_get(run *r, val **a) {
   val *all = declared(r->a, whose(r, a[0], NULL), NULL), *asked_[2] = { NULL, a[0] };
   for (size_t i = 0; i < all->l.n; i++) {
+    val *secret = rec_get(all->l.v[i], "secret");
     asked_[0] = rec_get(all->l.v[i], "name");
-    rec_set(r->a, all->l.v[i], "value", setting_(r, asked_));
+    val *now = setting_(r, asked_);
+    // What comes in by request never carries a secret's value, only whether it is set: a model may read it. A form here does.
+    if (job.path && job.lingo && !strcmp(job.lingo, "onsay") && secret && truthy(secret) && now->k != V_NOTHING) now = v_cstr(r->a, "set");
+    rec_set(r->a, all->l.v[i], "value", now);
   }
   return all;
 }
@@ -1558,9 +1560,20 @@ static val *unescape(arena *a, const char *s, size_t n) {
 // A function's listing, if the lingo has one by that id, like memo.recall of memo or window.list of windows.
 static val *listed(const char *lingo, const char *id) {
   val *own = rec_get(rec_get(rec_get(device, "lingos"), lingo), "phrases");
-  if (core_private(lingo, id)) return NULL;
+  int base = !strcmp(lingo, "onsay");
+  if (base && private_call(id)) return NULL;
+  for (size_t i = 0; own && i < own->l.n; i++) if (!strcmp(text_or(own->l.v[i], "id", ""), id)) return own->l.v[i];
+  if (!base) return NULL;
+  own = rec_get(rec_get(rec_get(device, "lingos"), "core"), "phrases");
   for (size_t i = 0; own && i < own->l.n; i++) if (!strcmp(text_or(own->l.v[i], "id", ""), id)) return own->l.v[i];
   return NULL;
+}
+
+// Whether a request carries this computer's prompt key, the onsay lingo's setting, as Authorization: Bearer <key>.
+static int prompt_keyed(arena *a, val *headers) {
+  val *key = lingo_setting(a, "onsay", "prompt_key");
+  const char *sent = text_or(headers, "authorization", "");
+  return key && key->k == V_TEXT && key->t.len && !strncmp(sent, "Bearer ", 7) && !strcmp(sent + 7, key->t.s);
 }
 
 void core_serve(const char *text, size_t n, const char *given, buf *out) {
@@ -1636,11 +1649,22 @@ void core_serve(const char *text, size_t n, const char *given, buf *out) {
     val *was_needs = job.needs, *was_policy = job.policy, *was_answers = job.answers;
     size_t left = at - best, nl = left ? left - 1 : 0;
     int in = c.here || let_in(a, pol, &c, lingo, v_text(a, rest, left)->t.s, &why);
+    // /onsay is open, for its door checks its own key, but a base call is only for this account's own devices or that key.
+    int base = 0;
+    if (!strcmp(lingo, "onsay") && nl) {
+      buf id = { 0 };
+      if (memchr(name, '/', nl)) buf_add(&id, name, nl);
+      else buf_fmt(&id, "onsay.%.*s", (int)nl, name);
+      for (size_t i = 0; i < id.n; i++) if (id.s[i] == '/') id.s[i] = '.';
+      base = id.s && listed(lingo, id.s) && strcmp(id.s, "onsay.serve");
+      buf_free(&id);
+    }
+    if (base && in && !c.here && !names("me", &c) && !names("my devices", &c) && !prompt_keyed(a, headers)) in = 0, why = "a base call needs this account's own device or the prompt key";
     job.caller = c.name, job.lingo = lingo, job.path = v_text(a, p, at)->t.s, job.policy = pol, job.answers = v_list(a), job.id = id.s;
     if (!c.here) decided(NULL, in, why);
     buf_fmt(&call, "%s.serve", lingo);
     if (!in) status = 404, buf_fmt(&error, "There's nothing at %.*s", (int)at, p);
-    else if (listed(lingo, call.s)) {
+    else if (!base && listed(lingo, call.s)) {
       val *request = v_rec(a), *parsed = body->t.len ? json_parse(a, body->t.s, body->t.len, &problem) : NOTHING;
       rec_set(a, request, "method", v_cstr(a, method));
       rec_set(a, request, "path", left ? v_text(a, rest, left) : v_cstr(a, "/"));

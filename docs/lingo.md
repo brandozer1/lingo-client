@@ -222,7 +222,7 @@ of the language. It is to Lingo what fetch is to JavaScript: for what is off thi
 
 ```
 forecast = use("laptop.brandon/weather/forecast", {place: "Paris", days: 3})
-windows = use("laptop.brandon/windows/window/list")
+windows = use("laptop.brandon/onsay/window/list")
 shown = use("laptop.brandon/check@desktop.brandon/show/print")
 issues = use("https://mcp.example.com/mcp#search_issues", {repo: "onsay"})
 page = use("https://api.example.com/v1/items?limit=5")
@@ -473,7 +473,7 @@ a `.lingo` file whose files are deflated, as most zip programs make them, loads 
 ```
 
 - **`paths`**, one for each function it shares, absolute: `/<route>/<function>`, the route alone for `main`, and for a
-  native lingo `/<route>/<group>/<function>`, like `/windows/window/list`. Each is a `post`, its values a JSON record by
+  native lingo `/<route>/<group>/<function>`, like `/onsay/window/list`. Each is a `post`, its values a JSON record by
   name as its `requestBody`, and `GET` with them in the query works too. A lingo with `serve(request)`, below, shares
   `serve` alone, a `get` at its route itself, which answers every method and every path under it.
 - **`summary` and `description`** are the comment above the function, its first sentence and all of it.
@@ -725,7 +725,9 @@ The lingo client for Windows has two native lingos built in, from `lingos/`, bes
 (`lingos/onsay/README.md`). The one lingo every install ships is `agent`, from `lingo-library`. Their phrases,
 with what each gives, does and needs, are in the catalog, and in `windows_lingo` and `native_lingo` in their C.
 
-- **`windows`**, Windows itself:
+- **The base calls**, the same names on every computer, at `/onsay/<group>/<call>`, for this account's own devices and
+  anyone with the prompt key. A call a device can't do says so when called, so a lingo written on one computer works on
+  any other. They are not a lingo, and no app list shows them. Linux has `files`, `commands` and `chat` so far:
 
   | Group       | Phrases                                                              |
   |-------------|----------------------------------------------------------------------|
@@ -740,7 +742,7 @@ with what each gives, does and needs, are in the catalog, and in `windows_lingo`
   | `look`      | the screen read: `screenshot`, `elements`, `overview`, `focused`, `page`, `lines`, `buttons`, `fields`, `near`, `find_text`, `open_windows` |
   | `chat`      | the person's Onsay chat on this computer, for any lingo running for them: `ask`, `say`, `step` |
 
-- **`native`**, Windows only: `native.call(library, function, returns, args)` calls any function in Windows or a DLL by
+- **`native`**, a base call on Windows only: `native.call(library, function, returns, args)` calls any function in Windows or a DLL by
   its name and layout, needing `run`.
 
 Conventions that matter in practice:
@@ -749,7 +751,7 @@ Conventions that matter in practice:
   other path that doesn't start at a drive starts at the person's home.
 - **Onsay's pointer:** every phrase that clicks, moves, drags, scrolls, presses, types, pastes or fills shows it, with
   no asking: his arrow glides there and a click ripples, and where he types it is a text cursor that ticks while the
-  keys go in. The Windows app draws it from the lines of JSON the `windows` lingo writes on the lingo client's output.
+  keys go in. The Windows app draws it from the lines of JSON the base calls write on the lingo client's output.
 - **The chat:** `chat.ask(questions, seconds=120)` asks the person and waits for their answers, so the work goes on with
   them, the way an AI asks mid-turn: `answers = chat.ask([{question: "Which one?", choices: ["Rome", "Oslo"]}, "When?"])`
   gives `["Rome", "May"]`, each question text, typed, or `{question, choices}`, picked, a text alone one question. It is

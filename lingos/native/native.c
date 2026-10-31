@@ -93,8 +93,8 @@ static val *call(run *r, val **a) {
 
 ////////// 2. THE PHRASE //////////
 
-// Called once as the lingo client starts (core.c, BUILTINS).
-void native_lingo(void) {
+// Called once as the lingo client starts (windows.c base_calls).
+void native_calls(void) {
   phrase_add("native", "run", "call(library, function, returns, args=nothing) -> value: calls a function in Windows or a DLL "
              "by name. library is its file, like \"kernel32.dll\", or \"\" for this program. returns and each argument's type is "
              "one of i8 u8 i16 u16 i32 u32 i64 u64 (whole numbers), f32 f64 (decimals), pointer, text, cstring, or none. args is "
