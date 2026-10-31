@@ -20,7 +20,8 @@
 // Threads: main (runs queued requests one at a time, in order, and looks at the lingos folder), listener (takes each
 // connection to the port), and one for each web request (reads it, queues it, and writes its answer). A native lingo
 // hands in requests from its own threads (lingo_hand). A request that waits, on lingo(...) or the person's answer, waits
-// on main, answering the requests that come meanwhile (lingo_wait).
+// on main, answering the requests that come meanwhile (lingo_wait), and so does one in a command, a web request or a
+// pause. A crash under a phrase ends only its request, with an error (pl_faults in run.c).
 #include "core.h"
 #include "platform.h"
 #include <stdio.h>

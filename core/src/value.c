@@ -29,9 +29,12 @@ struct arena {
 
 #define CHUNK 65536
 
+// The computer is out of memory. A crash, not an abort, so it stops only the request that was running (pl_faults).
+static void no_memory(void) { *(volatile char *)0 = 0; }
+
 arena *arena_new(void) {
   arena *a = calloc(1, sizeof *a);
-  if (!a) abort();
+  if (!a) no_memory();
   return a;
 }
 
@@ -50,7 +53,7 @@ void *arena_get(arena *a, size_t size) {
   chunk *c = a->head;
   if (size > CHUNK / 4) {
     chunk *own = malloc(sizeof(chunk) + size);
-    if (!own) abort();
+    if (!own) no_memory();
     own->size = own->used = size;
     if (c) {
       own->next = c->next;
@@ -65,7 +68,7 @@ void *arena_get(arena *a, size_t size) {
   }
   if (!c || c->used + size > c->size) {
     c = malloc(sizeof(chunk) + CHUNK);
-    if (!c) abort();
+    if (!c) no_memory();
     c->size = CHUNK;
     c->used = 0;
     c->next = a->head;
@@ -301,7 +304,7 @@ void buf_add(buf *b, const char *s, size_t n) {
     size_t cap = b->cap ? b->cap : 256;
     while (cap < b->n + n + 1) cap *= 2;
     char *p = realloc(b->s, cap);
-    if (!p) abort();
+    if (!p) no_memory();
     b->s = p;
     b->cap = cap;
   }
@@ -325,7 +328,7 @@ void buf_fmt(buf *b, const char *fmt, ...) {
     return;
   }
   char *big = malloc((size_t)n + 1);
-  if (!big) abort();
+  if (!big) no_memory();
   va_start(ap, fmt);
   vsnprintf(big, (size_t)n + 1, fmt, ap);
   va_end(ap);

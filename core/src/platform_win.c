@@ -13,6 +13,7 @@
 #include <winhttp.h>
 #include <wincrypt.h>
 #include <bcrypt.h>
+#include <malloc.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -64,6 +65,51 @@ void pl_thread(void (*fn)(void *), void *arg) {
   *s = (start){ fn, arg };
   HANDLE h = CreateThread(NULL, 0, begin, s, 0, NULL);
   if (h) CloseHandle(h);
+}
+
+static void *volatile *fault_active;
+static void (*fault_recover)(const char *what);
+static const char *fault_what;
+static DWORD fault_thread;
+static int fault_overflow;
+
+// Where a crash continues, as though the instruction that crashed had called it, so the jump out of it unwinds as usual.
+__attribute__((force_align_arg_pointer)) static void fault_landing(void) { fault_recover(fault_what); }
+
+static LONG WINAPI on_fault(EXCEPTION_POINTERS *e) {
+  const char *what = NULL;
+  switch (e->ExceptionRecord->ExceptionCode) {
+    case EXCEPTION_ACCESS_VIOLATION: what = "a bad memory address"; break;
+    case EXCEPTION_IN_PAGE_ERROR: what = "memory it couldn't read"; break;
+    case EXCEPTION_STACK_OVERFLOW: what = "the stack running out"; break;
+    case EXCEPTION_ILLEGAL_INSTRUCTION:
+    case EXCEPTION_PRIV_INSTRUCTION: what = "a bad instruction"; break;
+    case EXCEPTION_INT_DIVIDE_BY_ZERO: what = "dividing by zero"; break;
+    case EXCEPTION_DATATYPE_MISALIGNMENT: what = "misaligned memory"; break;
+    default: return EXCEPTION_CONTINUE_SEARCH;
+  }
+  if (GetCurrentThreadId() != fault_thread || !*fault_active) return EXCEPTION_CONTINUE_SEARCH;
+  fault_what = what;
+  fault_overflow = e->ExceptionRecord->ExceptionCode == EXCEPTION_STACK_OVERFLOW;
+  CONTEXT *c = e->ContextRecord;
+  c->Rsp -= 8;
+  *(DWORD64 *)c->Rsp = c->Rip;
+  c->Rip = (DWORD64)fault_landing;
+  return EXCEPTION_CONTINUE_EXECUTION;
+}
+
+void pl_faults(void *volatile *active, void (*recover)(const char *what)) {
+  ULONG room = 64 << 10;   // what the stack keeps back to handle running out
+  fault_active = active;
+  fault_recover = recover;
+  fault_thread = GetCurrentThreadId();
+  SetThreadStackGuarantee(&room);
+  SetUnhandledExceptionFilter(on_fault);
+}
+
+void pl_fault_over(void) {
+  if (fault_overflow) _resetstkoflw();
+  fault_overflow = 0;
 }
 
 struct pl_gate {

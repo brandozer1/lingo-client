@@ -55,6 +55,33 @@ static void *begin(void *p) {
   return NULL;
 }
 
+static void *volatile *fault_active;
+static void (*fault_recover)(const char *what);
+static pthread_t fault_thread;
+
+static void on_fault(int number) {
+  if (!pthread_equal(pthread_self(), fault_thread) || !*fault_active) {
+    signal(number, SIG_DFL);
+    return;   // the same crash again, now ending the program
+  }
+  fault_recover(number == SIGFPE ? "dividing by zero" : number == SIGILL ? "a bad instruction" : "a bad memory address");
+}
+
+void pl_faults(void *volatile *active, void (*recover)(const char *what)) {
+  stack_t aside = { .ss_sp = malloc(64 << 10), .ss_size = 64 << 10 };   // so the stack running out can be handled too
+  struct sigaction on = { .sa_handler = on_fault, .sa_flags = SA_ONSTACK | SA_NODEFER };
+  fault_active = active;
+  fault_recover = recover;
+  fault_thread = pthread_self();
+  sigaltstack(&aside, NULL);
+  sigaction(SIGSEGV, &on, NULL);
+  sigaction(SIGBUS, &on, NULL);
+  sigaction(SIGILL, &on, NULL);
+  sigaction(SIGFPE, &on, NULL);
+}
+
+void pl_fault_over(void) {}
+
 void pl_thread(void (*fn)(void *), void *arg) {
   start *s = malloc(sizeof *s);
   *s = (start){ fn, arg };

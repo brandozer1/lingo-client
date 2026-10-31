@@ -369,6 +369,7 @@ that fails is answered with its message, and a status by its code (`core/README.
 | `denied`  | A phrase needs something the lingo may not do here      | no               | 403    |
 | `limit`   | Too many steps, too long, or calls 1000 deep             | no               | 500    |
 | `stopped` | Stopped from outside                                     | no               | 500    |
+| `crash`   | The C code under a phrase crashed, like a bad pointer in a native library. Only this call ends, and it can be tried again | no | 500 |
 
 Errors in reading a lingo, like a missing `}` or an unknown phrase, are found when it loads, before anything runs, and
 give its file, the line and what was expected. The lingo is set aside with them until it is fixed.

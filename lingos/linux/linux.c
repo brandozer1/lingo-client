@@ -222,12 +222,14 @@ static val *shell_run(run *r, val **a) {
       fail(r, "phrase", "it was still running after %d seconds, so it was stopped", RUN_SECONDS);
     }
     struct pollfd watch = { .fd = pipes[0], .events = POLLIN };
-    if (open_ && poll(&watch, 1, 50) > 0) {
+    if (open_ && poll(&watch, 1, 0) > 0) {
       ssize_t got = read(pipes[0], chunk, sizeof chunk);
       if (got > 0 && out.n < MOST_OUT) buf_add(&out, chunk, (size_t)got);
       if (got <= 0) open_ = 0;
-    } else if (!open_)
-      pl_sleep(0.05);
+    } else {
+      int never = 0;
+      lingo_wait(&never, r->stop, 0.05);   // other requests are answered while it runs
+    }
     if (!ended && waitpid(child, &status, WNOHANG) == child) ended = 1;
     if (ended && open_ && poll(&watch, 1, 0) == 0) open_ = 0;   // what it left running keeps the pipe, but it is done
   }

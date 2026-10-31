@@ -74,6 +74,7 @@ static const char *name_of(val *v) { return v->k == V_TEXT ? v->t.s : ""; }
 ////////// 1. ERRORS AND LIMITS //////////
 
 static const char *phrase_now;   // the phrase running, so its errors say which it was
+static void *volatile running;   // the innermost run on the job thread, so a crash inside it ends only it
 
 // 1.
 _Noreturn void fail(run *r, const char *code, const char *fmt, ...) {
@@ -93,6 +94,12 @@ _Noreturn void fail(run *r, const char *code, const char *fmt, ...) {
 }
 
 _Noreturn static void rethrow(run *r) { longjmp(((trap_t *)r->trap)->j, 1); }
+
+// The code under a phrase crashed: this request ends with an error, and everything else goes on.
+static void crashed(const char *what) {
+  const char *where = phrase_now ? phrase_now : "This lingo";
+  fail(running, "crash", "%s crashed on %s, so it was stopped. It can be tried again", where, what);
+}
 
 double num_of(run *r, val *x, const char *what) {
   if (x->k != V_NUM || isnan(x->n)) {
@@ -424,7 +431,9 @@ static int exec(run *r, val *body, val *frame, val **back) {
         }
         r->trap = prev;
         r->depth = depth;
-        if (!strcmp(r->code, "limit") || !strcmp(r->code, "denied") || !strcmp(r->code, "stopped")) rethrow(r);
+        if (!strcmp(r->code, "limit") || !strcmp(r->code, "denied") || !strcmp(r->code, "stopped") ||
+            !strcmp(r->code, "crash"))
+          rethrow(r);
         rec_set(r->a, frame, name_of(item(s, 2)), v_text(r->a, r->message.s ? r->message.s : "", r->message.n));
         at_cut(r, mark);
         buf_str(&r->at, "/1");
@@ -560,6 +569,11 @@ val *run_program(arena *a, val *program, val *input, limits l, const char **code
   r->trap = &t;
   val *back = NOTHING;
   val *volatile out = NULL;
+  void *volatile outer = running;
+  static int guarded;
+  if (!guarded) pl_faults(&running, crashed);
+  guarded = 1;
+  running = r;
   if (!setjmp(t.j)) {
     val *tool = rec_get(program, "tool");
     val *frame = v_rec(a);
@@ -574,7 +588,9 @@ val *run_program(arena *a, val *program, val *input, limits l, const char **code
     *code = v_cstr(a, r->code)->t.s;
     *message = v_text(a, m.s, m.n)->t.s;
     buf_free(&m);
+    pl_fault_over();
   }
+  running = outer;
   buf_free(&r->message);
   buf_free(&r->at);
   buf_free(&r->at_error);

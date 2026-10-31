@@ -208,7 +208,9 @@ static int powershell(run *r, const char *script, int wait, double seconds, buf 
       ready = 0;
     }
     if (done) break;
-    done = WaitForSingleObject(pi.hProcess, 50) == WAIT_OBJECT_0;
+    int never = 0;
+    lingo_wait(&never, r->stop, 0.05);   // other requests are answered while it runs
+    done = WaitForSingleObject(pi.hProcess, 0) == WAIT_OBJECT_0;
     if (!done && (*r->stop || pl_now() > until)) {
       TerminateProcess(pi.hProcess, 1);
       CloseHandle(pi.hProcess);

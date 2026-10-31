@@ -137,7 +137,8 @@ static val *wait_(run *r, val **a) {
   while (pl_now() < until) {
     if (*r->stop) fail(r, "stopped", "Stopped by the person");
     double left = until - pl_now();
-    pl_sleep(left < 0.05 ? left : 0.05);
+    int never = 0;
+    lingo_wait(&never, r->stop, left < 0.05 ? left : 0.05);
   }
   return NOTHING;
 }
@@ -288,15 +289,49 @@ static const char *reached(arena *a, const char *url, buf *why) {
   return address ? arena_fmt(a, "%s%s", address, rest + n) : NULL;
 }
 
+static pl_gate *gate;
+
+// One http.send on a thread of its own, with its own memory, so other requests are answered while it waits.
+typedef struct {
+  arena *a;
+  const char *method, *url, *body;
+  size_t n;
+  val *headers, *got;
+  double seconds;
+  buf why;
+  int done, finished, left;
+} trip;
+
+static void trip_free(trip *t) {
+  buf_free(&t->why);
+  arena_free(t->a);
+  free(t);
+}
+
+static void travel(void *arg) {
+  trip *t = arg;
+  const char *to = reached(t->a, t->url, &t->why);
+  if (to) t->got = pl_http(t->a, t->method, to, t->headers, t->body, t->n, t->seconds, &t->why);
+  pl_enter(gate);
+  t->finished = 1;
+  int left = t->left;
+  pl_leave(gate);
+  if (left)
+    trip_free(t);
+  else
+    lingo_done(&t->done);
+}
+
 // http.send: one web request, made by the computer itself (pl_http), its method a word and each header one whole line.
 static val *send_(run *r, val **a) {
   buf method = { 0 };
   buf url = { 0 };
   buf body = { 0 };
   buf why = { 0 };
-  val *headers = v_rec(r->a);
+  trip *t = calloc(1, sizeof *t);
   val *got = NULL;
-  const char *to;
+  t->a = arena_new();
+  t->headers = v_rec(t->a);
   buf_text(&method, a[0]);
   buf_text(&url, a[1]);
   buf_text(&body, a[3]);
@@ -312,16 +347,41 @@ static val *send_(run *r, val **a) {
     if (strpbrk(a[2]->r.key[i], "\r\n:") || strpbrk(value->t.s, "\r\n"))
       buf_fmt(&why, "the header %s has a line break or a colon in it", a[2]->r.key[i]);
     else
-      rec_set(r->a, headers, a[2]->r.key[i], value);
+      rec_set(t->a, t->headers, a[2]->r.key[i], v_cstr(t->a, value->t.s));
   }
   double seconds = a[4]->k == V_NUM && a[4]->n > 0 && a[4]->n < 3600 ? a[4]->n : 30;
-  if (!why.n && (to = reached(r->a, url.s, &why)))
-    got = pl_http(r->a, method.s, to, headers, body.s ? body.s : "", body.n, seconds, &why);
   val *problem = v_text(r->a, why.s ? why.s : "", why.n);
+  if (!why.n) {
+    t->method = v_cstr(t->a, method.s)->t.s;
+    t->url = v_cstr(t->a, url.s)->t.s;
+    t->body = v_text(t->a, body.s ? body.s : "", body.n)->t.s;
+    t->n = body.n;
+    t->seconds = seconds;
+  }
+  int asked_ = !why.n;
   buf_free(&method);
   buf_free(&url);
   buf_free(&body);
   buf_free(&why);
+  if (!asked_) {
+    trip_free(t);
+    fail(r, "phrase", "%s", problem->t.s);
+  }
+  pl_thread(travel, t);
+  while (!t->done && !*r->stop) lingo_wait(&t->done, r->stop, 1);
+  pl_enter(gate);
+  int gone = !t->finished;   // stopped first: it frees itself when it ends
+  t->left = gone;
+  pl_leave(gate);
+  if (gone) fail(r, "stopped", "Stopped by the person");
+  // Written out and read back, since a copy would still point at text in the trip's memory, freed below.
+  buf whole = { 0 };
+  if (t->got) buf_json(&whole, t->got);
+  got = t->got ? json_parse(r->a, whole.s, whole.n, NULL) : NULL;
+  buf_free(&whole);
+  problem = v_text(r->a, t->why.s ? t->why.s : "", t->why.n);
+  trip_free(t);
+  if (*r->stop) fail(r, "stopped", "Stopped by the person");
   if (!got) fail(r, "phrase", "%s", problem->t.s);
   return got;
 }
@@ -1496,7 +1556,6 @@ typedef struct frame {
   char id[128];
   volatile int stop;
 } frame;
-static pl_gate *gate;
 static frame *top;
 
 void core_say(const char *fmt_, ...) {
