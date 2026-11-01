@@ -2,14 +2,16 @@
 // ChatGPT, OpenRouter, or any service that answers the way OpenAI does, like Ollama on your own computer. It talks with
 // the person and uses any lingo it needs on the way, or gives a program one answer.
 //
-// 1. ask(prompt, messages=nothing, model=nothing) -> text, or {questions}; with messages, {text, messages} or
-//                                  {questions, messages}: its reply, after at most 25 turns, or one or two short questions
+// 1. ask(prompt, messages=nothing, model=nothing) -> text, or {questions}; with messages, {text, messages, work} or
+//                                  {questions, messages, work}: its reply, after at most 25 turns, or one or two short questions
 //                                  back. messages is the conversation so far, the whole log in the shape OpenAI and
-//                                  OpenRouter take, ending with prompt, and the messages it gives back are those it added
+//                                  OpenRouter take, ending with prompt, and the messages it gives back are those it added,
+//                                  and work is its steps in short, newest first, nothing when it took none, for whoever
+//                                  goes on from here, like the agent loop keeping them in the log
 //                                  to it this turn, in the same shape. model is any model id of the service it uses
 // The model has tools for this computer, where it has them, which run right here: run, a command in its shell, read,
-// write, edit, find and search for files, open, an app, file or web address, and screen, click, type and press, for what
-// is on its screen. And three for anywhere: lingo(task, values, decide), which asks the lingo function, across all the
+// write, edit, find and search for files, open, an app, file or web address, and screen, click, type, press and see, for
+// what is on its screen, see showing it a picture file, like a screenshot, for its next turn alone. And three for anywhere: lingo(task, values, decide), which asks the lingo function, across all the
 // person's computers, to solve a task by running what it finds, or with decide to give back the ways, nothing run,
 // use(address, values), anything named by its address, and questions(questions), which asks the person one or two short
 // questions, each answered by typing or by picking a choice. It is told this computer and the person's others. What a tool needs is asked of the person once, like any lingo's. Each tool's answer, or what went wrong, goes back to the model until it
@@ -45,8 +47,15 @@ fn ask(prompt, messages=nothing, model=nothing) {
   if n == 0 or said[n - 1].role != "user" or said[n - 1].content != prompt {said += [{role: "user", content: prompt}]}
   start = std.length(said)
   turns = 25
+  picture = nothing
   for turn in 1..turns {
-    m = reply(ai, said)
+    try {
+      m = reply(ai, said, picture)
+    } catch e {
+      if picture == nothing {fail e}
+      m = reply(ai, said + [{role: "user", content: "That picture couldn't be shown: this AI may not take pictures. Read the words instead."}], nothing)
+    }
+    picture = nothing
     said += [m]
     if m.tool_calls == nothing {return ended(m.content, messages, said, start)}
     asking = nothing
@@ -54,6 +63,10 @@ fn ask(prompt, messages=nothing, model=nothing) {
       args = {}
       try {args = std.from_json(c.function.arguments) ?? {}} catch e {args = {}}
       got = used(ai, c.function.name, args)
+      if got.picture != nothing {
+        picture = got.picture
+        got = "Here it is, in the next message"
+      }
       if got == nothing {
         asking = asked(args.questions)
         got = "Asked the person. Their answers come as their next message"
@@ -114,10 +127,15 @@ fn given(x) {
 // tools. The agent's guide and tools go with the conversation. Onsay's AI is asked with use(...) of its address, which
 // Onsay answers for this computer's account in the same shape. Claude reads the conversation in its own shape: a tool's
 // result is the person's turn, turns of the same side are one, and its own thinking goes back to it unchanged while the
-// turn runs, kept as thinking on its message. For the agent's own use.
-fn reply(ai, said) {
+// turn runs, kept as thinking on its message. picture, a JPEG in base64, goes with this one reply and is never kept in
+// the conversation. For the agent's own use.
+fn reply(ai, said, picture=nothing) {
+  shown = picture == nothing ? [] : [{role: "user", content: [
+    {type: "text", text: "The picture you asked to see:"},
+    {type: "image_url", image_url: {url: "data:image/jpeg;base64,{picture}"}}
+  ]}]
   if ai.kind == "onsay" {
-    body = {messages: [{role: "system", content: guide(ai)}] + said, tools: described("openai")}
+    body = {messages: [{role: "system", content: guide(ai)}] + said + shown, tools: described("openai")}
     if ai.model != nothing {body.model = ai.model}
     try {a = use(ai.url, body)} catch e {
       if "connected" in std.text(e) {fail "Sign in to Onsay to use its AI, or add your own key in agent's settings"}
@@ -151,6 +169,17 @@ fn reply(ai, said) {
         turns += [{role: role, content: blocks}]
       }
     }
+    if picture != nothing {
+      seen = {type: "image", source: {type: "base64", media_type: "image/jpeg", data: picture}}
+      n = std.length(turns)
+      if n > 0 and turns[n - 1].role == "user" {
+        last = turns[n - 1]
+        last.content += [seen]
+        turns[n - 1] = last
+      } else {
+        turns += [{role: "user", content: [seen]}]
+      }
+    }
     headers["x-api-key"] = ai.key
     headers["anthropic-version"] = "2023-06-01"
     headers["anthropic-beta"] = "server-side-fallback-2026-07-01"
@@ -170,7 +199,7 @@ fn reply(ai, said) {
     return out
   }
   if ai.key != nothing {headers["Authorization"] = "Bearer {ai.key}"}
-  body = {model: ai.model, messages: [{role: "system", content: guide(ai)}] + said, tools: described("openai")}
+  body = {model: ai.model, messages: [{role: "system", content: guide(ai)}] + said + shown, tools: described("openai")}
   return heard_openai(heard(ai, http.send("POST", ai.url, headers, std.to_json(body), 120)))
 }
 
@@ -204,8 +233,23 @@ fn ended(answer, messages, said, start) {
     }
     added += [m]
   }
-  if answer.questions != nothing {return {questions: answer.questions, messages: added}}
-  return {text: answer, messages: added}
+  out = answer.questions != nothing ? {questions: answer.questions, messages: added} : {text: answer, messages: added}
+  work = worked(added)
+  if work != nothing {out.work = work}
+  return out
+}
+
+// The steps among those messages in short, newest first and at most 6000 characters, so whoever goes on knows how far it
+// got and what it saw, or nothing when it took none. For the agent's own use.
+fn worked(added) {
+  calls = {}
+  steps = []
+  for m in added {
+    for c in m.tool_calls ?? [] {calls[c.id] = "{c.function.name} {std.slice(std.text(c.function.arguments), 0, 200)}"}
+    if m.role == "tool" {steps += ["- {calls[m.tool_call_id]}\n  gave: {std.slice(std.text(m.content), 0, 300)}"]}
+  }
+  if std.length(steps) == 0 {return nothing}
+  return std.slice(text.join(list.reverse(steps), "\n"), 0, 6000)
 }
 
 // Which computer this is and the person's others, as {me, computers}, me its address like laptop.brandon and computers
@@ -247,7 +291,10 @@ fn guide(ai) {
     "laptop.brandon/weather/now with the value city, or a web address, when the person or an answer names one. A tool that " +
     "fails says why: try another way, or tell the person. Only when you truly need something only the person can tell " +
     "you, call questions with one or two short questions, with choices whenever there are likely answers. An answer of " +
-    "Skipped means go on without it: use a default, try another way, or say what you couldn't do. Never ask questions in your reply. When you have what you need, reply." +
+    "Skipped means go on without it: use a default, try another way, or say what you couldn't do. Never ask questions in your reply. " +
+    "Earlier steps in the conversation may have done part of this already: go on from where they got, and never start over. " +
+    "run uses Windows PowerShell on Windows and sh elsewhere, so write commands for it directly, not through another powershell, and don't count on python or node being there. " +
+    "When you have what you need, reply." +
     (ai.place == nothing ? "" : "\n\nYou are running on {ai.place.me}. The person's computers:{ai.place.computers}")
 }
 
@@ -305,7 +352,30 @@ fn here() {
     {name: "click", does: "Clicks those words where they show on the screen", takes: {words: text}},
     {name: "type", does: "Types text where the cursor is, a new line as enter", takes: {text: text}},
     {name: "press", does: "Presses keys together, like ctrl+s or enter", takes: {keys: text}},
+    {name: "see", does: "Shows you a picture file on this computer, like the path a screenshot gave, so you can look at what words can't tell you. It shows for your next turn alone", takes: {path: text}},
   ]
+}
+
+// A picture file as a JPEG in base64, at most 1280 across, small enough to send a model. For the agent's own use.
+fn pictured(path) {
+  script = text.join([
+    "$ErrorActionPreference='Stop'",
+    "trap \{[Console]::Out.Write($_.Exception.GetBaseException().Message);exit 1\}",
+    "Add-Type -AssemblyName System.Drawing",
+    "$path=@'\n" + text.replace(std.text(path), "\n", " ") + "\n'@",
+    "$image=[Drawing.Image]::FromFile((Resolve-Path -LiteralPath $path).Path)",
+    "$scale=[Math]::Min(1,1280/[Math]::Max($image.Width,$image.Height))",
+    "$small=New-Object Drawing.Bitmap $image,([int]($image.Width*$scale)),([int]($image.Height*$scale))",
+    "$jpeg=[Drawing.Imaging.ImageCodecInfo]::GetImageEncoders()|Where-Object \{$_.MimeType -eq 'image/jpeg'\}",
+    "$quality=New-Object Drawing.Imaging.EncoderParameters 1",
+    "$quality.Param[0]=New-Object Drawing.Imaging.EncoderParameter([Drawing.Imaging.Encoder]::Quality,[long]70)",
+    "$out=New-Object IO.MemoryStream",
+    "$small.Save($out,$jpeg,$quality)",
+    "[Console]::Out.Write([Convert]::ToBase64String($out.ToArray()))"
+  ], "\n")
+  done = commands.run(script)
+  if done.code != 0 {fail "that picture can't be read: {done.out}"}
+  return done.out
 }
 
 // Text a tool gave, cut to what a model can sensibly read. For the agent's own use.
@@ -393,6 +463,8 @@ fn used(ai, name, a) {
     } else if name == "press" {
       input.shortcut(a.keys)
       got = "Pressed"
+    } else if name == "see" {
+      return {picture: pictured(a.path)}
     } else {
       return "There's no tool called {name}"
     }

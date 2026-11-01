@@ -332,7 +332,7 @@ loop, Onsay deciding each step and the onsay lingo running each call (`lingos/on
 function the loop calls that takes `messages` gets the whole conversation so far: its log in the chat messages OpenAI
 and OpenRouter take, oldest first, `{role: "user", content}`, `{role: "assistant", content, tool_calls: [{id, type:
 "function", function: {name, arguments}}]}` and `{role: "tool", tool_call_id, content}`, each call of the loop a
-`use` with its address and values. An answer with `text` joins the log as that text, and one with `questions` ends the
+`use` with its address and values. An answer with `text` joins the log as that text, with `work`, its steps in short, when it gives them, and one with `questions` ends the
 message with them. The `agent` lingo works this way, and an agent of anyone's own can too (Onsay's
 `docs/lingo-function.md`, The loop).
 

@@ -241,6 +241,10 @@ const CASES = [
     path: '/prefs/name',
     check: (r) => gives('Bo')(r) && same(shown.map((s) => s.value), ['cli', 'Bo', null]) && shown[0].title === 'Units',
   },
+  // commands.run says how the last thing failed, which PowerShell on its own never does.
+  { lingo: 'onsay', windows: true, name: 'commands.run: a program that fails gives its exit code', path: '/onsay/commands/run', values: ['cmd /c exit 7'], check: (r) => r.status === 200 && r.json.code === 7 },
+  { lingo: 'onsay', windows: true, name: 'commands.run: a command that does not exist is not success', path: '/onsay/commands/run', values: ['nosuchprogram123'], check: (r) => r.status === 200 && r.json.code !== 0 },
+  { lingo: 'onsay', windows: true, name: 'commands.run: what worked is 0, with its output', path: '/onsay/commands/run', values: ['cmd /c echo hi'], check: (r) => r.status === 200 && r.json.code === 0 && r.json.out === 'hi' },
   // agent: the library's AI, on a key from its settings on this computer, here the stand-in's.
   { name: "agent.ask with no key asks Onsay's AI", before: () => keep('agent', {}), path: '/agent/ask', values: { prompt: 'hello' }, check: () => asked.address === 'https://api.onsay.dev/ai/chat' },
   { name: 'agent.ask asks with the key, model and address from its settings', before: () => keep('agent', { openai_key: 'test-key', url: AI }), path: '/agent/ask', values: { prompt: 'hello' }, check: gives('gpt-5-mini says: hello') },
@@ -363,7 +367,7 @@ const CASES = [
     check: (r) => r.status === 200 && r.json.text === 'gpt-5-mini heard: Rome: sunny for 2 days and heard: 2 litres' && same(r.json.messages, [
       { role: 'assistant', content: '', tool_calls: [call('c0', 'use', { address: 'weather/forecast', values: ['Rome', 2] }), call('c1', 'lingo', { task: 'something only this device knows' })] },
       { role: 'tool', tool_call_id: 'c0', content: 'Rome: sunny for 2 days' }, { role: 'tool', tool_call_id: 'c1', content: 'heard: 2 litres' },
-      { role: 'assistant', content: 'gpt-5-mini heard: Rome: sunny for 2 days and heard: 2 litres' }]),
+      { role: 'assistant', content: 'gpt-5-mini heard: Rome: sunny for 2 days and heard: 2 litres' }]) && /^- lingo .*\n  gave: heard: 2 litres\n- use .*\n  gave: Rome: sunny/.test(r.json.work),
   },
   {
     name: 'agent.ask continues a log with tool calls: its model reads every call and what it gave, and it adds only its reply',
@@ -377,9 +381,9 @@ const CASES = [
     before: () => keep('agent', { service: 'claude', claude_key: 'test-key', url: AI }),
     path: '/agent/ask', values: { prompt: 'what is the weather in Rome?', messages: [{ role: 'user', content: 'hi' }, { role: 'assistant', content: '', tool_calls: [call('t1', 'lingo', { task: 'x' })] },
       { role: 'tool', tool_call_id: 't1', content: 'one' }, { role: 'user', content: 'what is the weather in Rome?' }] },
-    check: (r) => gives({ text: 'claude heard: Rome: sunny for 2 days', messages: [
+    check: (r) => /^- use .*\n  gave: Rome: sunny/.test(r.json.work) && gives({ text: 'claude heard: Rome: sunny for 2 days', messages: [
       { role: 'assistant', content: '', tool_calls: [call('tu1', 'use', { address: 'weather/forecast', values: ['Rome', 2] })] },
-      { role: 'tool', tool_call_id: 'tu1', content: 'Rome: sunny for 2 days' }, { role: 'assistant', content: 'claude heard: Rome: sunny for 2 days' }] })(r) &&
+      { role: 'tool', tool_call_id: 'tu1', content: 'Rome: sunny for 2 days' }, { role: 'assistant', content: 'claude heard: Rome: sunny for 2 days' }] })({ ...r, json: { text: r.json.text, messages: r.json.messages } }) &&
       claudes.length === 2 && /never repeat/.test(claudes[1].system) && same(claudes[1].messages, [
         { role: 'user', content: [{ type: 'text', text: 'hi' }] },
         { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'lingo', input: { task: 'x' } }] },
@@ -1135,7 +1139,7 @@ const session = (link) => {
     report('the build ships one lingo, the agent, and it says what each function does', same(shipped, ['agent.lingo']) && about('agent') && !ops('agent').some((o) => !o.description))
     report('standard functions are no app: no entry in the catalog, and nothing to install', !['text', 'list', 'math', 'json', 'url', 'request', 'time', 'encode'].some((g) => entry(g)))
     report('hello: the lingo client, its version, its device key and its catalog, and nothing else', same(Object.keys(hello), ['type', 'token', 'client', 'version', 'key', 'catalog']) &&
-      hello.client === 'lingo-client' && hello.version === '0.18.0' && /^ed25519:[A-Za-z0-9+/]{43}=$/.test(hello.key) && Array.isArray(hello.catalog))
+      hello.client === 'lingo-client' && hello.version === readFileSync(new URL('../src/core.h', import.meta.url), 'utf8').match(/CORE_VERSION "(.+)"/)[1] && /^ed25519:[A-Za-z0-9+/]{43}=$/.test(hello.key) && Array.isArray(hello.catalog))
     report('catalog: onsay, built in, ready, its door for prompts never in the index', builtIn('onsay') && phrase('onsay', 'onsay.serve')?.['x-lingo-internal'] === true)
     for (const [name, test, lingo] of WEB_CASES) {
       if (lingo && !has(lingo)) { skipped++; console.log(`  skip  ${name}: this core has no ${lingo}`); continue }

@@ -1585,7 +1585,12 @@ static val *clip_set(run *r, val **a) {
 
 static val *shell_run(run *r, val **a) {
   buf out = { 0 };
-  int code = powershell(r, str(r, a[0]), 1, 600, &out);
+  buf script = { 0 };
+  // PowerShell ends with 0 whatever happened unless told, so a program or command that failed last says so.
+  buf_str(&script, str(r, a[0]));
+  buf_str(&script, "\n$ok=$?;if($LASTEXITCODE){exit $LASTEXITCODE};if(-not $ok){exit 1}");
+  int code = powershell(r, script.s, 1, 600, &out);
+  buf_free(&script);
   val *rec = v_rec(r->a);
   put_num(r, rec, "code", code);
   put(r, rec, "out", v_text(r->a, out.s ? out.s : "", out.n));

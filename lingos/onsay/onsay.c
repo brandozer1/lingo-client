@@ -1023,6 +1023,9 @@ static val *serve(run *r, val **v) {
       buf_text(&said, rec_get(value, "text"));
     else
       buf_json(&said, value);
+    // What an agent did joins the log in short, so whatever goes on next goes on from there.
+    if (value && rec_get(value, "work") && rec_get(value, "work")->k == V_TEXT)
+      buf_fmt(&said, "\n\n(What it did, newest first, to go on from and never to repeat to the person:\n%s)", rec_get(value, "work")->t.s);
     if (value && rec_get(value, "questions") && rec_get(value, "questions")->k == V_LIST)
       asks = rec_get(value, "questions");
     buf_str(&called_, "{\"address\":");
