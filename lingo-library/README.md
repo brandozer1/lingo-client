@@ -1,14 +1,20 @@
 # Lingo library
 
-Lingos written in Lingo that aren't part of the language. `agent` is the one here, and it ships with every install. The
-basics, like splitting, sorting, JSON, dates and web requests, are standard functions built into the lingo client
+Lingos written in Lingo that aren't part of the language. `agent` ships with every install; `coding` is here to try and
+is not shipped. The basics, like splitting, sorting, JSON, dates and web requests, are standard functions built into the lingo client
 (`../lingos/standard/`). A lingo here is a folder of its name: its code, `<name>.ls`, and when it has settings, its
 `openapi.json`. The first lines of its code list its functions.
 
 `agent` is the library's AI: Onsay's own, free to start and metered on the account, or the person's own key for Claude,
 ChatGPT, OpenRouter or any service that answers the way OpenAI does. Its `ask` talks with the person through the whole
 conversation, its log with every tool it used, uses any lingo on the way, and asks one or two short questions when it
-must, in the person's chat where there is one, or gives a program one answer.
+must, in the person's chat where there is one, or gives a program one answer. It is also the person's AI for every other
+lingo: `prompt` gives one answer as text, and `chat` the model's next message for a lingo running its own loop.
+
+`coding` is Coding Agent: an AI software engineer for a project folder, made in Lingo with strong inspiration from
+OpenCode (MIT, copyright opencode), none of its text copied. It reads, searches, writes and edits code, runs commands and
+checks its work, and finds its AI through the lingo function, like `agent.chat`, never a key of its own. Its prompts and
+PowerShell live in the code itself, one file.
 
 ## Putting one on a computer
 

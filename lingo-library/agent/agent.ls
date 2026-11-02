@@ -3,19 +3,25 @@
 // the person and uses any lingo it needs on the way, or gives a program one answer.
 //
 // 1. ask(prompt, messages=nothing, model=nothing) -> text, or {questions}; with messages, {text, messages, work} or
-//                                  {questions, messages, work}: its reply, after at most 25 turns, or one or two short questions
-//                                  back. messages is the conversation so far, the whole log in the shape OpenAI and
-//                                  OpenRouter take, ending with prompt, and the messages it gives back are those it added,
-//                                  and work is its steps in short, newest first, nothing when it took none, for whoever
-//                                  goes on from here, like the agent loop keeping them in the log
-//                                  to it this turn, in the same shape. model is any model id of the service it uses
-// The model has tools for this computer, where it has them, which run right here: run, a command in its shell, read,
-// write, edit, find and search for files, open, an app, file or web address, and screen, click, type, press and see, for
-// what is on its screen, see showing it a picture file, like a screenshot, for its next turn alone. And three for anywhere: lingo(task, values, decide), which asks the lingo function, across all the
-// person's computers, to solve a task by running what it finds, or with decide to give back the ways, nothing run,
-// use(address, values), anything named by its address, and questions(questions), which asks the person one or two short
-// questions, each answered by typing or by picking a choice. It is told this computer and the person's others. What a tool needs is asked of the person once, like any lingo's. Each tool's answer, or what went wrong, goes back to the model until it
-// replies. Questions are asked in the person's chat on this computer and their answers go back to the model (chat.ask,
+//                                  {questions, messages, work}: its reply, after at most 25 turns, or one or two short
+//                                  questions back. messages is the conversation so far, the whole log in the shape OpenAI
+//                                  and OpenRouter take, ending with prompt, and the messages it gives back are those it
+//                                  added to it, in the same shape, and work is its steps in short, newest first, left out
+//                                  when it took none, for whoever goes on from here, like the agent loop keeping them in
+//                                  the log. model is any model id of the service it uses
+// 2. prompt(prompt, system=nothing, model=nothing) -> text: the AI's one answer, no tools and nothing kept
+// 3. chat(messages, tools=nothing, model=nothing) -> {role, content, tool_calls?}: the AI's next message for a
+//                                  conversation, OpenAI's way, for a lingo running its own loop with tools of its own
+// prompt and chat make it the person's AI for any lingo: one key, or Onsay's AI, kept in one place, used by all.
+//
+// The model of ask has tools for this computer, where it has them, which run right here: run, a command in its shell,
+// read, write, edit, find and search for files, open, an app, file or web address, and screen, click, type, press and see,
+// for what is on its screen, see showing it a picture file, like a screenshot, for its next turn alone. And three for
+// anywhere: lingo(task, values, decide), which asks the lingo function, across all the person's computers, to solve a
+// task by running what it finds, or with decide to give back the ways, nothing run, use(address, values), anything named
+// by its address, and questions(questions), which asks the person one or two short questions, each answered by typing or
+// by picking a choice. It is told this computer and the person's others. What a tool needs is asked of the person once,
+// like any lingo's. Each tool's answer, or what went wrong, goes back to the model until it replies. Questions are asked in the person's chat on this computer and their answers go back to the model (chat.ask,
 // where this computer has it); anywhere else they end its turn, and the answers come as the person's next message.
 //
 // The conversation is always chat messages as OpenAI takes them: {role: "user", content}, {role: "assistant", content,
@@ -31,8 +37,8 @@
 
 // 1. The AI agent answers what the person said, reading the whole conversation, and does what it asks with other lingos
 // on the way. Use it for anything said to Onsay in a chat: greetings, small talk, questions, anything about the
-// conversation like what did you just say, and tasks that need other lingos; and for a program that needs an AI model to
-// answer, write, summarize or translate. prompt is what was just said or asked, with everything it needs. messages is
+// conversation like what did you just say, and tasks that need other lingos to be worked out and done. prompt is what
+// was just said or asked, with everything it needs. messages is
 // the conversation, oldest first, ending with prompt: the whole log as chat messages, with the tools used and what they
 // gave. Give it whenever there is one, and it gives back what it added to it with its reply. model is a model id of the
 // service it uses, the one in its settings when left out.
@@ -77,6 +83,34 @@ fn ask(prompt, messages=nothing, model=nothing) {
   }
   said += [{role: "assistant", content: "I took {turns} turns and still hadn't finished, so I stopped. Try asking for less at once."}]
   return ended(said[-1].content, messages, said, start)
+}
+
+// 2. One answer from an AI model to a prompt, as plain text: to answer, write, summarize, translate, classify or pull
+// facts out of words, for a lingo or program that needs an AI model once. Not for a chat with the person, which ask is
+// for. system is what the model is told it is and how to answer, like answer with one word. It uses no tools and keeps
+// nothing. model is a model id of the service it uses, the one in its settings when left out.
+fn prompt(prompt, system=nothing, model=nothing) {
+  return reply(service(model), [{role: "user", content: prompt}], nothing, {system: system, tools: nothing}).content
+}
+
+// 3. An AI model for a lingo's own agent: the model's next message for a conversation of chat messages in OpenAI's
+// format, which may call the tools it is given. Use it as the AI model of a lingo that runs its own loop and its own
+// tools, like a coding agent: send the conversation, run the tools it calls, add what they gave, and send it again until
+// it answers with no tool calls. messages are OpenAI's chat messages, a system message first when there is one. tools
+// are OpenAI's function tools, [{type: "function", function: {name, description, parameters}}], or nothing for none. It
+// gives {role: "assistant", content, tool_calls}, tool_calls only when it calls them, and thinking, which goes back
+// unchanged on that message for Claude. model is a model id of the service it uses, the one in its settings when left out.
+fn chat(messages, tools=nothing, model=nothing) {
+  system = nothing
+  said = []
+  for m in messages ?? [] {
+    if m.role == "system" {
+      system = (system == nothing ? "" : system + "\n\n") + std.text(m.content)
+    } else {
+      said += [m]
+    }
+  }
+  return reply(service(model), said, nothing, {system: system, tools: tools})
 }
 
 ////////// HELPERS //////////
@@ -128,14 +162,19 @@ fn given(x) {
 // Onsay answers for this computer's account in the same shape. Claude reads the conversation in its own shape: a tool's
 // result is the person's turn, turns of the same side are one, and its own thinking goes back to it unchanged while the
 // turn runs, kept as thinking on its message. picture, a JPEG in base64, goes with this one reply and is never kept in
-// the conversation. For the agent's own use.
-fn reply(ai, said, picture=nothing) {
+// the conversation. setup is {system, tools}, what the model is told and its tools as OpenAI writes them, either nothing
+// for none, the agent's own when setup is left out. For the agent's own use.
+fn reply(ai, said, picture=nothing, setup=nothing) {
+  system = setup == nothing ? guide(ai) : setup.system
+  tools = setup == nothing ? described() : setup.tools ?? []
+  told = system == nothing ? [] : [{role: "system", content: system}]
   shown = picture == nothing ? [] : [{role: "user", content: [
     {type: "text", text: "The picture you asked to see:"},
     {type: "image_url", image_url: {url: "data:image/jpeg;base64,{picture}"}}
   ]}]
   if ai.kind == "onsay" {
-    body = {messages: [{role: "system", content: guide(ai)}] + said + shown, tools: described("openai")}
+    body = {messages: told + said + shown}
+    if std.length(tools) > 0 {body.tools = tools}
     if ai.model != nothing {body.model = ai.model}
     try {a = use(ai.url, body)} catch e {
       if "connected" in std.text(e) {fail "Sign in to Onsay to use its AI, or add your own key in agent's settings"}
@@ -183,7 +222,9 @@ fn reply(ai, said, picture=nothing) {
     headers["x-api-key"] = ai.key
     headers["anthropic-version"] = "2023-06-01"
     headers["anthropic-beta"] = "server-side-fallback-2026-07-01"
-    body = {model: ai.model, max_tokens: 16000, system: guide(ai), tools: described("claude"), messages: turns, fallbacks: "default"}
+    body = {model: ai.model, max_tokens: 16000, messages: turns, fallbacks: "default"}
+    if system != nothing {body.system = system}
+    if std.length(tools) > 0 {body.tools = claude_tools(tools)}
     a = heard(ai, http.send("POST", ai.url, headers, std.to_json(body), 120))
     if a.stop_reason == "refusal" {return {role: "assistant", content: "Claude declined to help with that one."}}
     out = {role: "assistant", content: ""}
@@ -199,7 +240,8 @@ fn reply(ai, said, picture=nothing) {
     return out
   }
   if ai.key != nothing {headers["Authorization"] = "Bearer {ai.key}"}
-  body = {model: ai.model, messages: [{role: "system", content: guide(ai)}] + said + shown, tools: described("openai")}
+  body = {model: ai.model, messages: told + said + shown}
+  if std.length(tools) > 0 {body.tools = tools}
   return heard_openai(heard(ai, http.send("POST", ai.url, headers, std.to_json(body), 120)))
 }
 
@@ -298,9 +340,18 @@ fn guide(ai) {
     (ai.place == nothing ? "" : "\n\nYou are running on {ai.place.me}. The person's computers:{ai.place.computers}")
 }
 
-// The agent's tools, in the format kind reads: claude or openai. Each needs the values its needs names, else its first.
-// For the agent's own use.
-fn described(kind) {
+// Tools as OpenAI writes them, in the shape Claude reads. For the agent's own use.
+fn claude_tools(tools) {
+  out = []
+  for t in tools {
+    out += [{name: t.function.name, description: t.function.description ?? "", input_schema: t.function.parameters ?? {type: "object", properties: {}}}]
+  }
+  return out
+}
+
+// The agent's tools, as OpenAI writes them. Each needs the values its needs names, else its first. For the agent's own
+// use.
+fn described() {
   all = here() + [
     {name: "lingo", does: "Asks Onsay's lingo function, which knows every lingo and call on all the person's computers, everything shared with them, web APIs, MCP tools and Onsay's library, and how each has done before. Use it for anything your other tools can't do, above all a new problem you have no tool for. It finds what can solve it, a tool or script that already exists, a lingo kept from earlier work, a function on another of the person's computers, a web API, or another AI agent able to work it out, runs the one it decides on, and gives back only the answer. One call does one thing: split a job of several steps into a call for each. With decide true it runs nothing and gives back its decision instead: the best ways, best first, each with what it does, where it runs, its address, the inputs it worked out and any it still needs, for you to choose from and run with use. Use decide to see what is on a computer, or what can do something, before acting", takes: {
       task: {type: "string", description: "What to do or find, in plain words, with every detail it needs and the computer it is for, like list the files on the desktop of desktop.brandon"},
@@ -322,11 +373,7 @@ fn described(kind) {
   out = []
   for t in all {
     schema = {type: "object", properties: t.takes, required: t.needs ?? [std.keys(t.takes)[0]]}
-    if kind == "claude" {
-      out += [{name: t.name, description: t.does, input_schema: schema}]
-    } else {
-      out += [{type: "function", function: {name: t.name, description: t.does, parameters: schema}}]
-    }
+    out += [{type: "function", function: {name: t.name, description: t.does, parameters: schema}}]
   }
   return out
 }
