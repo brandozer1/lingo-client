@@ -472,6 +472,7 @@ static val *lingo_use(run *r, val **a) {
 }
 
 static val *setting_(run *r, val **a), *settings_get(run *r, val **a), *settings_set(run *r, val **a);   // 7.
+static val *lingo_list(run *r, val **a), *lingo_code(run *r, val **a), *lingo_save(run *r, val **a);   // 8.
 
 // lingo.run, lingo.use and lingo.setting are lingo(...), use(...) and setting(...), the language's own, in no listing.
 static void floor_phrases(void) {
@@ -497,6 +498,19 @@ static void floor_phrases(void) {
       lingo_ways);
   phrase_add("lingo", "none", "use(address: url, values: record=nothing)", lingo_use);
   phrase_add("lingo", "none", "setting(key: text, reference: text)", setting_);
+  phrase_add("lingo", "none",
+      "list() -> [{name: text, about: text, functions: [{name: text, does: text}]}]: every lingo running on this computer "
+      "but those built into it, what it is and its functions",
+      lingo_list);
+  phrase_add("lingo", "none",
+      "code(name: text) -> {code: text, openapi: record}: a lingo of this computer as its maker writes it, to change it: its "
+      "code, and its openapi.json's info and x-lingo, such as its settings",
+      lingo_code);
+  phrase_add("lingo", "lingos",
+      "save(name: text, code: text, openapi: record=nothing) -> [{name: text, does: text}]: a lingo written or changed and "
+      "running on this computer at once, as a folder of its code and, when given, its openapi.json: its functions, or why "
+      "it can't run, like its code's first mistake",
+      lingo_save);
 }
 
 ////////// 3. LINGOS //////////
@@ -507,6 +521,9 @@ static void floor_phrases(void) {
    One that can't load is set aside with its reason, and the rest still load. A lingo from the folder is running, its
    routes answering and in the catalog, or stopped, as home/running.json says. */
 static arena *library;
+static int serving;   // how many requests are being answered, one inside another's wait
+static arena *retired[16];   // what lingos were read into while a request ran, freed once none runs
+static int retiring;
 static val *device;   // the compiler's instance of every lingo that loaded
 static val *found;   // every lingo read: {name, from, manifest, program, file and code or library,
     // native, running, fresh, error}. fresh: its paths are made from its code
@@ -1072,7 +1089,11 @@ static int load(const char *extra) {
     list_push(a, catalog, one);
   }
   say("%zu lingos are ready", all->r.n - 1);
-  arena_free(was);
+  // A request running now may be inside a lingo read before, so what that was read into is kept till none runs.
+  if (serving && retiring < (int)(sizeof retired / sizeof *retired))
+    retired[retiring++] = was;
+  else if (!serving)
+    arena_free(was);
 
   // Each native lingo that runs, in a lingo client that serves, told the catalog, and each that stopped told so.
   buf now = { 0 };
@@ -1097,10 +1118,10 @@ void lingo_hook(const lingo_hooks *h) { hooks[loading] = *h; }
    address: they reach a lingo when an access rule lets them in, and anyone else gets a 404, as if it weren't there.
    At every phrase, a need must be under the ceiling, the most this computer ever allows, and said in the lingo's
    manifest. net, store and files inside the root, this lingo client's home, are given then; files outside it, run,
-   screen.read and screen.act need a grant, or the person's yes, asked through an app. Every decision but a routine one
+   screen.read, screen.act and lingos, making and changing lingos, need a grant, or the person's yes, asked through an app. Every decision but a routine one
    goes in home/decisions.log. */
 static const char *NEEDS[] = { "net", "store", "files.read", "files.write", "screen.read", "screen.act", "run",
-  NULL };   // the first four routine
+  "lingos", NULL };   // the first four routine
 #define ATTACHED 10   // seconds an app counts as open after it last asked for the questions waiting
 
 // The questions waiting for the person's answer, each {id, lingo, caller} and either {need, path}, whether a lingo may,
@@ -1747,9 +1768,99 @@ static val *settings_set(run *r, val **a) {
   return NOTHING;
 }
 
-////////// 8. CONTROL //////////
+// A lingo's functions from its manifest, each its name and what it does, but its helpers for its own use.
+static val *functions_of(arena *a, val *manifest) {
+  val *paths = rec_get(manifest, "paths");
+  val *out = v_list(a);
+  for (size_t i = 0; paths && paths->k == V_REC && i < paths->r.n; i++) {
+    val *op = rec_get(paths->r.v[i], "post");
+    val *helper = rec_get(op, "x-lingo-internal");
+    val *one;
+    if (!op || (helper && truthy(helper))) continue;
+    one = v_rec(a);
+    rec_set(a, one, "name", v_cstr(a, strrchr(paths->r.key[i], '/') + 1));
+    rec_set(a, one, "does", v_cstr(a, text_or(op, "summary", "")));
+    list_push(a, out, one);
+  }
+  return out;
+}
 
-static int serving;   // how many requests are being answered, one inside another's wait
+// lingo.list(): from the catalog, each running lingo that loaded, but those built in, whose calls every lingo has.
+static val *lingo_list(run *r, val **a) {
+  val *out = v_list(r->a);
+  (void)a;
+  for (size_t i = 0; catalog && i < catalog->l.n; i++) {
+    val *c = catalog->l.v[i];
+    val *m = rec_get(c, "openapi");
+    val *one;
+    if (!m || builtin_of(text_or(c, "name", ""))) continue;
+    one = v_rec(r->a);
+    rec_set(r->a, one, "name", v_cstr(r->a, text_or(c, "name", "")));
+    rec_set(r->a, one, "about", v_cstr(r->a, text_or(rec_get(m, "info"), "description", "")));
+    rec_set(r->a, one, "functions", functions_of(r->a, m));
+    list_push(r->a, out, one);
+  }
+  return out;
+}
+
+// lingo.code(name): its code, and of its manifest what its maker writes, info and x-lingo, but what this computer adds.
+static val *lingo_code(run *r, val **a) {
+  const char *name = a[0]->t.s;
+  val *e = entry_of(name);
+  val *out = v_rec(r->a);
+  val *made = v_rec(r->a);
+  val *x = v_rec(r->a);
+  val *m;
+  val *own;
+  if (!e || builtin_of(name)) fail(r, "unknown", "There's no lingo called %s here", name);
+  if (!rec_get(e, "code")) fail(r, "phrase", "%s isn't written in Lingo, so it has no code to read", name);
+  m = rec_get(e, "manifest");
+  own = rec_get(m, "x-lingo");
+  for (size_t i = 0; own && own->k == V_REC && i < own->r.n; i++)
+    if (strcmp(own->r.key[i], "missing")) rec_set(r->a, x, own->r.key[i], v_copy(r->a, own->r.v[i]));
+  if (rec_get(m, "info")) rec_set(r->a, made, "info", v_copy(r->a, rec_get(m, "info")));
+  rec_set(r->a, made, "x-lingo", x);
+  rec_set(r->a, out, "code", v_copy(r->a, rec_get(e, "code")));
+  rec_set(r->a, out, "openapi", made);
+  return out;
+}
+
+/* lingo.save(name, code, openapi): written as a folder in the lingos folder, in place of a .lingo file of its name, put
+   among those that run, and every lingo read again at once, so it answers and Onsay is told it while the request that
+   saved it still runs. Its functions, each its name and what it does, or why it can't run, in its own words. */
+static val *lingo_save(run *r, val **a) {
+  arena *ra = r->a;
+  const char *name = a[0]->t.s;
+  const char *folder = arena_fmt(ra, "%s/%s", set.lingos, name);
+  val *running = home_json(ra, "running.json");
+  val *e;
+  may(r, "lingos", NULL);
+  if (!named(name)) fail(r, "type", "A lingo's name is lower case letters, digits, _ and -, like chess-site, and never lingo");
+  if (builtin_of(name) || is_standard(name)) fail(r, "denied", "%s is built into this program, so it can't be changed", name);
+  if (retiring == (int)(sizeof retired / sizeof *retired))
+    fail(r, "phrase", "That is as many lingos as can be saved in one go. Save it again once this is done");
+  pl_folder(folder);
+  if (!pl_write(arena_fmt(ra, "%s/%s.ls", folder, name), a[1]->t.s, a[1]->t.len))
+    fail(r, "phrase", "this computer couldn't write %s", folder);
+  if (a[2]->k != V_NOTHING) {
+    buf json = { 0 };
+    buf_json(&json, a[2]);
+    int ok = pl_write(arena_fmt(ra, "%s/openapi.json", folder), json.s, json.n);
+    buf_free(&json);
+    if (!ok) fail(r, "phrase", "this computer couldn't write %s/openapi.json", folder);
+  }
+  pl_delete(arena_fmt(ra, "%s/%s.lingo", set.lingos, name));
+  if (!running || running->k != V_LIST) running = v_list(ra);
+  if (!has(running, name)) list_push(ra, running, v_cstr(ra, name));
+  if (!keep_json("running.json", running)) fail(r, "phrase", "This computer couldn't save which lingos run");
+  load(NULL);
+  e = entry_of(name);
+  if (!e) fail(r, "phrase", "%s was saved in %s, but it wasn't read back", name, folder);
+  if (rec_get(e, "error")) fail(r, "type", "%s was saved, but it can't run: %s", name, text_or(e, "error", ""));
+  return functions_of(ra, rec_get(e, "manifest"));
+}
+
+////////// 8. CONTROL //////////
 
 /* 8. One thing an app or the person does, from /.lingo/<verb> or the command line, its values by name. Its answer, or
    NULL with why in words.
@@ -1957,7 +2068,7 @@ val *core_control(arena *a, const char *verb, val *v, const char **why) {
       good = NEEDS[k] != NULL;
     }
     if (!good) {
-      *why = "The ceiling is a list of needs: net, store, files.read, files.write, screen.read, screen.act and run";
+      *why = "The ceiling is a list of needs: net, store, files.read, files.write, screen.read, screen.act, run and lingos";
       return NULL;
     }
     rec_set(a, local, "ceiling", needs);
@@ -2408,7 +2519,8 @@ void core_serve(const char *text, size_t n, const char *given, buf *out) {
     job.id = was_id;
   }
 
-  serving--;
+  if (!--serving)
+    while (retiring) arena_free(retired[--retiring]);
   if (error.n) {
     rec_set(a, got = v_rec(a), "error", v_text(a, error.s, error.n));
     json = 1;

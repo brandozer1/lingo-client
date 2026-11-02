@@ -8,7 +8,7 @@
 //                                  short. mode plan only looks and plans, changing nothing
 //
 // Its AI is found through the lingo function, never a key of its own: the first of lingo.ways for an AI model that runs a
-// lingo's own agent, like agent.chat on the person's computer or Onsay's AI, kept in its storage and used every step
+// lingo's own agent, like ai.chat on the person's computer or Onsay's AI, kept in its storage and used every step
 // with use(...). One that fails or answers in another shape is forgotten and the next is tried.
 //
 // Its tools, as its model sees them: read (a file with line numbers, or a folder), edit (exact text replaced, then looser

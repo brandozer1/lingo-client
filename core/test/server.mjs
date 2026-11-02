@@ -39,13 +39,14 @@ const HOME = fileURLToPath(DATA).replace(/[\\/]$/, '')
 // screen, run commands and reach files outside its home. Anyone may reach page, and with no account policy, the
 // defaults let 192.0.2.60 reach memo.
 const POLICY = {
-  ceiling: ['net', 'store', 'files.read', 'files.write', 'screen.read', 'run'],
+  ceiling: ['net', 'store', 'files.read', 'files.write', 'screen.read', 'run', 'lingos'],
   overrides: {
     access: [{ who: 'public', lingos: 'page' }],
     grants: {
       desk: ['screen.read', 'run', 'files.read ~/onsay-test', 'files.write ~/onsay-test'],
       onsay: ['screen.read', 'files.read ~/no-such-file-here.txt', 'screen.act', 'run'],
       asker: ['run'],
+      maker: ['lingos'],
     },
   },
   defaults: { access: [{ who: 'ip 192.0.2.60', lingos: 'memo' }] },
@@ -245,9 +246,9 @@ const CASES = [
   { lingo: 'onsay', windows: true, name: 'commands.run: a program that fails gives its exit code', path: '/onsay/commands/run', values: ['cmd /c exit 7'], check: (r) => r.status === 200 && r.json.code === 7 },
   { lingo: 'onsay', windows: true, name: 'commands.run: a command that does not exist is not success', path: '/onsay/commands/run', values: ['nosuchprogram123'], check: (r) => r.status === 200 && r.json.code !== 0 },
   { lingo: 'onsay', windows: true, name: 'commands.run: what worked is 0, with its output', path: '/onsay/commands/run', values: ['cmd /c echo hi'], check: (r) => r.status === 200 && r.json.code === 0 && r.json.out === 'hi' },
-  // agent: the library's AI, on a key from its settings on this computer, here the stand-in's.
-  { name: "agent.ask with no key asks Onsay's AI", before: () => keep('agent', {}), path: '/agent/ask', values: { prompt: 'hello' }, check: () => asked.address === 'https://api.onsay.dev/ai/chat' },
-  { name: 'agent.ask asks with the key, model and address from its settings', before: () => keep('agent', { openai_key: 'test-key', url: AI }), path: '/agent/ask', values: { prompt: 'hello' }, check: gives('gpt-5-mini says: hello') },
+  // agent: the library's agent, on the person's AI, ai, with a key from ai's settings on this computer, here the stand-in's.
+  { name: "agent.ask with no key asks Onsay's AI", before: () => keep('ai', {}), path: '/agent/ask', values: { prompt: 'hello' }, check: () => asked.address === 'https://api.onsay.dev/ai/chat' },
+  { name: 'agent.ask asks with the key, model and address from its settings', before: () => keep('ai', { openai_key: 'test-key', url: AI }), path: '/agent/ask', values: { prompt: 'hello' }, check: gives('gpt-5-mini says: hello') },
   { name: 'agent.ask with a model of its own', path: '/agent/ask', values: { prompt: 'hi there', model: 'qwen/qwen3' }, check: gives('qwen/qwen3 says: hi there') },
   {
     name: 'agent.ask reads the whole conversation, from its first message of the person, with its guide, which it never repeats',
@@ -260,7 +261,7 @@ const CASES = [
     name: 'agent.ask asks the person one or two short questions with its questions tool, in the questions format',
     path: '/agent/ask', values: { prompt: 'plan a trip' }, check: gives({ questions: [{ question: 'Where to?', choices: ['Rome', 'Oslo'] }, 'When?'] }),
   },
-  { name: 'agent.ask with a key turned down', before: () => keep('agent', { openai_key: 'wrong', url: AI }), path: '/agent/ask', values: { prompt: 'hello' }, check: fails(500, /turned the key down/) },
+  { name: 'agent.ask with a key turned down', before: () => keep('ai', { openai_key: 'wrong', url: AI }), path: '/agent/ask', values: { prompt: 'hello' }, check: fails(500, /turned the key down/) },
   // http.send, the core's own web request, against the stand-in's own pages (PAGES below), and request on it.
   { name: 'http: a GET, its status, headers and text', path: '/checks/http_get', values: { base: HTTP }, check: gives([200, 'yes', 'hello ?x=1']) },
   { name: 'http: a POST with headers and a body', path: '/checks/http_post', values: { base: HTTP }, check: gives([201, { method: 'POST', name: 'Ada', type: 'text/plain', body: 'héllo' }]) },
@@ -346,7 +347,7 @@ const CASES = [
   // computer while the agent waits, and replies with what they gave.
   {
     name: 'agent.ask: its model uses its tools, and replies with what they gave, its lingo(...) saying it asks',
-    before: () => keep('agent', { openai_key: 'test-key', url: AI }),
+    before: () => keep('ai', { openai_key: 'test-key', url: AI }),
     path: '/agent/ask', values: { prompt: 'what is the weather in Rome?' },
     check: (r) => gives('gpt-5-mini heard: Rome: sunny for 2 days and heard: 2 litres')(r) && device?.status === 200 &&
       every.some((m) => m.ask === 'something only this device knows' && m.asking === 'agent.ask'),
@@ -378,7 +379,7 @@ const CASES = [
   },
   {
     name: "agent.ask on Claude: the log in Claude's own shape, a tool's result and the next words one turn, its thinking passed back unchanged, and its answer as chat messages again",
-    before: () => keep('agent', { service: 'claude', claude_key: 'test-key', url: AI }),
+    before: () => keep('ai', { service: 'claude', claude_key: 'test-key', url: AI }),
     path: '/agent/ask', values: { prompt: 'what is the weather in Rome?', messages: [{ role: 'user', content: 'hi' }, { role: 'assistant', content: '', tool_calls: [call('t1', 'lingo', { task: 'x' })] },
       { role: 'tool', tool_call_id: 't1', content: 'one' }, { role: 'user', content: 'what is the weather in Rome?' }] },
     check: (r) => /^- use .*\n  gave: Rome: sunny/.test(r.json.work) && gives({ text: 'claude heard: Rome: sunny for 2 days', messages: [
@@ -652,6 +653,24 @@ const WEB_CASES = [
     await control('start', { lingo: 'late' })
     return seen && before.status === 404 && gives('late')(await web('/late'))
   }],
+  ['lingo.save: a lingo written by another runs at once, with its functions given back, and lingo.code reads it as written', async () => {
+    const code = '// made - for the tests: written by maker.\n\n// Says hello.\nfn hello() {return "hello"}\n'
+    const made = await post('/maker/make', { name: 'made', code })
+    const read = await post('/maker/read', { name: 'made' })
+    return made.status === 200 && same(made.json, [{ name: 'hello', does: 'Says hello.' }]) && gives('hello')(await web('/made/hello')) &&
+      read.json?.code === code && existsSync(new URL('made/made.ls', LINGOS))
+  }],
+  ['lingo.list: every lingo running here, what it is and its functions, but those built in', async () => {
+    const all = (await post('/maker/here', {})).json ?? []
+    const made = all.find((l) => l.name === 'made')
+    return made?.about === 'for the tests: written by maker.' && same(made.functions, [{ name: 'hello', does: 'Says hello.' }]) && !all.some((l) => l.name === 'onsay') &&
+      !all.find((l) => l.name === 'agent')?.functions.some((f) => f.name === 'described')
+  }],
+  ["lingo.save: code that can't run says why, and saving it again fixed runs it", async () => {
+    const broken = await post('/maker/make', { name: 'made', code: '// made - broken.\n\n// Breaks.\nfn hello() {return nope.x()}\n' })
+    await post('/maker/make', { name: 'made', code: '// made - fixed.\n\n// Says hi.\nfn hi() {return "hi"}\n' })
+    return broken.status >= 400 && /made was saved, but it can't run: .*nope/.test(broken.json?.error) && gives('hi')(await web('/made/hi'))
+  }],
   ['pack: a folder made into its .lingo file, its paths made from its code, with what each needs', async () => {
     command('pack', 'test/lingos/memo', 'test/data/packed')
     const files = unzip(readFileSync(new URL('packed/memo.lingo', DATA))), m = JSON.parse(files['openapi.json']), recall = m.paths['/memo/recall']?.post
@@ -745,7 +764,7 @@ const WEB_CASES = [
     return gives(null)(r) && Date.now() - started < 4000 && a.seen.length === 1 && same(a.seen[0].questions, ['What city?'])
   }, 'onsay'],
   ["agent.ask: its questions are asked in the person's chat with chat.ask, and its model goes on with their answers in the same turn", async () => {
-    keep('agent', { openai_key: 'test-key', url: AI })
+    keep('ai', { openai_key: 'test-key', url: AI })
     const a = app([['Rome', 'May']])
     await pause(400)
     const r = await post('/agent/ask', { prompt: 'plan a trip', messages: [{ role: 'user', content: 'plan a trip' }] })
@@ -1124,7 +1143,7 @@ const session = (link) => {
     } else report('catalog: windows set aside where it can\'t load', !!entry('windows')?.error)
     report('catalog: settings are named in its manifest', same(entry('prefs')?.openapi['x-lingo'].settings.map((x) => x.name ?? x), ['units', 'name']) &&
       !entry('memo')?.openapi['x-lingo'].settings)
-    report('catalog: agent is the one AI lingo, ready on every core, with one function to ask it', has('agent') && phrase('agent', 'agent.ask') && !phrase('agent', 'agent.answer') && !entry('openrouter'))
+    report('catalog: ai is the AI for every lingo, with prompt and chat, and agent asks it, with one function to ask the agent', has('ai') && phrase('ai', 'ai.prompt') && phrase('ai', 'ai.chat') && has('agent') && phrase('agent', 'agent.ask') && !phrase('agent', 'agent.chat') && !entry('openrouter'))
     report("catalog: a helper whose comment says it is for its lingo's own use is marked x-lingo-internal, and nothing else", phrase('agent', 'agent.described')?.['x-lingo-internal'] === true &&
       !('x-lingo-internal' in phrase('agent', 'agent.ask')) && !ops('memo').some((o) => 'x-lingo-internal' in o))
     report('catalog: native is ready, one phrase that calls into Windows', phrase('onsay', 'native.call') !== undefined)
@@ -1136,7 +1155,7 @@ const session = (link) => {
     report('catalog: a folder with no openapi.json and no program is not a lingo', !entry('notalingo'))
     report('catalog: a .lingo file that is not a zip says so', /isn't a \.lingo file/.test(entry('notazip').error))
     const shipped = readdirSync(new URL('lingos/', BUILT))
-    report('the build ships one lingo, the agent, and it says what each function does', same(shipped, ['agent.lingo']) && about('agent') && !ops('agent').some((o) => !o.description))
+    report('the build ships two lingos, ai and the agent on it, and each says what each function does', same(shipped, ['agent.lingo', 'ai.lingo']) && ['ai', 'agent'].every((n) => about(n) && !ops(n).some((o) => !o.description)))
     report('standard functions are no app: no entry in the catalog, and nothing to install', !['text', 'list', 'math', 'json', 'url', 'request', 'time', 'encode'].some((g) => entry(g)))
     report('hello: the lingo client, its version, its device key and its catalog, and nothing else', same(Object.keys(hello), ['type', 'token', 'client', 'version', 'key', 'catalog']) &&
       hello.client === 'lingo-client' && hello.version === readFileSync(new URL('../src/core.h', import.meta.url), 'utf8').match(/CORE_VERSION "(.+)"/)[1] && /^ed25519:[A-Za-z0-9+/]{43}=$/.test(hello.key) && Array.isArray(hello.catalog))

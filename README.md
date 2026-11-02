@@ -21,7 +21,7 @@ Apache 2.0 licensed and made to be built on: add lingos, or wrap it in your own 
 | `lingos/windows/`, `lingos/linux/` | The base calls on each platform, built in for it |
 | `lingos/native/` | The Windows call `native.call`, and the part of libffi it needs |
 | `lingos/standard/` | The standard functions built into the language, written in Lingo: `text`, `list`, `json`, `request` and more |
-| `lingo-library/` | Lingos that aren't built in: `agent`, the one that ships. See its README |
+| `lingo-library/` | Lingos that aren't built in: `ai` and `agent`, the ones that ship. See its README |
 | `docs/` | `lingo.md`: the language, and what a lingo and its `.lingo` file are |
 
 ## Download

@@ -2,7 +2,7 @@
 #   bin/onsay-core.exe          the lingo client for Windows, with onsay and the base calls built in
 #   bin/onsay-core.lib          what it shares with native lingos, to build their libraries against
 #   bin/test/onsay-core.exe     the same, its onsay talking to test/server.mjs. Same file name, since a native library binds to it
-#   bin/lingos/                 agent.lingo, the one lingo that ships, packed by the lingo client itself
+#   bin/lingos/                 ai.lingo and agent.lingo, the lingos that ship, packed by the lingo client itself
 #   bin/linux-x64/onsay-core    the lingo client for Linux, with onsay and the base calls built in, and bin/linux-arm64/onsay-core. glibc 2.28
 #                               or later, and libcurl, which it loads as it starts, so it builds here with nothing of
 #                               Linux's installed
@@ -66,9 +66,11 @@ foreach ($arch in @{ x64 = "x86_64"; arm64 = "aarch64" }.GetEnumerator()) {
 }
 Get-ChildItem "$here/bin", "$here/obj" -Recurse -Include *.pdb, *.lib -Exclude onsay-core.lib | Remove-Item
 
-# The agent, the one lingo that ships, packed into bin/lingos by the lingo client.
+# The lingos that ship, ai, the person's AI, and agent, on it, packed into bin/lingos by the lingo client.
 $slash = $here -replace '\\', '/'
 Set-Content "$here/obj/pack.json" "{`"home`": `"$slash/obj/home`", `"lingos`": `"$slash/../lingo-library`"}"
-& "$here/bin/onsay-core.exe" "$here/obj/pack.json" pack "$here/../lingo-library/agent" "$here/bin/lingos" 2>$null
-if ($LASTEXITCODE -ne 0) { Write-Error "agent couldn't be packed. To see why: bin/onsay-core.exe obj/pack.json pack ../lingo-library/agent"; exit 1 }
+foreach ($name in @("ai", "agent")) {
+  & "$here/bin/onsay-core.exe" "$here/obj/pack.json" pack "$here/../lingo-library/$name" "$here/bin/lingos" 2>$null
+  if ($LASTEXITCODE -ne 0) { Write-Error "$name couldn't be packed. To see why: bin/onsay-core.exe obj/pack.json pack ../lingo-library/$name"; exit 1 }
+}
 Write-Output "built bin/onsay-core.exe, bin/test/onsay-core.exe, bin/linux-x64, bin/linux-arm64 and bin/lingos"

@@ -70,7 +70,7 @@ is a 401 that says why. Anyone not let in gets a 404, as if the lingo weren't th
 
 ```json
 {
-  "ceiling": ["net", "store", "files.read", "files.write", "screen.read", "screen.act", "run"],
+  "ceiling": ["net", "store", "files.read", "files.write", "screen.read", "screen.act", "run", "lingos"],
   "overrides": {
     "access": [
       { "who": "public", "lingos": "page" },
@@ -107,7 +107,7 @@ version is older than the one kept is refused.
 
 **At every phrase**, each need it has must be under the ceiling and said in its lingo's `openapi.json` for the route
 the request reached (`x-lingo-needs`). Then `net`, `store` and files inside `home` are given. Files outside `home`,
-`run`, `screen.read` and `screen.act` need a grant, else the person's yes: when an app is open (it asked for the
+`run`, `screen.read`, `screen.act` and `lingos` (`lingo.save`) need a grant, else the person's yes: when an app is open (it asked for the
 questions in the last 10 seconds), the lingo client asks it and waits up to a minute, answering other requests
 meanwhile. `once` allows it for this request, `always` writes the grant into `policy.json`'s overrides, and `no`
 refuses it. With no app open it is refused, saying how to grant it. A refusal is a 403.
@@ -281,8 +281,8 @@ the lingo's own functions when its `openapi.json`'s `x-lingo` says `keep` (`../d
 
 ```
 ./build.ps1                                 bin/onsay-core.exe and bin/test/onsay-core.exe, with onsay and the base calls
-                                            built in, bin/onsay-core.lib, bin/lingos (agent.lingo, the one lingo that
-                                            ships, packed by the lingo client itself), and
+                                            built in, bin/onsay-core.lib, bin/lingos (ai.lingo and agent.lingo, the lingos
+                                            that ship, packed by the lingo client itself), and
                                             bin/linux-x64/onsay-core and bin/linux-arm64/onsay-core, with onsay and the base calls built in,
                                             for glibc 2.28 or later, all built on Windows with zig, one download, no
                                             installer

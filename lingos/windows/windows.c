@@ -1354,12 +1354,20 @@ static void typing(run *r, IUIAutomationElement *e) {
   show_type();
 }
 
-// Each character as Unicode input. A new line is Enter, because apps listen for the key, not the character.
+/* Each character as Unicode input. A new line is Enter, because apps listen for the key, not the character. Paced at
+   about 60 a second, since apps like Windows 11's Notepad drop or reorder characters that come faster. It stops when
+   another window comes to the front, so what is left is never typed into the wrong app. */
 static void type_text(run *r, const char *text) {
   typing(r, NULL);
   wchar_t *w = win_wide(text);
+  HWND front = GetForegroundWindow();
   double ticked = pl_now();
   for (wchar_t *c = w; *c; c++) {
+    if (GetForegroundWindow() != front) {
+      size_t typed = (size_t)(c - w);
+      free(w);
+      fail(r, "phrase", "Another window came to the front while typing, so it stopped after %zu characters", typed);
+    }
     if (pl_now() - ticked > 0.3) {
       show_type();
       ticked = pl_now();
@@ -1379,7 +1387,7 @@ static void type_text(run *r, const char *text) {
       free(w);
       fail(r, "stopped", "Stopped by the person");
     }
-    Sleep(5);
+    Sleep(16);
   }
   free(w);
 }

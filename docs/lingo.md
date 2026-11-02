@@ -333,7 +333,7 @@ function the loop calls that takes `messages` gets the whole conversation so far
 and OpenRouter take, oldest first, `{role: "user", content}`, `{role: "assistant", content, tool_calls: [{id, type:
 "function", function: {name, arguments}}]}` and `{role: "tool", tool_call_id, content}`, each call of the loop a
 `use` with its address and values. An answer with `text` joins the log as that text, with `work`, its steps in short, when it gives them, and one with `questions` ends the
-message with them. The `agent` lingo works this way, and an agent of anyone's own can too (Onsay's
+message with them. The `agent` lingo works this way, on the `ai` lingo's `ai.chat`, and an agent of anyone's own can too (Onsay's
 `docs/lingo-function.md`, The loop).
 
 ## 8. How a function runs
@@ -389,11 +389,11 @@ gives in its `description`, the way the base calls write it: `-> [{name,path,siz
 nothing, `a|b` is either, and `bool` is true or false.
 
 **Needs** are what a phrase uses on the computer, from one shared list: `net`, `store`, `files.read`, `files.write`,
-`screen.read`, `screen.act` and `run`. A native phrase says which it needs as it is added, and a function written in
+`screen.read`, `screen.act`, `run` and `lingos`, making and changing lingos. A native phrase says which it needs as it is added, and a function written in
 Lingo needs everything the phrases it reaches need, worked out from its code. A lingo's `openapi.json` says what each
 of its routes needs (`x-lingo-needs`, section 11), and the computer decides what it actually gets, every time a phrase
-runs: only what is under its ceiling and said in the manifest, and `files` outside the lingo client's own folder, `run`
-and the screen only with a grant or the person's yes. A phrase that may not stops the call with `denied`, and `try`
+runs: only what is under its ceiling and said in the manifest, and `files` outside the lingo client's own folder, `run`,
+`lingos` and the screen only with a grant or the person's yes. A phrase that may not stops the call with `denied`, and `try`
 can't hide that. How the computer decides is in `core/README.md`, *Who may do what*.
 
 ## 11. A .lingo file: its program and its openapi.json
@@ -494,7 +494,7 @@ its code as it loads, as `pack` makes them.
 
 **What its maker writes in `openapi.json`**, all optional, a part of the whole: its `info`, like a `description` for a
 native lingo, which has no comments to read, and `x-lingo` with its settings, a route and where its settings are kept
-(the `agent` of `lingo-library/`, shortened, with a `keep` and a `route` it hasn't got added to show them):
+(the `ai` of `lingo-library/`, shortened, with a `keep` and a `route` it hasn't got added to show them):
 
 ```json
 {
@@ -692,6 +692,9 @@ can write in a few lines is a standard function instead, written in Lingo on thi
 | `store.get`, `put`, `keys`, `delete` | Onsay's own storage on the computer, its files, needing `store` |
 | `settings.get(lingo)`, `settings.set(lingo, key, value)` | A lingo's settings, kept on the computer wherever that lingo keeps them, for a form of them and to change one (section 11) |
 | `http.send(method, url, headers=nothing, body=nothing, timeout=30)` | The computer's own web request, needing `net`. `request` and `use(...)` stand on it |
+| `lingo.list()` | Every lingo running on the computer but those built in, `{name, about, functions: [{name, does}]}`, so an agent knows what is here |
+| `lingo.code(name)` | A lingo's code, `{code, openapi}`, its openapi.json as its maker writes it, to change it or learn from it |
+| `lingo.save(name, code, openapi=nothing)` | A lingo written or changed as a folder in the lingos folder, started and read again at once, needing `lingos`: its functions, or why it can't run, like its code's first mistake. How agents keep what they work out |
 
 `http.send` gives `{status, headers, text}`, its headers a record by lower case name, redirects followed, at most 4 MB
 back, and fails when it takes longer than its timeout. Windows makes it with WinHTTP and Linux with libcurl, so proxies
