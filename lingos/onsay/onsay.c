@@ -11,7 +11,7 @@
 // 5. /onsay         prompts, with the prompt key, each worked through as the agent loop, and sessions: the whole log,
 //                   what a prompt is doing as it runs, and the person's answers to what it asks
 // 6. Signing in     sign_in, sign_out and status, from an app through /.lingo/call or from onsay-core <settings> call,
-//                   and the account's devices
+//                   the account's devices, and where its trial of Onsay's AI stands
 // 7. onsay_lingo()  adds its phrases and the base calls, as the lingo client starts
 #include "core.h"
 #include "platform.h"
@@ -495,6 +495,20 @@ static int ask(const char *values, size_t n, volatile int *stop, buf *answer) {
   return exchange("lingo", values, n, stop, 1e12, answer, NULL);
 }
 
+/* A line a request's run says for the person, sent to Onsay as a step of that request when Onsay sent it, so whoever
+   asked follows along from any computer, and Onsay knows it is still working. This computer's own requests, from its
+   port or its prompts, "port <n>" and "onsay <n>", are shown here instead. */
+static int said(const char *for_, const char *text) {
+  if (!strncmp(for_, "\"port ", 6) || !strncmp(for_, "\"onsay ", 7)) return 0;
+  buf m = { 0 };
+  buf_fmt(&m, "{\"type\":\"step\",\"id\":%s,\"text\":", for_);
+  buf_json_str(&m, text, strlen(text));
+  buf_chr(&m, '}');
+  int ok = send_(m.s, m.n);
+  buf_free(&m);
+  return ok;
+}
+
 /* A signer's key, by its keyid, a device and its handle like laptop.brandon: from Onsay's /resolve, its statement checked,
    and kept for 5 minutes. mine when the handle is this computer's own. */
 static struct {
@@ -731,8 +745,8 @@ static void handed_back(void *arg, const char *response, size_t n) {
 
 /* A call of a turn, as me, the account's own, so the person's own rules apply: a lingo on this computer handed in as a
    request, POST to its path with inputs as its body; anything else through use(...), the way Onsay reaches it, other
-   computers' own rules applying there. Its value, or NULL with why in why. */
-static val *called(run *r, const char *address, val *inputs, buf *why) {
+   computers' own rules applying there, the steps it says joining the turn t. Its value, or NULL with why in why. */
+static val *called(run *r, turn *t, const char *address, val *inputs, buf *why) {
   static long count;
   arena *a = r->a;
   buf here = { 0 };
@@ -754,11 +768,11 @@ static val *called(run *r, const char *address, val *inputs, buf *why) {
     buf_json_str(&request, body.s, body.n);
     buf_str(&request, ",\"base64\":false}");
     lingo_hand(request.s, request.n, "me", handed_back, h);
-    lingo_wait(&h->done, r->stop, 300);
+    lingo_wait(&h->done, r->stop, 600);
     if (!h->done) {
       h->left = 1;
       lingo_stop(id);
-      buf_str(why, *r->stop ? "Stopped by the person" : "It took more than 5 minutes, so it was stopped");
+      buf_str(why, *r->stop ? "Stopped by the person" : "It took more than 10 minutes, so it was stopped");
     } else {
       val *got = json_parse(a, h->response.s, h->response.n, NULL);
       val *status = rec_get(got, "status");
@@ -780,7 +794,7 @@ static val *called(run *r, const char *address, val *inputs, buf *why) {
     buf_str(&request, ",\"values\":");
     buf_add(&request, body.s, body.n);
     buf_chr(&request, '}');
-    val *got = exchange("lingo", request.s, request.n, r->stop, 300, &reply, NULL)
+    val *got = exchange("lingo", request.s, request.n, r->stop, 600, &reply, t)
         ? json_parse(a, reply.s, reply.n, NULL)
         : NULL;
     if (got && !rec_get(got, "error"))
@@ -1007,7 +1021,7 @@ static val *serve(run *r, val **v) {
       m.n = 0;
     }
     pl_leave(lock);
-    if (!value) value = called(r, address, inputs, &why);
+    if (!value) value = called(r, &t, address, inputs, &why);
     // The call and what it gave join the log, its values but the log itself, which a call that reads it was given.
     given = inputs;
     if (inputs->k == V_REC) {
@@ -1294,13 +1308,25 @@ static val *devices(run *r, val **v) {
   return out;
 }
 
+// Onsay's AI for the account, as Onsay says: {plan, ends, over}, so an app can offer the subscription once the trial ends.
+static val *ai(run *r, val **v) {
+  buf error = { 0 };
+  double status = 0;
+  val *said = api(r->a, "GET", "/ai", NULL, &status, &error);
+  buf_free(&error);
+  if (!said) fail(r, "phrase", "Onsay couldn't be reached. Check that this computer is online, then try again");
+  if (status == 401) fail(r, "phrase", "Sign in to use Onsay's AI");
+  if (status != 200) fail(r, "phrase", "Onsay couldn't say: %s", text_or(said, "error", "it said no"));
+  return said;
+}
+
 ////////// 7. ITS PHRASES //////////
 
 void base_calls(void);   // the calls every computer has, built for its platform: windows.c or linux.c
 
 // Called once as the lingo client starts (core.c, BUILTINS).
 void onsay_lingo(void) {
-  static const lingo_hooks hooks = { "public", running, decided, ask, key };
+  static const lingo_hooks hooks = { "public", running, decided, ask, key, said };
   lock = pl_gate_new();
   logging = pl_gate_new();
   lingo_hook(&hooks);
@@ -1320,5 +1346,9 @@ void onsay_lingo(void) {
       "status() -> {signed_in: bool, signing_in?: bool, failed?: text, running: bool, connected?: bool, handle?: text, device?: text, key?: text}: whether this computer is signed in to "
       "Onsay, and as what",
       status);
+  phrase_add("onsay", "net",
+      "ai() -> {plan: text, ends?: text, over: bool}: Onsay's AI for this account: its plan, trial or paid, when its free "
+      "trial ends, and whether it is over",
+      ai);
   base_calls();
 }

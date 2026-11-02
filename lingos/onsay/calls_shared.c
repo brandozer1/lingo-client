@@ -318,9 +318,11 @@ static val *chat_ask(run *r, val **a) {
   return got;
 }
 
-// A line in the chat, {"show":"say"} or {"show":"step"}, with its text, for an app to draw.
+// A line in the chat, {"show":"say"} or {"show":"step"}, with its text, for an app to draw. A request Onsay sent this
+// computer sends it on instead, as a step, to the person who asked, wherever they are (lingo_said).
 static val *chat_line(run *r, const char *kind, val *text) {
   const char *t = str(r, text);
+  if (lingo_said(t)) return NOTHING;
   buf b = { 0 };
   buf_fmt(&b, "{\"show\":\"%s\",\"text\":", kind);
   buf_json_str(&b, t, strlen(t));

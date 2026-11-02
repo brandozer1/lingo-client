@@ -5,11 +5,13 @@ is not shipped. The basics, like splitting, sorting, JSON, dates and web request
 (`../lingos/standard/`). A lingo here is a folder of its name: its code, `<name>.ls`, and when it has settings, its
 `openapi.json`. The first lines of its code list its functions.
 
-`agent` is the library's AI: Onsay's own, free to start and metered on the account, or the person's own key for Claude,
-ChatGPT, OpenRouter or any service that answers the way OpenAI does. Its `ask` talks with the person through the whole
-conversation, its log with every tool it used, uses any lingo on the way, and asks one or two short questions when it
-must, in the person's chat where there is one, or gives a program one answer. It is also the person's AI for every other
-lingo: `prompt` gives one answer as text, and `chat` the model's next message for a lingo running its own loop.
+`agent` is the library's AI: Onsay's own, free for 30 days and metered on the account, or the person's own key for
+Claude, ChatGPT, Gemini, Grok, OpenRouter or any service that answers the way OpenAI does. Its `ask` talks with the person
+through the whole conversation, its log with every tool it used, uses any lingo on the way, says a step for each tool so
+the person can follow it from any computer, and asks one or two short questions when it must, in the person's chat where
+there is one, or gives a program one answer. After 7 minutes or 60 turns it says what is done and what is left, so the
+work can go on. It is also the person's AI for every other lingo: `prompt` gives one answer as text, and `chat` the
+model's next message for a lingo running its own loop.
 
 `coding` is Coding Agent: an AI software engineer for a project folder, made in Lingo with strong inspiration from
 OpenCode (MIT, copyright opencode), none of its text copied. It reads, searches, writes and edits code, runs commands and

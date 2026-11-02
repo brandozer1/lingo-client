@@ -24,5 +24,6 @@ CALL("commands", "none", "output(id: text) -> {running: bool, code?: whole, pid:
 CALL("chat", "none", "ask(questions: list, seconds: number=120) -> [text]?: asks the person questions in Onsay's chat on this computer and waits for "
      "their answers, in order, so the work goes on with them. Each question is text, answered by typing, or {question, choices}, "
      "answered by picking one. Nothing when nobody answered in seconds. Fails when no Onsay app is open to ask", chat_ask)
-CALL("chat", "none", "say(text: text): tells the person something in Onsay's chat on this computer while the work goes on", chat_say)
-CALL("chat", "none", "step(text: text): shows what is being done now as a step under the person's message in Onsay's chat on this computer", chat_step)
+CALL("chat", "none", "say(text: text): tells the person something in Onsay's chat while the work goes on, on whichever computer they asked from", chat_say)
+CALL("chat", "none", "step(text: text): shows what is being done now as a step under the person's message in Onsay's chat, on whichever computer they asked from. "
+     "Say one as each part of a long job starts: it also tells Onsay the work is still going", chat_step)

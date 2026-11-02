@@ -424,6 +424,13 @@ static val *asked(run *r, buf *in) {
   return rec_get(got, "value") ? rec_get(got, "value") : NOTHING;
 }
 
+// lingo.h: a line said by the running request, sent on by the running native lingo that sends lines on, if any.
+int lingo_said(const char *text) {
+  size_t k = 1;
+  while (k < 64 && !(on[k] && hooks[k].said)) k++;
+  return k < 64 && job.id && hooks[k].said(job.id, text);
+}
+
 /* A request of the lingo function, with what was around it (pl_context) and the function asking, never the answer
    itself. gives is what lingo.run says it wants, NULL for lingo.ways, which asks for the ways, nothing run. */
 static val *lingo_asked(run *r, val *ask, val *values, val *gives) {

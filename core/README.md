@@ -213,6 +213,7 @@ command line.
 | `decided(line)` | each line of `decisions.log` as it is written |
 | `ask(values, n, stop, answer)` | answers `lingo(...)` and `use(...)`: `values` is `{ask, values, gives, context, asking, for}` or `{address, values, for}`, `for` the id of the request whose run asks, when one does, and the answer a record with `value`, or `error` and `code`. With no running lingo to ask, they are asked of the settings' `ask`, else fail with "This lingo client isn't connected to Onsay" |
 | `key(a, keyid)` | a request's signer, by its keyid like `laptop.brandon`: `{key: "ed25519:<base64>", handle, mine}`, or `NULL` |
+| `said(for, text)` | a line the run of request `for` says for the person, `chat.step` or `chat.say`: 1 when it sent it on to whoever asked, like the onsay lingo for a request Onsay sent, else 0 and it is a show line here |
 
 What the lingo client offers it back, from any thread:
 
@@ -225,6 +226,7 @@ What the lingo client offers it back, from any thread:
 | `lingo_policy(a, account, device, why)` | keeps the account's policy, with its version, as the one in force, its grants for this computer by `device`. Refused when older than the one kept. Gives the grants the ceiling clamps |
 | `lingo_setting`, `lingo_set` | one of a lingo's settings, as this computer keeps them |
 | `lingo_home` | its home folder, as a whole path, for a file a native lingo keeps there, like the onsay lingo's `sent.log` |
+| `lingo_said(text)` | on the job thread, a line the running request says, handed to the running native lingo that fills `said`: 1 when it took it |
 | `key_of`, `key_sign`, `key_forget` | this computer's own key pairs, in `home/keys`, the private half never handed out |
 | `sha256`, `base64`, `unbase64`, `ed25519_key`, `ed25519_sign`, `ed25519_check` | signing and checking (`src/sign.c`) |
 

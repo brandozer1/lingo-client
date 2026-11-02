@@ -196,13 +196,16 @@ void key_forget(const char *name);
                when one does, and the answer goes in answer, a record with value, or
                error and code. 0 when it can't be asked, or stop was set while it waited (lingo_wait)
      key       a request's signer by its keyid, like laptop.brandon: {key: "ed25519:<base64>", handle, mine}, mine true
-               when it is a device of this computer's own handle. NULL when it isn't known */
+               when it is a device of this computer's own handle. NULL when it isn't known
+     said      a line the run of a request says for the person, chat.step or chat.say, with for, that request's id as
+               JSON, on the job thread. 1 when it sent the line on to whoever asked, 0 when this computer shows it */
 typedef struct {
   const char *open;
   void (*running)(const char *catalog);
   void (*decided)(const char *line);
   int (*ask)(const char *values, size_t n, volatile int *stop, buf *answer);
   val *(*key)(arena *a, const char *keyid);
+  int (*said)(const char *for_, const char *text);
 } lingo_hooks;
 void lingo_hook(const lingo_hooks *hooks);
 
@@ -221,7 +224,9 @@ void lingo_hook(const lingo_hooks *hooks);
                     grants the ceiling clamps, a record by lingo
      lingo_setting  one of a lingo's settings as this computer keeps them, or NULL. lingo_set keeps one, 1 when it was
      lingo_home     this lingo client's home folder, as a whole path, for a file a native lingo keeps there, like a log
-     lingo_serves   1 in a lingo client that serves, whether or not the native lingo asking runs, 0 at the command line */
+     lingo_serves   1 in a lingo client that serves, whether or not the native lingo asking runs, 0 at the command line
+     lingo_said     on the job thread: a line the running request says for the person, handed to the native lingo that
+                    sends such lines on (said in lingo_hooks). 1 when it took it, else 0, and this computer shows it */
 void lingo_hand(const char *request, size_t n, const char *caller, void (*answered)(void *arg, const char *response, size_t n), void *arg);
 void lingo_stop(const char *id);
 void lingo_wait(volatile int *done, volatile int *stop, double seconds);
@@ -232,6 +237,7 @@ val *lingo_setting(arena *a, const char *lingo, const char *key);
 int lingo_set(const char *lingo, const char *key, val *value);
 const char *lingo_home(void);
 int lingo_serves(void);
+int lingo_said(const char *text);
 
 LINGO_SHARED_END
 

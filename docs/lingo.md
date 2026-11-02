@@ -763,7 +763,10 @@ Conventions that matter in practice:
   inside a `try` (section 6). `chat.say("Found two tables, checking one more")` posts his line in the chat while the
   work goes on, and `chat.step("Reading the menu")` a step under the message running. The questions wait in the lingo
   client's questions for the app, `/.lingo/asks`, answered at `/.lingo/answer` (`core/README.md`), and the lines go out
-  as show lines; the Windows app opens the chat for a question, never for a line, so the work keeps the keyboard.
+  as show lines; the Windows app opens the chat for a question, never for a line, so the work keeps the keyboard. A
+  lingo run for someone on another computer, through Onsay, sends its lines there instead, as steps of their call
+  (`said` in `core/README.md`, Hooks), and each one tells Onsay the work is still going, so a long job that says a step
+  every so often is never stopped as stuck.
 - **Places:** `input`'s `click_in`, `move_in`, `drag_in`, `scroll_in` and `position_in` take a place in a window,
   wherever it is now, or on the main screen when the window is `nothing`.
 - **New windows:** a window builds its controls a moment after it appears, so wait for one with `controls.wait_for`
