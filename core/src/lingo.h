@@ -197,13 +197,15 @@ void key_forget(const char *name);
      key       a request's signer by its keyid, like laptop.brandon: {key: "ed25519:<base64>", handle, account, mine},
                mine true when it is a device of this computer's own account. NULL when it isn't known
      said      a line the run of a request says for the person, chat.step or chat.say, with for, that request's id as
-               JSON, on the job thread. 1 when it sent the line on to whoever asked, 0 when this computer shows it */
+               JSON, on the job thread. 1 when it sent the line on to whoever asked, 0 when this computer shows it
+     called    each request this lingo client made, as a line of JSON (lingo_called), its secrets already taken out */
 typedef struct {
   void (*running)(const char *catalog);
   void (*decided)(const char *line);
   int (*ask)(const char *values, size_t n, volatile int *stop, buf *answer);
   val *(*key)(arena *a, const char *keyid);
   int (*said)(const char *for_, const char *text);
+  void (*called)(const char *line);
 } lingo_hooks;
 void lingo_hook(const lingo_hooks *hooks);
 
@@ -224,7 +226,12 @@ void lingo_hook(const lingo_hooks *hooks);
      lingo_home     this lingo client's home folder, as a whole path, for a file a native lingo keeps there, like a log
      lingo_serves   1 in a lingo client that serves, whether or not the native lingo asking runs, 0 at the command line
      lingo_said     on the job thread: a line the running request says for the person, handed to the native lingo that
-                    sends such lines on (said in lingo_hooks). 1 when it took it, else 0, and this computer shows it */
+                    sends such lines on (said in lingo_hooks). 1 when it took it, else 0, and this computer shows it
+     lingo_called   one request this lingo client made, handed to each running native lingo that keeps calls (called in
+                    lingo_hooks) as {at, ms, kind, address, ask, request {method, url, path, headers, body}, response
+                    {status, headers, body}, error, stopped}. kind is web or lingo, got what pl_http gives, {status,
+                    headers, text}, or NULL. A header that carries a key, and a query value whose name says it is one,
+                    are taken out first, and each body cut to 4 KB */
 void lingo_hand(const char *request, size_t n, const char *caller, void (*answered)(void *arg, const char *response, size_t n), void *arg);
 void lingo_stop(const char *id);
 void lingo_wait(volatile int *done, volatile int *stop, double seconds);
@@ -236,6 +243,8 @@ int lingo_set(const char *lingo, const char *key, val *value);
 const char *lingo_home(void);
 int lingo_serves(void);
 int lingo_said(const char *text);
+void lingo_called(const char *kind, const char *address, const char *ask, const char *method, const char *url, val *headers,
+    const char *body, size_t n, val *got, const char *error, int stopped, double ms);
 
 LINGO_SHARED_END
 

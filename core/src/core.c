@@ -290,6 +290,91 @@ static const char *reached(arena *a, const char *url, buf *why) {
 
 static pl_gate *gate;
 
+#define CALL_BODY 4096   // the most bytes of a body a call keeps (lingo_called)
+
+// A header that carries a key, or a query value's name that says it is one: never kept in a call.
+static int secret(const char *name, int query) {
+  static const char *headers[] = { "authorization", "cookie", "set-cookie", "proxy-authorization", "x-api-key", "api-key" };
+  static const char *words[] = { "key", "token", "secret", "password", "sig", "auth" };
+  char low[128];
+  size_t n = 0;
+  for (; name[n] && n < sizeof low - 1; n++) low[n] = (char)tolower((unsigned char)name[n]);
+  low[n] = 0;
+  if (!query) {
+    for (size_t i = 0; i < sizeof headers / sizeof *headers; i++)
+      if (!strcmp(low, headers[i])) return 1;
+    return 0;
+  }
+  for (size_t i = 0; i < sizeof words / sizeof *words; i++)
+    if (strstr(low, words[i])) return 1;
+  return 0;
+}
+
+// Headers as a call keeps them, every secret one (redacted).
+static val *kept_headers(arena *a, val *headers) {
+  val *out = v_rec(a);
+  for (size_t i = 0; headers && headers->k == V_REC && i < headers->r.n; i++)
+    rec_set(a, out, headers->r.key[i], secret(headers->r.key[i], 0) ? v_cstr(a, "(redacted)") : headers->r.v[i]);
+  return out;
+}
+
+// lingo.h: one request made, as a line of JSON, to each running native lingo that keeps calls.
+void lingo_called(const char *kind, const char *address, const char *ask, const char *method, const char *url, val *headers,
+    const char *body, size_t n, val *got, const char *error, int stopped, double ms) {
+  arena *a = arena_new();
+  val *line = v_rec(a);
+  val *request = v_rec(a);
+  val *response = v_rec(a);
+  buf safe = { 0 };
+  buf text = { 0 };
+  char at[32];
+  time_t now = (time_t)pl_now();
+  const char *query = strchr(url, '?');
+  // The address with each secret query value taken out.
+  buf_add(&safe, url, query ? (size_t)(query - url) : strlen(url));
+  for (const char *p = query; p && *p;) {
+    size_t len = strcspn(p + 1, "&");
+    size_t name = strcspn(p + 1, "=&");
+    char key[128];
+    snprintf(key, sizeof key, "%.*s", (int)(name < sizeof key ? name : sizeof key - 1), p + 1);
+    buf_chr(&safe, *p);
+    if (name < len && secret(key, 1))
+      buf_fmt(&safe, "%s=(redacted)", key);
+    else
+      buf_add(&safe, p + 1, len);
+    p = p[1 + len] ? p + 1 + len : NULL;
+  }
+  buf_chr(&safe, 0);
+  const char *host = strstr(safe.s, "://");
+  const char *path = host ? strchr(host + 3, '/') : safe.s;
+  strftime(at, sizeof at, "%Y-%m-%dT%H:%M:%SZ", gmtime(&now));
+  rec_set(a, request, "method", v_cstr(a, method));
+  rec_set(a, request, "url", v_cstr(a, safe.s));
+  rec_set(a, request, "path", v_cstr(a, path && *path ? path : "/"));
+  rec_set(a, request, "headers", kept_headers(a, headers));
+  rec_set(a, request, "body", v_text(a, body ? body : "", body ? (n < CALL_BODY ? n : CALL_BODY) : 0));
+  val *said = got ? rec_get(got, "text") : NULL;
+  val *status = got ? rec_get(got, "status") : NULL;
+  rec_set(a, response, "status", status && status->k == V_NUM ? status : v_num(a, 0));
+  rec_set(a, response, "headers", kept_headers(a, got ? rec_get(got, "headers") : NULL));
+  rec_set(a, response, "body", said && said->k == V_TEXT ? v_text(a, said->t.s, said->t.len < CALL_BODY ? said->t.len : CALL_BODY) : NOTHING);
+  rec_set(a, line, "at", v_cstr(a, at));
+  rec_set(a, line, "ms", v_num(a, ms));
+  rec_set(a, line, "kind", v_cstr(a, kind));
+  rec_set(a, line, "address", v_cstr(a, address ? address : safe.s));
+  rec_set(a, line, "ask", v_cstr(a, ask ? ask : ""));
+  rec_set(a, line, "request", request);
+  rec_set(a, line, "response", response);
+  rec_set(a, line, "error", v_cstr(a, error ? error : ""));
+  rec_set(a, line, "stopped", VBOOL(stopped));
+  buf_json(&text, line);
+  for (size_t i = 1; i < 64; i++)
+    if (on[i] && hooks[i].called) hooks[i].called(text.s);
+  buf_free(&safe);
+  buf_free(&text);
+  arena_free(a);
+}
+
 // One http.send on a thread of its own, with its own memory, so other requests are answered while it waits.
 typedef struct {
   arena *a;
@@ -366,13 +451,21 @@ static val *send_(run *r, val **a) {
     trip_free(t);
     fail(r, "phrase", "%s", problem->t.s);
   }
+  double began = pl_now();
   pl_thread(travel, t);
   while (!t->done && !*r->stop) lingo_wait(&t->done, r->stop, 1);
+  // Kept as a call once: stopped here while the trip still runs, with no answer, else below with its answer.
+  int stopped = !t->done;
+  if (stopped) lingo_called("web", NULL, NULL, t->method, t->url, t->headers, t->body, t->n, NULL, "Stopped by the person", 1, (pl_now() - began) * 1000);
   pl_enter(gate);
   int gone = !t->finished;   // stopped first: it frees itself when it ends
   t->left = gone;
   pl_leave(gate);
   if (gone) fail(r, "stopped", "Stopped by the person");
+  val *status = t->got ? rec_get(t->got, "status") : NULL;
+  const char *error = t->got ? NULL : t->why.s ? t->why.s : "No answer";
+  if (status && status->k == V_NUM && (status->n < 200 || status->n > 399)) error = "It answered with an error";
+  if (!stopped) lingo_called("web", NULL, NULL, t->method, t->url, t->headers, t->body, t->n, t->got, error, 0, (pl_now() - began) * 1000);
   // Written out and read back, since a copy would still point at text in the trip's memory, freed below.
   buf whole = { 0 };
   if (t->got) buf_json(&whole, t->got);

@@ -214,6 +214,12 @@ fn http_post(base) {
   return [r.status, from_json(r.text)]
 }
 
+// http.send with a key in a header and in the address, which never reach Onsay in a call.
+fn http_secret(base) {
+  r = http.send("GET", base + "/hello?api_key=sekrit&x=1", {"Authorization": "Bearer sekrit"})
+  return r.status
+}
+
 // http.send: an answer that is not 2xx is still an answer.
 fn http_missing(base) {
   r = http.send("GET", base + "/missing")

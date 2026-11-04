@@ -1,8 +1,8 @@
 // onsay.c - the onsay lingo, built into the lingo client on every computer (build.ps1), which makes it Onsay's: its
 // one connection to Onsay, signing in and this device's key, what Onsay signs checked against its key built in, the
-// account's policy kept, decisions sent for the activity feed, and /onsay, where prompts come in and the agent loop
-// works through each: Onsay decides every step, and the calls run here. Everything it sends Onsay is kept in
-// home/sent.log for the person to read. See docs/security.md in the onsay repo, The onsay lingo and the wire.
+// account's policy kept, decisions sent for the activity feed, every request this computer makes sent in chunks, and
+// /onsay, where prompts come in and the agent loop works through each: Onsay decides every step, and the calls run
+// here. Everything it sends Onsay is kept in home/sent.log for the person to read. See docs/security.md in the onsay repo, The onsay lingo and the wire.
 //
 // 1. Onsay          where it is, its public key, checking what it signed, and sent.log
 // 2. Connection     hello, each message from Onsay, the heartbeat and reconnecting, on threads of its own
@@ -33,6 +33,7 @@
 #define STEPS 100   // the newest steps of a prompt kept while it runs
 #define TURNS 20   // the newest turns of a session sent with a prompt, as chat messages
 #define MOST 8   // the most calls one prompt makes before it stops
+#define CHUNK 100   // calls waiting before they are sent; the rest go with the next heartbeat
 
 #define say core_say
 
@@ -196,7 +197,7 @@ static int on, ready, ponged;   // on: the lingo runs. ready: Onsay took the hel
 static double heard;   // when Onsay last said anything
 static char handle[64], device[64], account[64];   // this computer's handle, its name and its account id, as ready said
 static unsigned char mine[32];   // this device's public key
-static buf catalog, pending;   // the catalog now, and decisions not sent yet, a line each
+static buf catalog, pending, calls_;   // the catalog now, and decisions and calls not sent yet, a line each
 static wait *waits;
 static turn *turns_;
 static long ids;
@@ -224,24 +225,25 @@ static int send_(const char *text, size_t n) {
   return ok;
 }
 
-// Decisions not sent yet, as log messages of up to 1000 each, once Onsay is ready. Inside the lock.
-static void flush(void) {
-  while (ready && link_ && pending.n) {
+/* Lines not sent yet, from q, as messages {type, field: [...]} of up to 1000 each, once Onsay is ready: decisions as
+   log entries, calls as calls. Inside the lock. */
+static void flush(buf *q, const char *type, const char *field) {
+  while (ready && link_ && q->n) {
     buf m = { 0 };
     size_t at = 0;
-    buf_str(&m, "{\"type\":\"log\",\"entries\":[");
-    for (int k = 0; at < pending.n && k < 1000; k++) {
-      size_t end = strcspn(pending.s + at, "\n");
+    buf_fmt(&m, "{\"type\":\"%s\",\"%s\":[", type, field);
+    for (int k = 0; at < q->n && k < 1000; k++) {
+      size_t end = strcspn(q->s + at, "\n");
       if (k) buf_chr(&m, ',');
-      buf_add(&m, pending.s + at, end);
+      buf_add(&m, q->s + at, end);
       at += end + 1;
     }
     buf_str(&m, "]}");
     int ok = tell(link_, m.s, m.n);
     buf_free(&m);
     if (!ok) return;
-    memmove(pending.s, pending.s + at, pending.n - at);
-    pending.n -= at;
+    memmove(q->s, q->s + at, q->n - at);
+    q->n -= at;
   }
 }
 
@@ -337,7 +339,8 @@ static void heard_(pl_link *l, const char *text, size_t n) {
       snprintf(device, sizeof device, "%s", text_or(m, "device", ""));
       snprintf(account, sizeof account, "%s", text_or(m, "account", ""));
       ready = 1;
-      flush();
+      flush(&pending, "log", "entries");
+      flush(&calls_, "calls", "calls");
       pl_leave(lock);
       say("Signed in. This computer is %s.%s", device, handle);
       val *version = rec_get(m, "policy");
@@ -445,8 +448,10 @@ static void heartbeat(void *arg) {
     pl_enter(lock);
     if (link_ && ((ponged && pl_now() - heard > SILENT) || !token || token->k != V_TEXT || !token->t.len))
       pl_close(link_);
-    else if (link_)
+    else if (link_) {
       pl_send(link_, "{\"type\":\"ping\"}", 15);
+      flush(&calls_, "calls", "calls");
+    }
     pl_leave(lock);
     arena_free(a);
   }
@@ -574,7 +579,26 @@ static void decided(const char *line) {
   pl_enter(lock);
   buf_str(&pending, line);
   buf_chr(&pending, '\n');
-  flush();
+  flush(&pending, "log", "entries");
+  pl_leave(lock);
+}
+
+/* A request this computer made, kept to send Onsay: sent once CHUNK wait, else with the next heartbeat. Offline, the
+   newest half is kept once they pass LOG_MOST bytes. */
+static void kept(const char *line) {
+  size_t lines = 0;
+  pl_enter(lock);
+  buf_str(&calls_, line);
+  buf_chr(&calls_, '\n');
+  if (calls_.n > LOG_MOST) {
+    size_t cut = calls_.n / 2;
+    cut += strcspn(calls_.s + cut, "\n") + 1;
+    if (cut > calls_.n) cut = calls_.n;
+    memmove(calls_.s, calls_.s + cut, calls_.n - cut);
+    calls_.n -= cut;
+  }
+  for (size_t i = 0; i < calls_.n; i++) lines += calls_.s[i] == '\n';
+  if (lines >= CHUNK) flush(&calls_, "calls", "calls");
   pl_leave(lock);
 }
 
@@ -858,8 +882,9 @@ static void handed_back(void *arg, const char *response, size_t n) {
 
 /* A call of a turn, as me, the account's own, so the person's own rules apply: a lingo on this computer handed in as a
    request, POST to its path with inputs as its body; anything else through use(...), the way Onsay reaches it, other
-   computers' own rules applying there, the steps it says joining the turn t. Its value, or NULL with why in why. */
-static val *called(run *r, turn *t, const char *address, val *inputs, buf *why) {
+   computers' own rules applying there, the steps it says joining the turn t. One on this computer is kept as a call
+   (lingo_called), ask the prompt it was for; Onsay keeps the rest. Its value, or NULL with why in why. */
+static val *called(run *r, turn *t, const char *address, val *inputs, const char *ask, buf *why) {
   static long count;
   arena *a = r->a;
   buf here = { 0 };
@@ -880,12 +905,16 @@ static val *called(run *r, turn *t, const char *address, val *inputs, buf *why) 
     buf_str(&request, ",\"headers\":{\"content-type\":\"application/json\"},\"body\":");
     buf_json_str(&request, body.s, body.n);
     buf_str(&request, ",\"base64\":false}");
+    val *headers = v_rec(a);
+    rec_set(a, headers, "content-type", v_cstr(a, "application/json"));
+    double began = pl_now();
     lingo_hand(request.s, request.n, "me", handed_back, h);
     lingo_wait(&h->done, r->stop, 600);
     if (!h->done) {
       h->left = 1;
       lingo_stop(id);
       buf_str(why, *r->stop ? "Stopped by the person" : "It took more than 10 minutes, so it was stopped");
+      lingo_called("lingo", address, ask, "POST", address, headers, body.s, body.n, NULL, why->s, *r->stop, (pl_now() - began) * 1000);
     } else {
       val *got = json_parse(a, h->response.s, h->response.n, NULL);
       val *status = rec_get(got, "status");
@@ -898,6 +927,11 @@ static val *called(run *r, turn *t, const char *address, val *inputs, buf *why) 
       } else
         buf_str(why,
             text_or(said, "error", text && text->k == V_TEXT && text->t.len ? text->t.s : "It answered with an error"));
+      val *answer = v_rec(a);
+      rec_set(a, answer, "status", status ? status : v_num(a, 0));
+      rec_set(a, answer, "headers", rec_get(got, "headers") ? rec_get(got, "headers") : v_rec(a));
+      if (text) rec_set(a, answer, "text", text);
+      lingo_called("lingo", address, ask, "POST", address, headers, body.s, body.n, answer, why->n ? why->s : NULL, 0, (pl_now() - began) * 1000);
       buf_free(&h->response);
       free(h);
     }
@@ -1134,7 +1168,7 @@ static val *serve(run *r, val **v) {
       m.n = 0;
     }
     pl_leave(lock);
-    if (!value) value = called(r, &t, address, inputs, &why);
+    if (!value) value = called(r, &t, address, inputs, prompt->t.s, &why);
     // The call and what it gave join the log, its values but the log itself, which a call that reads it was given.
     given = inputs;
     if (inputs->k == V_REC) {
@@ -1440,7 +1474,7 @@ void base_calls(void);   // the calls every computer has, built for its platform
 
 // Called once as the lingo client starts (core.c, BUILTINS).
 void onsay_lingo(void) {
-  static const lingo_hooks hooks = { running, decided, ask, key, said };
+  static const lingo_hooks hooks = { running, decided, ask, key, said, kept };
   lock = pl_gate_new();
   logging = pl_gate_new();
   lingo_hook(&hooks);

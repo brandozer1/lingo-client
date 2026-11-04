@@ -292,6 +292,7 @@ const CASES = [
   // http.send, the core's own web request, against the stand-in's own pages (PAGES below), and request on it.
   { name: 'http: a GET, its status, headers and text', path: '/checks/http_get', values: { base: HTTP }, check: gives([200, 'yes', 'hello ?x=1']) },
   { name: 'http: a POST with headers and a body', path: '/checks/http_post', values: { base: HTTP }, check: gives([201, { method: 'POST', name: 'Ada', type: 'text/plain', body: 'héllo' }]) },
+  { name: 'http: a key in a header and in the address is sent', path: '/checks/http_secret', values: { base: HTTP }, check: gives(200) },
   { name: 'http: an answer that is not 2xx is still an answer', path: '/checks/http_missing', values: { base: HTTP }, check: gives([404, 'nothing here']) },
   { name: 'http: a redirect is followed', path: '/checks/http_moved', values: { base: HTTP }, check: gives('hello ') },
   { name: 'http: a timeout', path: '/checks/http_slow', values: { base: HTTP }, check: fails(500, /http\.send: /) },
@@ -907,6 +908,15 @@ const WEB_CASES = [
     return stranger.status === 404 && wrong.status === 401 && onsay.status === 200 && onsay.json.text === 'Onsay heard: from afar' &&
       (await control('policy')).json.rules.some((r) => r.who === 'onsay' && same(r.routes, ['/onsay']))
   }],
+  ['calls: every http.send reaches Onsay in chunks, with its status, and a key in a header or the address never does', async () => {
+    const deadline = Date.now() + 30_000
+    while (Date.now() < deadline && !called.some((c) => c.request.url.includes('/http/missing'))) await new Promise((r) => setTimeout(r, 250))
+    const post = called.find((c) => c.request.url.endsWith('/http/echo')), missing = called.find((c) => c.request.url.endsWith('/http/missing'))
+    const secret = called.find((c) => c.request.url.includes('api_key'))
+    return post?.kind === 'web' && post.request.method === 'POST' && post.response.status === 201 && post.request.body === 'héllo' && typeof post.ms === 'number' &&
+      missing?.response.status === 404 && secret?.request.url.includes('api_key=(redacted)') && secret.request.url.includes('x=1') &&
+      secret.request.headers.Authorization === '(redacted)' && !JSON.stringify(called.map((c) => c.request)).includes('sekrit')
+  }],
   ['sent.log: every message sent to Onsay kept, a line each with when, every token masked, pings left out', async () => {
     const text = readFileSync(new URL('sent.log', DATA), 'utf8'), lines = text.trim().split('\n').map((l) => JSON.parse(l)), types = new Set(lines.map((l) => l.message.type))
     return lines.every((l) => !isNaN(Date.parse(l.at))) && ['hello', 'response', 'lingo', 'decide', 'applied', 'log', 'api'].every((t) => types.has(t)) && !types.has('ping') &&
@@ -991,7 +1001,7 @@ const from = (ip) => ({ as: undefined, headers: { host: 'laptop.example.onsay.de
    failed with why. One reaches this computer on the way with a request, memo's recall, run while the program waits.
    asked is the last ask, every each one, device the last request's answer, shown what the command line printed. */
 let asked = {}, device = null, every = [], shown = null, onsayed = {}, named = null
-const decided = [], applied = [], logged = [], policies = []   // what came to Onsay, and each account policy, the last the one GET /policy gives
+const decided = [], applied = [], logged = [], called = [], policies = []   // what came to Onsay, and each account policy, the last the one GET /policy gives
 let current = null   // the link the core is on now
 const LINGO = [
   [/capital of a country/, ({ values }) => ({ France: 'Paris', Japan: 'Tokyo' })[values.country]],
@@ -1239,6 +1249,7 @@ const session = (link) => {
     else if (m.type === 'decide') decide(m, link)
     else if (m.type === 'applied') applied.push(m)
     else if (m.type === 'log') logged.push(...m.entries)
+    else if (m.type === 'calls') called.push(...m.calls)
     else if (m.type === 'catalog') catalog = m.catalog
     else if (m.type === 'ping') link.send({ type: 'pong' })
     else console.log('  core said', m)
