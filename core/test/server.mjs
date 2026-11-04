@@ -6,10 +6,10 @@
 // The test core's home is test/data, made fresh each run: its lingos folder holds the test lingos (test/lingos) as
 // folders, memo packed into memo.lingo, every .lingo file the build made (bin/lingos), and a deflated one and a broken one
 // made here. Its onsay, built in, is the test build, which talks to this server. Each are running, as running.json says, under the
-// policy.json written here, the onsay lingo signed in with the token written into its settings. Each case is a request,
-// sent down the connection as Onsay sends one for this computer's own account, signed, or as its proxy passes one on, or
-// to the port, or a command, and what the answer must be. A case about a lingo the core hasn't got, like windows, is
-// skipped.
+// policy.json and policy.account.json written here, the onsay lingo signed in with the token written into its settings. Each
+// case is a request, sent down the connection as Onsay sends one for this computer's own account, signed, or as its proxy
+// passes one on, or to the port, or a command, and what the answer must be. A case about a lingo the core hasn't got, like
+// windows, is skipped.
 //
 // 1. WebSocket   just enough of it, with no packages
 // 2. Zips        .lingo files read and made, stored or deflated
@@ -35,22 +35,16 @@ const WEB = 6970, BARE = 6971, CLOSED = 6973, SERVED = 6974   // the test core's
 const CORE = fileURLToPath(new URL('..', import.meta.url)), EXE = fileURLToPath(new URL('../bin/test/onsay-core.exe', import.meta.url))
 const DATA = new URL('./data/', import.meta.url), SETTINGS = new URL('settings/', DATA), LINGOS = new URL('lingos/', DATA), BUILT = new URL('../bin/', import.meta.url)
 const HOME = fileURLToPath(DATA).replace(/[\\/]$/, '')
-// What the test core may do: everything but act on the screen, the ceiling, and grants for the lingos that read the
-// screen, run commands and reach files outside its home. Anyone may reach page, and with no account policy, the
-// defaults let 192.0.2.60 reach memo.
-const POLICY = {
-  ceiling: ['net', 'store', 'files.read', 'files.write', 'screen.read', 'run', 'lingos'],
-  overrides: {
-    access: [{ who: 'public', lingos: 'page' }],
-    grants: {
-      desk: ['screen.read', 'run', 'files.read ~/onsay-test', 'files.write ~/onsay-test'],
-      onsay: ['screen.read', 'files.read ~/no-such-file-here.txt', 'screen.act', 'run'],
-      asker: ['run'],
-      maker: ['lingos'],
-    },
-  },
-  defaults: { access: [{ who: 'ip 192.0.2.60', lingos: 'memo' }] },
-}
+// What the test core may do: everything but act on the screen, the ceiling. A need under it is allowed with no grant and
+// no prompt. The account's rules come from Onsay, home/policy.account.json.
+const POLICY = { ceiling: ['net', 'store', 'files.read', 'files.write', 'screen.read', 'run', 'lingos'] }
+// The account's default rules, as Onsay keeps them: me and my devices reach everything, and Onsay reaches /onsay.
+const TESTER = 'acct_tester'
+const DEFAULT_RULES = [
+  { allow: true, who: 'me' },
+  { allow: true, who: 'my devices' },
+  { allow: true, who: 'onsay', routes: ['/onsay'] },
+]
 
 ////////// 1. WEBSOCKET //////////
 
@@ -171,7 +165,40 @@ const command = (...args) => {
   try { return JSON.parse(out) } catch { return out }
 }
 const policyFile = () => JSON.parse(readFileSync(new URL('policy.json', DATA), 'utf8'))
+const accountFile = () => JSON.parse(readFileSync(new URL('policy.account.json', DATA), 'utf8'))
 const decisions = () => readFileSync(new URL('decisions.log', DATA), 'utf8').trim().split('\n').map((l) => JSON.parse(l))
+// The policy the stand-in keeps: the rules at the next version, written where the core reads them, and what GET /policy
+// gives. A test that changes them puts the defaults back when it is done.
+const setRules = (rules, device = DEVICE) => {
+  let was = 0
+  try { was = accountFile().version ?? 0 } catch {}
+  const version = was + 1
+  const policy = { default: 'closed', rules }
+  writeFileSync(new URL('policy.account.json', DATA), JSON.stringify({ device, version, ...policy }))
+  policies.length = 0
+  policies.push({ version, policy })
+  return version
+}
+const resetRules = () => setRules(DEFAULT_RULES)
+const withRules = async (rules, fn) => {
+  setRules(rules)
+  try { return await fn() } finally { resetRules() }
+}
+// A rule as Onsay keeps it: a person's handle or account resolved to both, so the core matches the account and the person
+// reads a name.
+const person = (text) => {
+  const [handle] = text.split('#')
+  return { account: text.startsWith('acct_') ? text : `acct_${handle}`, handle }
+}
+const keepRule = ({ allow, who, account, handle, ip, routes, devices }) => {
+  const kept = { allow }
+  if (who !== undefined) kept.who = who
+  if (ip !== undefined) kept.ip = ip
+  if (account !== undefined || handle !== undefined) Object.assign(kept, person(account ?? handle))
+  if (routes !== undefined) kept.routes = routes
+  if (devices !== undefined) kept.devices = devices
+  return kept
+}
 
 // Each is a request for path, a GET, or a POST of values as JSON, and what its answer must be. lingo: the device lingo it
 // needs. stopAfter: a stop for it is sent that many ms after it.
@@ -286,17 +313,17 @@ const CASES = [
   { lingo: 'onsay', windows: true, name: 'native: an OS function with no values, a whole number back', path: '/onsay/native/call', values: ['kernel32.dll', 'GetTickCount', 'u32', []], check: (r) => r.status === 200 && r.json > 0 },
   { lingo: 'onsay', windows: true, name: 'native: a text value passed in', path: '/onsay/native/call', values: ['kernel32.dll', 'lstrlenA', 'i32', [{ type: 'text', value: 'hello' }]], check: gives(5) },
   { lingo: 'onsay', windows: true, name: 'native: a function that is not there', path: '/onsay/native/call', values: ['kernel32.dll', 'NoSuchFunction', 'i32', []], check: fails(500, /was not found/) },
-  // windows, for real, on this computer, from desk.ls and by its routes, under the grants in POLICY. The ceiling leaves
-  // out screen.act, so nothing is clicked or typed.
+  // windows, for real, on this computer, from desk.ls and by its routes. A need under the ceiling is allowed, and the
+  // ceiling leaves out screen.act, so nothing is clicked or typed.
   { lingo: 'onsay', windows: true, path: '/desk/windows_open', check: gives([true, true, true]) },
   { lingo: 'onsay', windows: true, path: '/desk/controls_read', check: gives([true, true]) },
-  { lingo: 'onsay', windows: true, name: 'grants: files outside the home, in the folder granted', path: '/desk/files_used', check: gives(['héllo there', false, true, 2, 'c.txt', 12, false]) },
-  { lingo: 'onsay', windows: true, name: 'windows: a missing file, its path granted', path: '/onsay/files/read', values: { path: '~/no-such-file-here.txt' }, check: fails(500, /doesn't exist/) },
+  { lingo: 'onsay', windows: true, name: 'files outside the home, in the folder given', path: '/desk/files_used', check: gives(['héllo there', false, true, 2, 'c.txt', 12, false]) },
+  { lingo: 'onsay', windows: true, name: 'windows: a missing file, its path asked for', path: '/onsay/files/read', values: { path: '~/no-such-file-here.txt' }, check: fails(500, /doesn't exist/) },
   { lingo: 'onsay', windows: true, name: 'windows: the clipboard', path: '/onsay/clipboard/read', check: (r) => r.status === 200 && typeof r.json === 'string' },
   { lingo: 'onsay', windows: true, path: '/desk/commands_run', check: gives([0, '5', true]) },
   { lingo: 'onsay', windows: true, name: 'windows: a command stopped', path: '/desk/command_slow', stopAfter: 1500, check: fails(500, STOPPED) },
   { lingo: 'onsay', windows: true, path: '/desk/screen_read', check: gives([true, true, true, true]) },
-  { lingo: 'onsay', windows: true, name: 'the ceiling: typing is refused, granted or not', path: '/onsay/input/type', values: { text: 'x' }, check: fails(403, /never allows/) },
+  { lingo: 'onsay', windows: true, name: 'the ceiling: typing is refused', path: '/onsay/input/type', values: { text: 'x' }, check: fails(403, /never allows/) },
   { lingo: 'onsay', windows: true, name: 'input: wait for words that never show', path: '/onsay/input/wait_for_text', values: { words: 'zq-never-on-screen-qz', seconds: 1 }, check: gives(null) },
   { lingo: 'onsay', windows: true, name: 'the ceiling: a click is refused', path: '/desk/click_a_word', check: (r) => r.status === 403 },
   { lingo: 'onsay', windows: true, name: 'look: open windows', path: '/onsay/look/open_windows', check: (r) => r.status === 200 && r.json.length > 0 && r.json.every((w) => w.app !== undefined && w.title) },
@@ -466,26 +493,27 @@ const WEB_CASES = [
     const [a, b] = [await web('/memo/nope'), await web('/nothing/here')]
     return a.status === 404 && /memo has no function memo.nope/.test(a.json?.error) && b.status === 404
   }],
-  ['web: a page elsewhere in a browser is not this computer, and reaches only what is shared with anyone', async () => {
+  ['web: a page elsewhere in a browser is not this computer, and by default reaches nothing', async () => {
     const [a, b] = [await web('/memo/recall?k=milk', { headers: { origin: 'http://elsewhere.example' } }), await web('/hello/text', { headers: { origin: 'http://elsewhere.example' } })]
-    return a.status === 404 && b.status === 200
+    return a.status === 404 && b.status === 404
   }],
   ['web: what is not a web request is a 400', async () => (await raw('HELLO THERE\r\n\r\n')).startsWith('HTTP/1.1 400')],
   ['web: a body in chunks is a 411, and one over 4 MB a 413', async () =>
     (await raw('POST /memo/recall HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n')).startsWith('HTTP/1.1 411') &&
     (await raw('POST /memo/recall HTTP/1.1\r\nContent-Length: 5000000\r\n\r\n')).startsWith('HTTP/1.1 413')],
   ['web: a need above the ceiling is a 403', async () => (await post('/onsay/input/type', ['x'])).status === 403, 'onsay'],
-  ['proxied: a request through Onsay is answered as the port answers it', async (send) => {
-    const r = await send('/hello/text?name=Bo', undefined, { as: undefined })
+  ['proxied: a request through Onsay is answered as the port answers it, once a rule lets anyone in to it', async (send) => {
+    const r = await withRules([...DEFAULT_RULES, { allow: true, who: 'public', routes: ['/hello'] }], () => send('/hello/text?name=Bo', undefined, { as: undefined }))
     return r.status === 200 && r.body === 'hi Bo' && r.base64 === false && r.headers['content-type'].startsWith('text/plain')
   }],
   ['proxied: a body in base64 is a 400 that says why', async (send) => {
-    const r = await send('/hello/json', undefined, { as: undefined, method: 'POST', body: Buffer.from([0xff, 0xfe]).toString('base64'), base64: true })
+    const r = await withRules([...DEFAULT_RULES, { allow: true, who: 'public', routes: ['/hello'] }], () =>
+      send('/hello/json', undefined, { as: undefined, method: 'POST', body: Buffer.from([0xff, 0xfe]).toString('base64'), base64: true }))
     return r.status === 400 && /isn't text/.test(r.json?.error)
   }],
-  ['access: a lingo not shared is not there, and / lists only what is shared', async (send) => {
+  ['access: a stranger is not there, and / lists nothing for them', async (send) => {
     const [a, b] = [await send('/memo/recall?k=milk', undefined, { as: undefined }), await send('/', undefined, { as: undefined })]
-    return a.status === 404 && /There's nothing at \/memo\/recall/.test(a.json?.error) && same(b.json.lingos.map((l) => l.name), ['onsay', 'page'])
+    return a.status === 404 && /There's nothing at \/memo\/recall/.test(a.json?.error) && same(b.json.lingos, [])
   }],
   ["me: the account's own request, signed by Onsay, reaches every running lingo by the defaults, natives too", async (send) => {
     const [a, b] = [await send('/memo/recall?k=milk'), await send('/')]
@@ -503,19 +531,27 @@ const WEB_CASES = [
     const r = await send('/memo/recall?k=milk', undefined, { as: undefined, headers: signedBy('laptop', 'laptop.tester', 'GET', '/memo/recall?k=milk') })
     return r.status === 200 && r.json === '2 litres' && decisions().some((d) => d.caller === 'laptop.tester' && d.why === 'rule: my devices' && d.allowed)
   }],
-  ['base calls: anyone else is kept out though /onsay is open to them, and the prompt key lets them in', async (send) => {
+  ['base calls: a stranger let in to /onsay still needs the prompt key for a base call', async (send) => {
     const key = JSON.parse(readFileSync(new URL('onsay.json', SETTINGS), 'utf8')).prompt_key
-    const none = await send('/onsay/compute/now', {}, from('203.0.113.9'))
-    const keyed = from('203.0.113.9')
-    const yes = await send('/onsay/compute/now', {}, { ...keyed, headers: { ...keyed.headers, authorization: `Bearer ${key}` } })
-    return none.status === 404 && yes.status === 200
+    const [none, yes] = await withRules([...DEFAULT_RULES, { allow: true, who: 'public', routes: ['/onsay'] }], async () => {
+      const at = from('203.0.113.9')
+      return [
+        await send('/onsay/compute/now', {}, at),
+        await send('/onsay/compute/now', {}, { ...at, headers: { ...at.headers, authorization: `Bearer ${key}` } }),
+      ]
+    })
+    return none.status === 404 && yes.status === 200 && yes.json > 0
   }],
-  ['signed: a device of another handle reaches only what is shared with that handle', async (send) => {
+  ['signed: a device of another handle reaches only what is shared with that handle, by onsay.share and onsay.unshare', async (send) => {
     const ask = () => send('/memo/recall?k=milk', undefined, { as: undefined, headers: signedBy('phone', 'phone.james', 'GET', '/memo/recall?k=milk') })
     const before = await ask()
-    command('share', 'memo', 'james')
-    const after = await ask()
-    return before.status === 404 && after.status === 200 && after.json === '2 litres' && decisions().some((d) => d.caller === 'phone.james' && d.why === 'rule: james')
+    const shared = await control('call', { fn: 'onsay.share', values: [{ who: 'james', routes: ['/memo'] }] })
+    const kept = accountFile(), after = await ask()
+    const unshared = await control('call', { fn: 'onsay.unshare', values: [{ who: 'james' }] }), gone = await ask()
+    resetRules()
+    return before.status === 404 && shared.status === 200 && after.status === 200 && after.json === '2 litres' &&
+      kept.rules.some((r) => r.account === 'acct_james' && r.handle === 'james' && r.allow && same(r.routes, ['/memo'])) &&
+      decisions().some((d) => d.caller === 'phone.james' && d.why === 'rule: james') && unshared.status === 200 && gone.status === 404
   }],
   ['signed: a request sent to an Onsay name through the proxy, signed over the address it was sent to, checks out as the proxy passes it on', async (send) => {
     const at = '/proxy/laptop.tester/memo/recall?k=milk'
@@ -533,60 +569,79 @@ const WEB_CASES = [
     return forged.status === 401 && /doesn't check out/.test(forged.json?.error) && again.status === 401 && /nonce/.test(again.json?.error) &&
       changed.status === 401 && /Content-Digest/.test(changed.json?.error) && unvouched.status === 401 && /no key known/.test(unvouched.json?.error)
   }],
-  ['access: shared with one address, by the control route, and only that address reaches it', async (send) => {
-    const shared = await control('share', { lingo: 'memo', who: 'ip 203.0.113.7' })
-    const [a, b] = [await send('/memo/recall?k=milk', undefined, from('203.0.113.7')), await send('/memo/recall?k=milk', undefined, from('203.0.113.8'))]
-    return shared.status === 200 && shared.json.access.some((r) => r.who === 'ip 203.0.113.7' && r.lingos === 'memo') && a.status === 200 && a.json === '2 litres' && b.status === 404
+  ['access: a rule for one address, and only that address reaches it', async (send) => {
+    const [a, b] = await withRules([...DEFAULT_RULES, { allow: true, ip: '203.0.113.7', routes: ['/memo'] }], async () => [
+      await send('/memo/recall?k=milk', undefined, from('203.0.113.7')),
+      await send('/memo/recall?k=milk', undefined, from('203.0.113.8')),
+    ])
+    return a.status === 200 && a.json === '2 litres' && b.status === 404
   }],
-  ['access: shared with a range, by the command line, IPv4 and IPv6', async (send) => {
-    command('share', 'asker', 'ip', '198.51.100.0/24')
-    command('share', 'asker', 'ip 2001:db8::/32')
-    const r = await Promise.all(['198.51.100.9', '198.51.101.1', '2001:db8::5', '2001:db9::5'].map((ip) => send('/asker', undefined, from(ip))))
+  ['access: a range, IPv4 and IPv6', async (send) => {
+    const r = await withRules([...DEFAULT_RULES, { allow: true, ip: '198.51.100.0/24' }, { allow: true, ip: '2001:db8::/32' }], () =>
+      Promise.all(['198.51.100.9', '198.51.101.1', '2001:db8::5', '2001:db9::5'].map((ip) => send('/asker', undefined, from(ip)))))
     return same(r.map((x) => x.status), [200, 404, 200, 404]) && r[0].json === "asker's main"
   }],
-  ['access: shared on one route only', async (send) => {
-    command('share', 'checks', 'ip 192.0.2.1', '--route', '/numbers')
-    const [a, b] = [await send('/checks/numbers', undefined, from('192.0.2.1')), await send('/checks/lists', undefined, from('192.0.2.1'))]
-    return a.status === 200 && b.status === 404
+  ['access: a rule on one route only', async (send) => {
+    const r = await withRules([...DEFAULT_RULES, { allow: true, ip: '192.0.2.1', routes: ['/checks/numbers'] }], async () => [
+      await send('/checks/numbers', undefined, from('192.0.2.1')),
+      await send('/checks/lists', undefined, from('192.0.2.1')),
+    ])
+    return r[0].status === 200 && r[1].status === 404
   }],
   ['access: / lists for an address only what it may reach', async (send) => {
-    const r = await send('/', undefined, from('203.0.113.7'))
-    return same(r.json.lingos.map((l) => l.name).sort(), ['memo', 'onsay', 'page'])
+    const r = await withRules([...DEFAULT_RULES, { allow: true, ip: '203.0.113.7', routes: ['/memo'] }], () => send('/', undefined, from('203.0.113.7')))
+    return same(r.json.lingos.map((l) => l.name).sort(), ['memo'])
   }],
-  ['access: with no account policy, the defaults; with one, the account policy, the overrides still on top', async (send) => {
-    const before = await send('/memo/all', undefined, from('192.0.2.60'))
-    writeFileSync(new URL('policy.account.json', DATA), JSON.stringify({ version: 1, access: [{ who: 'ip 192.0.2.70', lingos: 'memo' }] }))
-    const [a, b, c] = [await send('/memo/all', undefined, from('192.0.2.60')), await send('/memo/all', undefined, from('192.0.2.70')), await send('/hello/text', undefined, from('192.0.2.70'))]
-    rmSync(new URL('policy.account.json', DATA))
-    return before.status === 200 && a.status === 404 && b.status === 200 && c.status === 200
+  ['access: the account policy replaces the defaults, and is read at once', async (send) => {
+    const before = await withRules(DEFAULT_RULES, () => send('/memo/all', undefined, from('192.0.2.60')))
+    const [a, b, c] = await withRules([
+      { allow: true, ip: '192.0.2.70', routes: ['/memo'] },
+      { allow: true, ip: '192.0.2.70', routes: ['/hello'] },
+    ], async () => [
+      await send('/memo/all', undefined, from('192.0.2.60')),
+      await send('/memo/all', undefined, from('192.0.2.70')),
+      await send('/hello/text', undefined, from('192.0.2.70')),
+    ])
+    return before.status === 404 && a.status === 404 && b.status === 200 && c.status === 200
   }],
-  ['access: a blocked address reaches nothing, shared or public', async (send) => {
-    const p = policyFile()
-    p.overrides.block = ['203.0.113.7']
-    writeFileSync(new URL('policy.json', DATA), JSON.stringify(p))
-    const [a, b, c] = [await send('/memo/recall?k=milk', undefined, from('203.0.113.7')), await send('/hello/text', undefined, from('203.0.113.7')), await send('/hello/text', undefined, from('203.0.113.9'))]
+  ['access: a deny rule wins over an allow for the same address', async (send) => {
+    const [a, b, c] = await withRules([
+      ...DEFAULT_RULES,
+      { allow: true, who: 'public', routes: ['/hello'] },
+      { allow: true, ip: '203.0.113.7', routes: ['/memo'] },
+      { allow: false, ip: '203.0.113.7' },
+    ], async () => [
+      await send('/memo/recall?k=milk', undefined, from('203.0.113.7')),
+      await send('/hello/text', undefined, from('203.0.113.7')),
+      await send('/hello/text', undefined, from('203.0.113.9')),
+    ])
     return a.status === 404 && b.status === 404 && c.status === 200
   }],
   ['access: a request to its port from this computer\'s own network address is not this computer, and is judged by address', async () => {
     const lan = Object.values(os.networkInterfaces()).flat().find((i) => i.family === 'IPv4' && !i.internal)?.address
     if (!lan) return true
-    const [a, b] = [await web('/memo/recall?k=milk', { host: lan, headers: { host: `${lan}:${WEB}` } }), await web('/hello/text', { host: lan, headers: { host: `${lan}:${WEB}` } })]
-    return a.status === 404 && b.status === 200 && decisions().some((d) => d.caller === `ip ${lan}` && d.lingo === 'memo' && !d.allowed)
+    return withRules([...DEFAULT_RULES, { allow: true, ip: lan, routes: ['/hello'] }], async () => {
+      const at = { host: lan, headers: { host: `${lan}:${WEB}` } }
+      const opened = await soon(async () => (await web('/hello/text', at)).status === 200, 10)
+      const [a, b] = [await web('/memo/recall?k=milk', at), await web('/hello/text', at)]
+      return opened && a.status === 404 && b.status === 200 && decisions().some((d) => d.caller === `ip ${lan}` && d.lingo === 'memo' && !d.allowed) &&
+        decisions().some((d) => d.caller === `ip ${lan}` && d.lingo === 'page' && d.allowed && d.why === `rule: ${lan}`)
+    })
   }],
   ['the log: each access decided, with the caller, the lingo, the route and why', async () => {
     const d = decisions()
     return d.some((l) => l.caller === 'ip 203.0.113.8' && l.lingo === 'memo' && l.route === '/memo/recall' && l.need === null && l.allowed === false && l.why === 'no rule lets them in') &&
-      d.some((l) => l.caller === 'ip 203.0.113.7' && l.allowed === false && l.why === 'blocked: 203.0.113.7') &&
-      d.some((l) => l.caller === 'ip 203.0.113.7' && l.allowed === true && l.why === 'rule: ip 203.0.113.7') && d.every((l) => /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/.test(l.at))
+      d.some((l) => l.caller === 'ip 203.0.113.7' && l.allowed === false && l.why === 'deny: 203.0.113.7') &&
+      d.some((l) => l.caller === 'ip 203.0.113.7' && l.allowed === true && l.why === 'rule: 203.0.113.7') && d.every((l) => /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/.test(l.at))
   }],
   ['control: only this computer, never through Onsay, not even for its own account', async (send) => {
     const [a, b, c] = [await send('/.lingo/policy'), await send('/.lingo/policy', undefined, from('203.0.113.9')), await web('/.lingo/policy', { headers: { origin: 'http://elsewhere.example' } })]
     return a.status === 404 && b.status === 404 && c.status === 404 && (await control('policy')).status === 200
   }],
-  ['control: the policy, the ceiling clamping its grants', async () => {
+  ['control: the policy, its ceiling and its rules, and no per-lingo grants', async () => {
     const r = await control('policy')
-    return same(r.json.ceiling, POLICY.ceiling) && same(r.json.grants.onsay, ['screen.read', 'files.read ~/no-such-file-here.txt', 'run']) && r.json.local.overrides.grants.onsay.includes('screen.act') &&
-      r.json.account === null
+    return same(r.json.ceiling, POLICY.ceiling) && same(r.json.default, 'closed') && r.json.rules.some((x) => x.who === 'me') &&
+      !('grants' in r.json) && !('overrides' in policyFile()) && same(r.json.device, DEVICE) && r.json.account.version >= 1
   }],
   ['control: settings and set', async () => {
     const set = await control('set', { lingo: 'prefs', key: 'name', value: 'Cy' }), got = await web('/.lingo/settings?lingo=prefs')
@@ -596,21 +651,11 @@ const WEB_CASES = [
     const [a, b] = [await control('call', { fn: 'memo.recall', values: ['milk'] }), await control('call', { fn: 'memo.nope' })]
     return gives('2 litres')(a) && b.status === 400 && /no function or phrase called memo.nope/.test(b.json?.error)
   }],
-  ['control: grant and ceiling, and what is wrong with one said plainly', async () => {
-    const [a, b, c, d] = [await control('grant', { lingo: 'memo', need: 'files.read ~/Pictures' }), await control('grant', { lingo: 'memo', need: 'teleport' }),
+  ['control: share and grant are gone, ceiling is kept, and what is wrong is said plainly', async () => {
+    const [a, b, c, d] = [await control('share', { lingo: 'memo', who: 'anna' }), await control('grant', { lingo: 'memo', need: 'run' }),
       await control('ceiling', { needs: ['net', 'flying'] }), await control('nope', {})]
-    return a.status === 200 && policyFile().overrides.grants.memo.includes('files.read ~/Pictures') && b.status === 400 && /A grant is a need/.test(b.json.error) &&
+    return a.status === 400 && /nothing called share/.test(a.json.error) && b.status === 400 && /nothing called grant/.test(b.json.error) &&
       c.status === 400 && /The ceiling is a list/.test(c.json.error) && d.status === 400 && /There's nothing called nope/.test(d.json.error)
-  }],
-  ['control: unshare and ungrant take out what share and grant wrote, and say plainly when there is nothing to take out', async () => {
-    await control('share', { lingo: 'memo', who: 'anna' })
-    await control('grant', { lingo: 'memo', need: 'run' })
-    const [a, b, c, d] = [await control('unshare', { lingo: 'memo', who: 'anna' }), await control('ungrant', { lingo: 'memo', need: 'run' }),
-      await control('unshare', { lingo: 'memo', who: 'anna' }), await control('ungrant', { lingo: 'memo', need: 'run' })]
-    const kept = policyFile().overrides
-    return a.status === 200 && b.status === 200 && !kept.access.some((r) => r.who === 'anna') && kept.access.some((r) => r.who === 'james') &&
-      !kept.grants.memo.includes('run') && kept.grants.memo.includes('files.read ~/Pictures') && c.status === 400 && /Nothing on this computer shares memo with anna/.test(c.json.error) &&
-      d.status === 400 && /memo has no grant run/.test(d.json.error)
   }],
   ["devices: the account's computers as Onsay lists them, each online or not and when last seen", async () => {
     const r = await control('call', { fn: 'onsay.devices' })
@@ -694,12 +739,12 @@ const WEB_CASES = [
     const m = JSON.parse(unzip(readFileSync(new URL('packed/page.lingo', DATA)))['openapi.json'])
     return same(Object.keys(m.paths), ['/hello']) && m.paths['/hello'].get['x-lingo-function'] === 'page.serve'
   }],
-  ['the command line: policy, grant written into policy.json, and what it does not do refused', async () => {
+  ['the command line: policy, and grant is not a thing it does', async () => {
     const before = command('policy')
     let refused = false
-    command('grant', 'memo', 'files.write', '~/Notes')
-    try { command('--settings', 'prefs') } catch { refused = true }
-    return before.ceiling.length === POLICY.ceiling.length && policyFile().overrides.grants.memo.includes('files.write ~/Notes') && refused
+    try { command('grant', 'memo', 'files.write', '~/Notes') } catch { refused = true }
+    return same(before.ceiling, POLICY.ceiling) && same(before.default, 'closed') && before.rules.some((r) => r.who === 'me') && refused &&
+      !('overrides' in policyFile()) && !('grants' in policyFile())
   }],
   ['the command line: manifest prints a lingo\'s whole manifest, and why one can\'t load', async () => {
     const m = command('manifest', 'memo')
@@ -723,30 +768,15 @@ const WEB_CASES = [
     writeFileSync(INSIDE, 'in here')
     return gives('in here')(await post('/chores/read', { path: INSIDE }))
   }, 'onsay'],
-  ['asks: with no app open, a need that takes a yes is refused, saying how to grant it', async () => {
+  ['needs: under the ceiling they are allowed with no prompt, and the ceiling is the only limit', async () => {
     writeFileSync(OUTSIDE, 'out there')
-    const [a, b] = [await post('/chores/run_it'), await post('/chores/read', { path: OUTSIDE })]
-    return fails(403, /chores needs run here, which takes a yes from the person, and no app is open to ask them. To allow it, grant it: grant chores "run"/)(a) &&
-      fails(403, /chores needs files\.read .*outside\.txt here/)(b) && decisions().some((d) => d.lingo === 'chores' && d.need === 'run' && d.why === 'no app to ask')
-  }, 'onsay'],
-  ['asks: an app answers once, then no, then always, kept as a grant', async () => {
-    const a = app(['once', 'no', 'always'])
+    const a = app([])
     await pause(400)
-    const r = []
-    for (let i = 0; i < 4; i++) r.push(await post('/chores/run_it'))
-    a.stop()
-    const d = decisions()
-    return same(r.map((x) => x.status), [200, 403, 200, 200]) && r[0].json === '7' && /The person said no to chores using run/.test(r[1].json.error) && a.seen.length === 3 &&
-      same(Object.keys(a.seen[0]), ['id', 'lingo', 'need', 'path', 'caller']) && a.seen[0].lingo === 'chores' && a.seen[0].need === 'run' && a.seen[0].caller === 'this computer' &&
-      policyFile().overrides.grants.chores.includes('run') && ['asked: once', 'asked: no', 'asked: always', 'granted: run'].every((why) => d.some((l) => l.lingo === 'chores' && l.why === why))
-  }, 'onsay'],
-  ['asks: a file outside the home asked with its path', async () => {
-    const a = app(['once'])
-    await pause(400)
-    const r = await post('/chores/read', { path: OUTSIDE })
+    const [run, read] = [await post('/chores/run_it'), await post('/chores/read', { path: OUTSIDE })]
     a.stop()
     rmSync(OUTSIDE)
-    return gives('out there')(r) && a.seen.length === 1 && a.seen[0].need === 'files.read' && /outside\.txt$/.test(a.seen[0].path)
+    return gives('7')(run) && gives('out there')(read) && a.seen.length === 0 &&
+      decisions().some((d) => d.lingo === 'chores' && d.need === 'run' && d.allowed && d.why === 'allowed')
   }, 'onsay'],
   ["chat.ask: the person's answers, from the app, go back to the lingo asking, in order", async () => {
     const a = app([['Rome', 'May']])
@@ -780,25 +810,26 @@ const WEB_CASES = [
     const r = await web('/')
     return r.json.lingos.some((l) => l.name === 'liar' && /liar\.ls: liar\.fetch needs net, which its openapi\.json doesn't say/.test(l.error))
   }],
-  ['policy: a new version pushed is fetched, checked, kept for this device, and what the ceiling clamped sent back', async (send) => {
-    policies.push({ version: 2, policy: { access: [{ who: 'me', lingos: '*' }, { who: 'my devices', lingos: '*' }], grants: { [DEVICE]: { onsay: ['screen.read', 'screen.act'] } }, offline: 'defaults' } })
-    current.send({ type: 'policy', version: 2 })
-    const got = await soon(() => applied.some((m) => m.version === 2))
-    const kept = JSON.parse(readFileSync(new URL('policy.account.json', DATA), 'utf8')), a = applied.find((m) => m.version === 2)
+  ['policy: a new version pushed is fetched, checked and kept for this device', async (send) => {
+    const rules = [...DEFAULT_RULES, { allow: true, who: 'public', routes: ['/hello'] }]
+    const version = setRules(rules)
+    current.send({ type: 'policy', version })
+    const got = await soon(() => applied.some((m) => m.version === version))
+    const kept = accountFile(), a = applied.find((m) => m.version === version)
     const r = await send('/memo/recall?k=milk')
-    return got && same(a.clamped, { onsay: ['screen.act'] }) && kept.version === 2 && kept.device === DEVICE && same(kept.grants[DEVICE].onsay, ['screen.read', 'screen.act']) &&
-      same((await control('policy')).json.grants.onsay, ['screen.read', 'files.read ~/no-such-file-here.txt', 'run']) && r.status === 200
+    return got && same(a.clamped, {}) && kept.version === version && kept.device === DEVICE && same(kept.rules, rules) && r.status === 200
   }],
   ["policy: an older version, and one whose signature doesn't check out, are refused", async () => {
-    policies.push({ version: 1, policy: { access: [], grants: {}, offline: 'defaults' } })
-    current.send({ type: 'policy', version: 1 })
+    const kept = setRules(DEFAULT_RULES), seen = applied.length
+    policies.push({ version: kept - 1, policy: { default: 'closed', rules: [] } })
+    current.send({ type: 'policy', version: kept - 1 })
     await pause(1000)
-    policies.push({ version: 3, policy: { access: [], grants: {}, offline: 'defaults' }, forged: true })
-    current.send({ type: 'policy', version: 3 })
+    policies.push({ version: kept + 1, policy: { default: 'closed', rules: [] }, forged: true })
+    current.send({ type: 'policy', version: kept + 1 })
     await pause(1500)
-    const kept = JSON.parse(readFileSync(new URL('policy.account.json', DATA), 'utf8'))
-    rmSync(new URL('policy.account.json', DATA))
-    return kept.version === 2 && !applied.some((m) => m.version !== 2)
+    const now = accountFile()
+    resetRules()
+    return now.version === kept && applied.length === seen
   }],
   ['log: each decision is sent to Onsay for the activity feed', async () =>
     logged.some((l) => l.caller === 'ip 203.0.113.8' && l.lingo === 'memo' && l.allowed === false) && logged.some((l) => l.caller === 'laptop.tester' && l.allowed) &&
@@ -869,10 +900,12 @@ const WEB_CASES = [
       done.json?.text === 'you picked: ["hi Ana","hi Ana"]' && done.json.steps.some((s) => s.text === 'Picked: The second') && done.json.session === session &&
       same(after, { running: false, steps: [], questions: null }) && again.status === 404 && none.json?.text === "Okay, I didn't do any of those. Say it another way and I'll look again."
   }],
-  ['/onsay: open to anyone through the proxy by its own default rule, still with its prompt key', async (send) => {
-    const ask = (k) => send('/onsay', { prompt: 'from afar' }, { as: undefined, headers: { ...from('198.18.0.9').headers, authorization: `Bearer ${k}` } })
-    const [a, b] = [await ask(onsayed.key), await ask('wrong')]
-    return a.status === 200 && a.json.text === 'Onsay heard: from afar' && b.status === 401 && (await control('policy')).json.access.some((r) => r.who === 'public' && r.lingos === 'onsay' && r.default)
+  ['/onsay: a stranger is not let in, Onsay is with its prompt key, and a wrong key is a 401', async (send) => {
+    const at = from('198.18.0.9')
+    const ask = (more, k = onsayed.key) => send('/onsay', { prompt: 'from afar' }, { ...at, ...more, headers: { ...at.headers, authorization: `Bearer ${k}` } })
+    const [stranger, wrong, onsay] = [await ask({ as: undefined }), await ask({ as: 'onsay' }, 'wrong'), await ask({ as: 'onsay' })]
+    return stranger.status === 404 && wrong.status === 401 && onsay.status === 200 && onsay.json.text === 'Onsay heard: from afar' &&
+      (await control('policy')).json.rules.some((r) => r.who === 'onsay' && same(r.routes, ['/onsay']))
   }],
   ['sent.log: every message sent to Onsay kept, a line each with when, every token masked, pings left out', async () => {
     const text = readFileSync(new URL('sent.log', DATA), 'utf8'), lines = text.trim().split('\n').map((l) => JSON.parse(l)), types = new Set(lines.map((l) => l.message.type))
@@ -936,13 +969,14 @@ const WEB_CASES = [
   ['the port: with nothing shared it is open to this computer alone, and to others within a look of a rule for an address', async () => {
     const lan = Object.values(os.networkInterfaces()).flat().find((i) => i.family === 'IPv4' && !i.internal)?.address
     if (!lan) return true
+    mkdirSync(new URL('closed/', DATA), { recursive: true })
     writeFileSync(new URL('closed.json', DATA), JSON.stringify({ home: 'test/data/closed', lingos: 'test/data/lingos', port: CLOSED }))
     const core = spawn(EXE, ['test/data/closed.json'], { cwd: CORE, stdio: 'ignore' })
     const there = { port: CLOSED, host: lan, headers: { host: `${lan}:${CLOSED}` } }
     let r = { status: 0 }
     for (let i = 0; i < 50 && !r.status; i++) { await pause(200); r = await web('/', { port: CLOSED }) }
     const before = await web('/', there)
-    execFileSync(EXE, ['test/data/closed.json', 'share', 'memo', 'ip', lan], { cwd: CORE, stdio: 'ignore' })
+    writeFileSync(new URL('closed/policy.account.json', DATA), JSON.stringify({ device: DEVICE, version: 1, default: 'closed', rules: [{ allow: true, ip: lan }] }))
     const opened = await soon(async () => (await web('/', there)).status === 200, 10)
     core.kill()
     return r.status === 200 && before.status === 0 && opened
@@ -1055,8 +1089,19 @@ const API = {
     : json(s, 200, { computers: [{ name: 'laptop', online: true, seen: ADDED, lingos: [] }, { name: 'desk', online: false, seen: null, lingos: [] }] }),
   'GET /policy': (q, s) => {
     if (q.headers.authorization !== `Bearer ${TOKEN}`) return json(s, 401, { error: 'Sign in first' })
-    const p = policies.at(-1) ?? { version: 0, policy: { access: [{ who: 'me', lingos: '*' }, { who: 'my devices', lingos: '*' }], grants: {}, offline: 'defaults' } }
-    json(s, 200, { version: p.version, policy: p.policy, signed: sign({ version: p.forged ? 4 : p.version, policy: p.policy }) })
+    const p = policies.at(-1) ?? { version: 0, policy: { default: 'closed', rules: DEFAULT_RULES } }
+    json(s, 200, { version: p.version, policy: p.policy, signed: sign({ version: p.forged ? -1 : p.version, policy: p.policy }) })
+  },
+  // share and unshare: the policy the lingo sent, its rules kept as Onsay keeps them, each person resolved to an account
+  // and a handle, at the next version, and every computer told.
+  'PUT /policy': (q, s, body) => {
+    if (q.headers.authorization !== `Bearer ${TOKEN}`) return json(s, 401, { error: 'Sign in first' })
+    const sent = JSON.parse(body).policy, kept = { default: sent.default ?? 'closed', rules: sent.rules.map(keepRule) }
+    const version = (policies.at(-1)?.version ?? 0) + 1
+    policies.length = 0
+    policies.push({ version, policy: kept })
+    writeFileSync(new URL('policy.account.json', DATA), JSON.stringify({ device: DEVICE, version, ...kept }))
+    json(s, 200, { version, policy: kept, signed: sign({ version, policy: kept }) })
   },
   // lingo(...) and use(...) asked of the address a bare lingo client's settings name as its ask.
   'POST /ask': (q, s, body) => answer(JSON.parse(body)).then((a) => json(s, 200, a)),
@@ -1065,8 +1110,8 @@ const API = {
     resolved.push(name)
     if (name === 'pages.tester') return json(s, 200, { name, kind: 'address', target: HTTP, address: HTTP })
     if (!key || !handle) return json(s, 404, { error: `There's no computer or route called ${name}` })
-    const card = { name: device, key: publicOf(key), added: ADDED }
-    json(s, 200, { name, kind: 'computer', online: true, devices: [{ ...card, statement: sign({ ...card, device, handle, name: undefined }, device === 'tablet' ? DEVICES.tablet : ONSAY) }] })
+    const account = `acct_${handle}`, card = { account, name: device, key: publicOf(key), added: ADDED }
+    json(s, 200, { name, kind: 'computer', online: true, devices: [{ ...card, statement: sign({ account, added: ADDED, device, handle, key: card.key }, device === 'tablet' ? DEVICES.tablet : ONSAY) }] })
   },
 }
 
@@ -1102,8 +1147,8 @@ const session = (link) => {
   const send = (path, values, more = {}) => new Promise((done) => {
     const id = `r${++next}`, m = { type: 'request', id, method: values === undefined ? 'GET' : 'POST', path, body: values === undefined ? '' : JSON.stringify(values), base64: false, as: 'me',
       at: new Date().toISOString(), ...more, headers: { host: 'api.onsay.dev', 'content-type': 'application/json', ...more.headers } }
-    if (m.as === 'me' && !more.signed) m.signed = sign({ as: 'me', at: m.at, device: DEVICE, id, method: m.method, path: m.path, sha256: digest(m.body) })
-    if (m.as !== 'me') delete m.at
+    if ((m.as === 'me' || m.as === 'onsay') && !more.signed) m.signed = sign({ as: m.as, at: m.at, device: DEVICE, id, method: m.method, path: m.path, sha256: digest(m.body) })
+    if (m.as !== 'me' && m.as !== 'onsay') delete m.at
     waiting.set(id, (r) => { try { r.json = JSON.parse(r.body) } catch {} done(r) })
     link.send(m)
   })
@@ -1181,7 +1226,7 @@ const session = (link) => {
       catalog = m.catalog
       current = link
       console.log(`hello ${hellos} from ${m.client} ${m.version}: ${catalog.map((l) => `${l.name} ${l.error ? 'broken' : 'ok'}`).join(', ')}`)
-      const card = { handle: HANDLE, device: DEVICE, added: ADDED }
+      const card = { account: TESTER, handle: HANDLE, device: DEVICE, added: ADDED }
       link.send({ type: 'ready', ...card, statement: sign({ ...card, key: hellos === 2 ? publicOf(DEVICES.laptop) : m.key }), policy: 0 })
       if (hellos === 1) go()
       else if (hellos === 3) {
@@ -1213,6 +1258,7 @@ writeFileSync(new URL('squeezed.lingo', LINGOS), deflated({
 }))
 writeFileSync(new URL('notazip.lingo', LINGOS), 'just text, not a zip')
 writeFileSync(new URL('policy.json', DATA), JSON.stringify(POLICY))
+setRules(DEFAULT_RULES)
 execFileSync(EXE, ['test/onsay.json', 'pack', 'test/lingos/memo', 'test/data/lingos'], { cwd: CORE, stdio: 'ignore' })
 writeFileSync(new URL('running.json', DATA), JSON.stringify(readdirSync(LINGOS).map((n) => n.replace(/\.lingo$/, ''))))
 

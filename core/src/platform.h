@@ -92,6 +92,15 @@ int pl_take(pl_socket *c, char *to, size_t n);             // what came, up to n
 int pl_give(pl_socket *c, const char *data, size_t n);     // all of it, or 0
 void pl_hang_up(pl_socket *c);                              // closes it and frees it
 
+#ifdef __ANDROID__
+// What only the app around the core can do on Android, asked of it by name with a JSON record: the web, links, what is
+// around, the screen, input, the clipboard, notifications, and lines for the app to draw. Written by the app (onsay-mobile).
+// 1 with its answer as JSON in out, or 0 with why in out, in words.
+int pl_device(const char *name, const char *json, buf *out);
+// A crash that ends the app, said in words, kept by the app for the next time it opens. Only what a signal handler may do.
+void pl_crashed(const char *what);
+#endif
+
 #ifdef _WIN32
 // UTF-8 to and from Windows' UTF-16, for what is written for Windows alone. win_wide's text is freed with free.
 wchar_t *win_wide(const char *s);

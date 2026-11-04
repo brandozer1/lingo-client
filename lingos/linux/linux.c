@@ -1,11 +1,12 @@
-// linux.c - the base calls on Linux, built into the lingo client for Linux (build.ps1). The same names as on every computer
-// (../onsay/calls_every.h and calls_device.h): files, commands and chat work here, and a call this build can't do yet, like
-// the screen's, says so when it is called.
+// linux.c - the base calls on Linux and Android, built into the lingo client for Linux (build.ps1) and into the Android app
+// (onsay-mobile). The same names as on every computer (../onsay/calls_every.h and calls_device.h): files, commands and chat
+// work on both, the screen's calls on Android are asked of the app, and on Linux a call this build can't do yet says so.
 //
 // 1. helpers       paths, and why a file was refused
 // 2. files         exists, list, find, copy, move, delete: what is Linux's own about them
 // 3. commands      run, start, running, stop
-// 4. base_calls()  every call joined to its function, called as the lingo client starts (onsay_lingo)
+// 4. android       every call that needs the screen, asked of the app by its name with its values (pl_device)
+// 5. base_calls()  every call joined to its function, called as the lingo client starts (onsay_lingo)
 // What is the same on every computer, like files.search and chat, is in ../onsay/calls_shared.c.
 #include <ctype.h>
 #include <dirent.h>
@@ -28,6 +29,11 @@
 #define WHOLE 4096   // the longest path
 #define MOST_OUT (4u << 20)   // the most of a command's output kept, in bytes
 #define RUN_SECONDS 600   // the longest commands.run waits
+#ifdef __ANDROID__
+#define SHELL "/system/bin/sh"
+#else
+#define SHELL "/bin/sh"
+#endif
 
 ////////// 1. HELPERS //////////
 
@@ -45,7 +51,11 @@ static val *path_of(run *r, val *p, const char *need) {
   if (first == 1 && given[0] == '~')
     folder = "";
   else if (first == 9 && !strncasecmp(given, "downloads", 9))
+#ifdef __ANDROID__
+    folder = "/Download";   // Android's own name for it
+#else
     folder = "/Downloads";
+#endif
   else if (first == 7 && !strncasecmp(given, "desktop", 7))
     folder = "/Desktop";
   else if (first == 9 && !strncasecmp(given, "documents", 9))
@@ -200,7 +210,7 @@ static val *shell_run(run *r, val **a) {
     close(pipes[1]);
     int none = open("/dev/null", O_RDONLY);
     if (none >= 0) dup2(none, 0);
-    execl("/bin/sh", "sh", "-c", command, (char *)NULL);
+    execl(SHELL, "sh", "-c", command, (char *)NULL);
     _exit(127);
   }
   close(pipes[1]);
@@ -265,7 +275,7 @@ static val *shell_start(run *r, val **a) {
     if (fork()) _exit(0);
     int none = open("/dev/null", O_RDONLY);
     if (none >= 0) dup2(none, 0);
-    execl("/bin/sh", "sh", "-c", "echo $$ > \"$3\"; eval \"$0\" > \"$1\" 2>&1; echo $? > \"$2\"", command, log, code,
+    execl(SHELL, "sh", "-c", "echo $$ > \"$3\"; eval \"$0\" > \"$1\" 2>&1; echo $? > \"$2\"", command, log, code,
         pid, (char *)NULL);
     _exit(127);
   }
@@ -311,28 +321,76 @@ static val *shell_stop(run *r, val **a) {
   return NOTHING;
 }
 
-// One line of JSON on stdout, for an app to read.
+// One line of JSON on stdout for an app to read, or on Android handed to the app around the core.
 static void show(buf *line) {
+#ifdef __ANDROID__
+  buf answer = { 0 };
+  pl_device("show", line->s, &answer);
+  buf_free(&answer);
+  buf_free(line);
+  return;
+#endif
   buf_chr(line, '\n');
   fwrite(line->s, 1, line->n, stdout);
   fflush(stdout);
   buf_free(line);
 }
 
+#ifndef __ANDROID__
 // A call that needs what this build can't reach, like a screen.
 static val *not_here(run *r, val **a) {
   fail(r, "phrase",
       "This computer can't do that: it needs a screen, or something else this Linux build can't reach yet");
 }
+#endif
 
-////////// 4. BASE_CALLS //////////
+////////// 4. ANDROID //////////
+
+#ifdef __ANDROID__
+// A call the app does, by its id, like look.screenshot, with its values as a record by name. What the app gives back is
+// its value, and why it couldn't is the call's error.
+static val *app_call(run *r, val **a, const char *group, const char *line) {
+  buf id = { 0 };
+  buf_fmt(&id, "%s.%.*s", group, (int)strcspn(line, "("), line);
+  phrase *p = phrase_find(id.s);
+  buf values = { 0 };
+  buf_chr(&values, '{');
+  for (int i = 0; p && i < p->count; i++) {
+    if (i) buf_chr(&values, ',');
+    buf_json_str(&values, p->params[i], strlen(p->params[i]));
+    buf_chr(&values, ':');
+    buf_json(&values, a[i]);
+  }
+  buf_chr(&values, '}');
+  buf answer = { 0 };
+  int ok = pl_device(id.s, values.s, &answer);
+  val *got = ok ? json_parse(r->a, answer.s ? answer.s : "null", answer.s ? answer.n : 4, NULL) : NULL;
+  const char *why = v_text(r->a, answer.s ? answer.s : "", answer.n)->t.s;
+  buf_free(&id);
+  buf_free(&values);
+  buf_free(&answer);
+  if (!ok) fail(r, "phrase", "%s", why);
+  return got ? got : NOTHING;
+}
+
+#define CALL(group, needs, line, fn) \
+  static val *fn(run *r, val **a) { return app_call(r, a, group, line); }
+#include "calls_device.h"
+#undef CALL
+#endif
+
+////////// 5. BASE_CALLS //////////
 
 // Called once as the lingo client starts (onsay_lingo). Every call has the same name on every computer.
 void base_calls(void) {
 #define CALL(group, needs, line, fn) phrase_add(group, needs, line, fn);
 #include "calls_every.h"
 #undef CALL
+#ifdef __ANDROID__
+#define CALL(group, needs, line, fn) phrase_add(group, needs, line, fn);
+#else
 #define CALL(group, needs, line, fn) phrase_add(group, needs, line, not_here);
+#endif
 #include "calls_device.h"
 #undef CALL
 }

@@ -187,7 +187,6 @@ void key_forget(const char *name);
 /* A native lingo that connects this lingo client to more than its port, like the onsay lingo, fills these in its
    lingo_phrases with lingo_hook. They are used only while it runs, in a lingo client that serves, never at the command
    line, and any it leaves NULL do nothing.
-     open      who reaches it when no rule says otherwise, like "public": its own default access rule
      running   called as it starts and each time the catalog changes, with the catalog as JSON (core/README.md), and with
                NULL as it stops. On the job thread
      decided   each line of decisions.log as it is written, as JSON
@@ -195,12 +194,11 @@ void key_forget(const char *name);
                "context","asking","for"} or {"address","values","for"} as JSON, for the id of the request whose run asks,
                when one does, and the answer goes in answer, a record with value, or
                error and code. 0 when it can't be asked, or stop was set while it waited (lingo_wait)
-     key       a request's signer by its keyid, like laptop.brandon: {key: "ed25519:<base64>", handle, mine}, mine true
-               when it is a device of this computer's own handle. NULL when it isn't known
+     key       a request's signer by its keyid, like laptop.brandon: {key: "ed25519:<base64>", handle, account, mine},
+               mine true when it is a device of this computer's own account. NULL when it isn't known
      said      a line the run of a request says for the person, chat.step or chat.say, with for, that request's id as
                JSON, on the job thread. 1 when it sent the line on to whoever asked, 0 when this computer shows it */
 typedef struct {
-  const char *open;
   void (*running)(const char *catalog);
   void (*decided)(const char *line);
   int (*ask)(const char *values, size_t n, volatile int *stop, buf *answer);
@@ -211,17 +209,17 @@ void lingo_hook(const lingo_hooks *hooks);
 
 /* What the lingo client offers it back, from any thread unless it says.
      lingo_hand     a web request from elsewhere, {id, method, path, headers, body, base64} as JSON, answered in turn as
-                    the port answers one, its caller "me", the account's own call, or "ip <address>". answered gets
-                    {id, status, headers, body, base64}, on the job thread
+                    the port answers one, its caller "me", the account's own call, "onsay", Onsay's own search or agent,
+                    or "ip <address>". answered gets {id, status, headers, body, base64}, on the job thread
      lingo_stop     stops the request whose id, as JSON, is id, with every request running inside its wait
      lingo_wait     on the job thread: waits until done or stop is set, or seconds pass, answering requests meanwhile
      lingo_done     sets done, and wakes the job thread's wait
      lingo_ask      on the job thread: a question for the person, a record, waited for in /.lingo/asks until an app
                     answers it, stop is set or seconds pass. Its answer, nothing when none came, or NULL when no app is
                     open to ask
-     lingo_policy   the account's policy, with its version, kept as the one in force, its grants for this computer by
-                    device, its name on the account. NULL with why when its version is older than the one kept. Gives the
-                    grants the ceiling clamps, a record by lingo
+     lingo_policy   the account's policy, with its version, kept as the one in force, its rules for this computer by
+                    device, its name on the account. NULL with why when its version is older than the one kept. Gives an
+                    empty record, which callers report as clamped: there is nothing to clamp any more
      lingo_setting  one of a lingo's settings as this computer keeps them, or NULL. lingo_set keeps one, 1 when it was
      lingo_home     this lingo client's home folder, as a whole path, for a file a native lingo keeps there, like a log
      lingo_serves   1 in a lingo client that serves, whether or not the native lingo asking runs, 0 at the command line

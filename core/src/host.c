@@ -5,10 +5,6 @@
 //   onsay-core settings.json <verb> ...      one thing done, whether or not it runs, its answer printed as JSON:
 //     pack <folder> [<to>]                   a folder of a lingo's files made into its .lingo file
 //     start <lingo>, stop <lingo>            a lingo running or stopped
-//     share <lingo> <who> [--route <r>]      who may reach it: public, me, my devices, a handle, or ip 10.0.0.0/8
-//     unshare <lingo> <who>                  every rule share wrote for who and it taken out
-//     grant <lingo> <need> [<path>]          what it may do, like run, or files.read and a folder
-//     ungrant <lingo> <need> [<path>]        that taken back
 //     ceiling <needs...>                     the most this computer ever allows
 //     policy                                 the policy in force
 //     settings <lingo>                       its settings, each with its value now
@@ -44,13 +40,28 @@ static pl_gate *gate;
 static message *first, *last;
 static long requests;   // web requests taken from the port, for their ids
 static int port, outside;   // the port, and whether it is open to other computers, as core_look says
+static char outermost[128];   // the id, as JSON, of the request main answers now, with every other waiting inside it
 
 ////////// JOBS //////////
 
-// One request answered, on main.
+// One request answered, on main. On Android each is written to the log as it starts and ends, but the app's polls, so
+// one that never ends shows there, since nobody there sees the program's own window.
 static void handle(message *m) {
   buf out = { 0 };
+#ifdef __ANDROID__
+  arena *a = arena_new();
+  val *request = json_parse(a, m->text, m->n, NULL);
+  const char *path = request ? text_or(request, "path", "") : "";
+  const char *method = request ? text_or(request, "method", "") : "";
+  int logged = strncmp(path, "/.lingo/asks", 12) && !strstr(path, "/live");
+  double began = pl_now();
+  if (logged) core_say("answering %s %s", method, path);
+#endif
   core_serve(m->text, m->n, m->caller, &out);
+#ifdef __ANDROID__
+  if (logged) core_say("answered %s %s in %.1f seconds", method, path, pl_now() - began);
+  arena_free(a);
+#endif
   m->answered(m->arg, out.s, out.n);
   buf_free(&out);
   free(m->text);
@@ -124,15 +135,43 @@ static void jobs(void) {
   for (double look = pl_now() + CORE_LOOK;;) {
     message *m = next(CORE_LOOK, NULL, NULL);
     if (pl_now() >= look) {
+      double began = pl_now();
       int wide = core_look();
+      if (pl_now() - began > 2) core_say("looking at the lingos folder took %.1f seconds", pl_now() - began);
       pl_enter(gate);
       outside = wide;
       pl_leave(gate);
       look = pl_now() + CORE_LOOK;
     }
-    if (m) handle(m);
+    if (!m) continue;
+    arena *a = arena_new();
+    val *request = json_parse(a, m->text, m->n, NULL);
+    val *id = request ? rec_get(request, "id") : NULL;
+    buf said = { 0 };
+    if (id) buf_json(&said, id);
+    pl_enter(gate);
+    snprintf(outermost, sizeof outermost, "%s", said.s ? said.s : "");
+    pl_leave(gate);
+    buf_free(&said);
+    arena_free(a);
+    handle(m);
+    pl_enter(gate);
+    outermost[0] = 0;
+    pl_leave(gate);
   }
 }
+
+#ifdef __ANDROID__
+// Stops everything running, from any thread. On Android the core lives inside the app, so its Stop can't start the
+// program again the way Desktop's does.
+void host_stop(void) {
+  char id[sizeof outermost];
+  pl_enter(gate);
+  snprintf(id, sizeof id, "%s", outermost);
+  pl_leave(gate);
+  if (id[0]) lingo_stop(id);
+}
+#endif
 
 ////////// THE PORT //////////
 
@@ -248,12 +287,18 @@ static void visitor(void *arg) {
   } else if (end) {
     answer to = { { 0 }, 0 };
     buf msg = { 0 };
+    const char *ip = v.from.s ? v.from.s : "";
+#ifdef __ANDROID__
+    // Every app on a phone can reach its 127.0.0.1, so only Onsay's own, sending the key it gave the core, is this phone.
+    const char *key = getenv("ONSAY_APP_KEY");
+    if (!key || !*key || strcmp(text_or(headers, "x-onsay-app", ""), key)) ip = "another app";
+#endif
     pl_enter(gate);
     buf_fmt(&msg, "{\"id\":\"port %ld\",\"method\":\"%.*s\",\"path\":", ++requests, (int)method, in.s);
     pl_leave(gate);
     buf_json_str(&msg, in.s + method + 1, path);
     buf_str(&msg, ",\"ip\":");
-    buf_json_str(&msg, v.from.s ? v.from.s : "", v.from.n);
+    buf_json_str(&msg, ip, strlen(ip));
     buf_str(&msg, ",\"headers\":");
     buf_json(&msg, headers);
     buf_str(&msg, ",\"body\":");
@@ -322,8 +367,7 @@ static void listener(void *arg) {
 
 // What each verb takes, by name, in order. The last takes the rest of the words, joined by spaces, or for ceiling and
 // call as a list, and set's value and call's values are read as JSON when they are JSON.
-static const char *TAKES[][4] = { { "start", "lingo" }, { "stop", "lingo" }, { "share", "lingo", "who" },
-  { "unshare", "lingo", "who" }, { "grant", "lingo", "need" }, { "ungrant", "lingo", "need" }, { "ceiling", "needs" },
+static const char *TAKES[][4] = { { "start", "lingo" }, { "stop", "lingo" }, { "ceiling", "needs" },
   { "policy" }, { "settings", "lingo" }, { "set", "lingo", "key", "value" }, { "manifest", "lingo" },
   { "call", "fn", "values" } };
 
@@ -335,7 +379,7 @@ int main(int argc, char **argv) {
   while (verb && k < count && strcmp(TAKES[k][0], verb)) k++;
   if (verb && k == count && strcmp(verb, "pack")) {
     core_say(
-        "onsay-core %s %s isn't something it does. It does pack, start, stop, share, unshare, grant, ungrant, ceiling, policy, settings, set, manifest and call",
+        "onsay-core %s %s isn't something it does. It does pack, start, stop, ceiling, policy, settings, set, manifest and call",
         path, verb);
     return 1;
   }
@@ -362,21 +406,14 @@ int main(int argc, char **argv) {
     val *done;
     const char *why = NULL;
     int names = 1;
-    int last = argc;
     while (names < 4 && TAKES[k][names]) names++;
-    for (int i = 3; i < argc; i++)
-      if (!strcmp(argv[i], "--route") && i + 1 < argc) {
-        rec_set(a, values, "route", v_cstr(a, argv[i + 1]));
-        last = i;
-        break;
-      }
-    for (int i = 1; i < names && 2 + i < last; i++) {
+    for (int i = 1; i < names && 2 + i < argc; i++) {
       buf rest = { 0 };
       const char *take = TAKES[k][i];
       val *list = v_list(a);
       val *v;
       val *parsed;
-      for (int j = 2 + i; j < (i == names - 1 ? last : 3 + i); j++) {
+      for (int j = 2 + i; j < (i == names - 1 ? argc : 3 + i); j++) {
         if (rest.n) buf_chr(&rest, ' ');
         buf_str(&rest, argv[j]);
         parsed = !strcmp(take, "values") ? json_parse(a, argv[j], strlen(argv[j]), NULL) : NULL;

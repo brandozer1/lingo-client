@@ -13,16 +13,18 @@ the wire*.
 - **Signing in** keeps the token as its secret setting, `token`, and makes this device's key, kept by the device
   (`core/README.md`, `keys/`). Its hello carries the key, and Onsay's statement on it is checked as it is ready.
 - **What Onsay signs is checked** against Onsay's key built in (`ONSAY_KEY` in `onsay.c`), never one told over the
-  wire: its statement on this device's key, each request for the account's own, run as `me`, and the account's policy.
+  wire: its statement on this device's key, each request for the account's own, run as `me`, Onsay's own search and
+  agent, run as `onsay`, and the account's policy.
 - **The account's policy** is fetched when Onsay says there's a new one, checked, kept unless its version is older,
-  and what this computer's ceiling clamped is said back.
+  and what this computer applied is said back: its version, and an empty `clamped`, since the ceiling is checked at
+  each phrase.
 - **Every decision** of the lingo client goes to Onsay for the account's activity feed.
 - **Everything it sends Onsay** is kept in the lingo client's home as `sent.log`, `{at, message}` a line, every token
   masked and pings left out, so the person can read what went: each message down the connection (`hello`, `catalog`,
   `lingo`, `response`, `decide`, `stop`, `applied`, `log`) and each call to Onsay's API, as `{type: "api", method, path, body}`.
 - **Signed requests** from other devices are checked by the lingo client, each signer's key looked up on Onsay's
   `/resolve` with Onsay's statement on it, and kept 5 minutes.
-- **`/onsay`**, open to anyone by its own default rule, takes prompts with its prompt key, its secret setting
+- **`/onsay`**, reached by the account's own devices and by Onsay, takes prompts with its prompt key, its secret setting
   `prompt_key`, made on its first start, as `Authorization: Bearer <prompt key>`:
 
   | Request | Answer |

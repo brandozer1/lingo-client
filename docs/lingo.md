@@ -392,9 +392,8 @@ nothing, `a|b` is either, and `bool` is true or false.
 `screen.read`, `screen.act`, `run` and `lingos`, making and changing lingos. A native phrase says which it needs as it is added, and a function written in
 Lingo needs everything the phrases it reaches need, worked out from its code. A lingo's `openapi.json` says what each
 of its routes needs (`x-lingo-needs`, section 11), and the computer decides what it actually gets, every time a phrase
-runs: only what is under its ceiling and said in the manifest, and `files` outside the lingo client's own folder, `run`,
-`lingos` and the screen only with a grant or the person's yes. A phrase that may not stops the call with `denied`, and `try`
-can't hide that. How the computer decides is in `core/README.md`, *Who may do what*.
+runs: only what is under its ceiling and said in the manifest. A phrase that may not stops the call with `denied`, and
+`try` can't hide that. How the computer decides is in `core/README.md`, *Who may do what*.
 
 ## 11. A .lingo file: its program and its openapi.json
 

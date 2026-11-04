@@ -194,7 +194,7 @@ static pl_gate *lock;   // keeps everything below, which the connection, the hea
 static pl_link *link_;   // the open link, after its hello, or NULL
 static int on, ready, ponged;   // on: the lingo runs. ready: Onsay took the hello, and its statement checked out
 static double heard;   // when Onsay last said anything
-static char handle[64], device[64];   // this computer's handle and its name on it, as ready said
+static char handle[64], device[64], account[64];   // this computer's handle, its name and its account id, as ready said
 static unsigned char mine[32];   // this device's public key
 static buf catalog, pending;   // the catalog now, and decisions not sent yet, a line each
 static wait *waits;
@@ -256,10 +256,10 @@ static void answered(void *arg, const char *response, size_t n) {
 
 static void policy_pull(void);
 
-/* A request from Onsay. as: "me" is the account's own call, which Onsay signs over {as, at, device, id, method, path,
-   sha256}, sha256 its body's: handed in as me when it checks out, made within 5 minutes for this device, else a 401.
-   Any other is one the proxy passed on, its caller the first address of its x-forwarded-for, or its signer, which the
-   core checks. */
+/* A request from Onsay. as: "me" is the account's own call, and as: "onsay" Onsay's own search or agent, both signed over
+   {as, at, device, id, method, path, sha256}, sha256 its body's: handed in as that caller when it checks out, made within
+   5 minutes for this device, else a 401. Any other is one the proxy passed on, its caller the first address of its
+   x-forwarded-for, or its signer, which the core checks. */
 static void request(arena *a, val *m, const char *text, size_t n) {
   val *body = rec_get(m, "body");
   val *b64 = rec_get(m, "base64");
@@ -294,8 +294,9 @@ static void request(arena *a, val *m, const char *text, size_t n) {
   rec_set(a, signed_, "sha256", v_text(a, sum64.s, sum64.n));
   double at = seconds_of(text_or(m, "at", NULL));
   double now = pl_now();
-  if (!strcmp(as, "me") && at > now - FRESH && at < now + FRESH && signed_by(signed_, rec_get(m, "signed"), NULL))
-    lingo_hand(text, n, "me", answered, NULL);
+  if ((!strcmp(as, "me") || !strcmp(as, "onsay")) && at > now - FRESH && at < now + FRESH &&
+      signed_by(signed_, rec_get(m, "signed"), NULL))
+    lingo_hand(text, n, as, answered, NULL);
   else {
     buf_str(&out, "{\"type\":\"response\",\"id\":");
     buf_json(&out, rec_get(m, "id") ? rec_get(m, "id") : NOTHING);
@@ -303,7 +304,7 @@ static void request(arena *a, val *m, const char *text, size_t n) {
         ",\"status\":401,\"headers\":{\"content-type\":\"application/json\"},\"body\":\"{\\\"error\\\":\\\"Onsay's signature on this "
         "request doesn't check out, so it didn't run\\\"}\",\"base64\":false}");
     send_(out.s, out.n);
-    say("A request said to be the account's own didn't check out, so it didn't run");
+    say("A request said to be from Onsay didn't check out, so it didn't run");
   }
   buf_free(&bytes);
   buf_free(&sum64);
@@ -324,6 +325,7 @@ static void heard_(pl_link *l, const char *text, size_t n) {
     rec_set(a, statement, "added", rec_get(m, "added") ? rec_get(m, "added") : NOTHING);
     rec_set(a, statement, "device", rec_get(m, "device") ? rec_get(m, "device") : NOTHING);
     rec_set(a, statement, "handle", rec_get(m, "handle") ? rec_get(m, "handle") : NOTHING);
+    rec_set(a, statement, "account", rec_get(m, "account") ? rec_get(m, "account") : NOTHING);
     rec_set(a, statement, "key", v_text(a, key.s, key.n));
     buf_free(&key);
     if (!signed_by(statement, rec_get(m, "statement"), NULL)) {
@@ -333,6 +335,7 @@ static void heard_(pl_link *l, const char *text, size_t n) {
       pl_enter(lock);
       snprintf(handle, sizeof handle, "%s", text_or(m, "handle", ""));
       snprintf(device, sizeof device, "%s", text_or(m, "device", ""));
+      snprintf(account, sizeof account, "%s", text_or(m, "account", ""));
       ready = 1;
       flush();
       pl_leave(lock);
@@ -510,9 +513,9 @@ static int said(const char *for_, const char *text) {
 }
 
 /* A signer's key, by its keyid, a device and its handle like laptop.brandon: from Onsay's /resolve, its statement checked,
-   and kept for 5 minutes. mine when the handle is this computer's own. */
+   and kept for 5 minutes. mine when it is a device of this computer's own account. */
 static struct {
-  char keyid[128], key[64], handle[64];
+  char keyid[128], key[64], handle[64], account[64];
   double until;
 } known[32];
 
@@ -539,6 +542,7 @@ static val *key(arena *a, const char *keyid) {
       rec_set(a, statement, "added", rec_get(d, "added") ? rec_get(d, "added") : NOTHING);
       rec_set(a, statement, "device", v_text(a, keyid, (size_t)(dot - keyid)));
       rec_set(a, statement, "handle", v_cstr(a, dot + 1));
+      rec_set(a, statement, "account", rec_get(d, "account") ? rec_get(d, "account") : NOTHING);
       rec_set(a, statement, "key", rec_get(d, "key") ? rec_get(d, "key") : NOTHING);
       if (strlen(text_or(d, "key", "")) >= sizeof known[0].key || !signed_by(statement, rec_get(d, "statement"), NULL))
         continue;
@@ -547,6 +551,7 @@ static val *key(arena *a, const char *keyid) {
       snprintf(known[k].keyid, sizeof known[k].keyid, "%s", keyid);
       snprintf(known[k].key, sizeof known[k].key, "%s", text_or(d, "key", ""));
       snprintf(known[k].handle, sizeof known[k].handle, "%s", dot + 1);
+      snprintf(known[k].account, sizeof known[k].account, "%s", text_or(d, "account", ""));
       known[k].until = pl_now() + FRESH;
       pl_leave(lock);
     }
@@ -558,7 +563,8 @@ static val *key(arena *a, const char *keyid) {
     pl_enter(lock);
     rec_set(a, out, "key", v_cstr(a, known[k].key));
     rec_set(a, out, "handle", v_cstr(a, known[k].handle));
-    rec_set(a, out, "mine", VBOOL(*handle && !strcmp(known[k].handle, handle)));
+    rec_set(a, out, "account", v_cstr(a, known[k].account));
+    rec_set(a, out, "mine", VBOOL(*account && !strcmp(known[k].account, account)));
     pl_leave(lock);
   }
   return out;
@@ -612,8 +618,9 @@ static void running(const char *now) {
 ////////// 4. POLICY //////////
 
 /* The account's policy, from GET /policy: {version, policy, signed}, signed over {policy, version}. Checked, then handed to
-   the core, which keeps it unless its version is older than the one kept, and what the ceiling clamped sent back as
-   applied. Anything that doesn't check out is refused, and said. */
+   the core, which keeps it unless its version is older than the one kept, and what it applied sent back: the version and
+   clamped, which is empty since the ceiling is checked at each phrase. Anything that doesn't check out is refused, and
+   said. */
 static void policy_pull(void) {
   arena *a = arena_new();
   buf error = { 0 };
@@ -651,6 +658,112 @@ static void policy_pull(void) {
   buf_free(&error);
   buf_free(&m);
   arena_free(a);
+}
+
+/* Sets a rule's identity: who is public, me, my devices or onsay; acct_... is the account; anything else is a handle,
+   handle#tag, or a name Onsay resolves, and Onsay keeps the account it names. */
+static void identity(arena *a, val *rule, const char *who) {
+  if (!strcmp(who, "public") || !strcmp(who, "me") || !strcmp(who, "my devices") || !strcmp(who, "onsay"))
+    rec_set(a, rule, "who", v_cstr(a, who));
+  else if (!strncmp(who, "acct_", 5))
+    rec_set(a, rule, "account", v_cstr(a, who));
+  else
+    rec_set(a, rule, "handle", v_cstr(a, who));
+}
+
+// Whether a rule names who, by its built-in word, its account id, or its handle.
+static int names_who(val *rule, const char *who) {
+  return !strcmp(text_or(rule, "who", ""), who) || !strcmp(text_or(rule, "account", ""), who) ||
+      !strcmp(text_or(rule, "handle", ""), who);
+}
+
+/* The account's policy from Onsay, checked and kept to what share and unshare change. Its rules are the ones to save. */
+static val *policy_now(run *r, const char *what, buf *error) {
+  double status = 0;
+  val *said = api(r->a, "GET", "/policy", NULL, &status, error);
+  if (!said) fail(r, "phrase", "Onsay couldn't be reached. Check that this computer is online, then try again");
+  if (status == 401) fail(r, "phrase", "Sign in to %s", what);
+  if (status != 200 || !rec_get(said, "policy") || rec_get(said, "policy")->k != V_REC)
+    fail(r, "phrase", "Onsay couldn't read the policy: %s", text_or(said, "error", "it said no"));
+  return rec_get(said, "policy");
+}
+
+// Saves the policy at Onsay and keeps it here.
+static val *policy_save(run *r, val *policy) {
+  buf body = { 0 };
+  buf error = { 0 };
+  double status = 0;
+  buf_str(&body, "{\"policy\":");
+  buf_json(&body, policy);
+  buf_chr(&body, '}');
+  val *saved = api(r->a, "PUT", "/policy", body.s, &status, &error);
+  buf_free(&body);
+  buf_free(&error);
+  if (!saved) fail(r, "phrase", "Onsay couldn't be reached. Check that this computer is online, then try again");
+  if (status != 200) fail(r, "phrase", "Onsay didn't keep the policy: %s", text_or(saved, "error", "it said no"));
+  policy_pull();
+  return saved;
+}
+
+/* share(values: record) -> the policy: shares with who, at routes, full paths like /photos/share, or every route when
+   none are named, on devices when they are. who is public, me, my devices, onsay, a handle like james, handle#tag, or
+   acct_.... One more allow rule is added to the account's policy, and every computer is told. */
+static val *share(run *r, val **v) {
+  arena *a = r->a;
+  buf error = { 0 };
+  val *values = v[0];
+  val *policy;
+  val *rule;
+  val *rules;
+  val *old;
+  const char *who = values->k == V_REC ? text_or(values, "who", "") : "";
+  val *routes = values->k == V_REC ? rec_get(values, "routes") : NULL;
+  val *devices = values->k == V_REC ? rec_get(values, "devices") : NULL;
+  if (!*who)
+    fail(r, "phrase", "Say who to share with: a handle like james, handle#tag, acct_..., public, me, my devices or onsay");
+  policy = policy_now(r, "share", &error);
+  buf_free(&error);
+  rule = v_rec(a);
+  rec_set(a, rule, "allow", VBOOL(1));
+  identity(a, rule, who);
+  if (routes && routes->k == V_LIST) {
+    for (size_t i = 0; i < routes->l.n; i++)
+      if (routes->l.v[i]->k != V_TEXT || routes->l.v[i]->t.s[0] != '/')
+        fail(r, "phrase", "A route is a full path, like /photos/share, each starting with /");
+    rec_set(a, rule, "routes", routes);
+  }
+  if (devices && devices->k == V_LIST) rec_set(a, rule, "devices", devices);
+  rules = v_list(a);
+  old = rec_get(policy, "rules");
+  for (size_t i = 0; old && old->k == V_LIST && i < old->l.n; i++) list_push(a, rules, old->l.v[i]);
+  list_push(a, rules, rule);
+  rec_set(a, policy, "default", v_cstr(a, "closed"));
+  rec_set(a, policy, "rules", rules);
+  return policy_save(r, policy);
+}
+
+/* unshare(values: record) -> the policy: stops sharing with who, taking out every rule that names them, whether by
+   public, me, my devices, onsay, an account id, or a handle. */
+static val *unshare(run *r, val **v) {
+  arena *a = r->a;
+  buf error = { 0 };
+  val *values = v[0];
+  val *policy;
+  val *kept;
+  val *old;
+  const char *who = values->k == V_REC ? text_or(values, "who", "") : "";
+  if (!*who) fail(r, "phrase", "Say who to stop sharing with: a handle like james, acct_..., public, me, my devices or onsay");
+  policy = policy_now(r, "share", &error);
+  buf_free(&error);
+  kept = v_list(a);
+  old = rec_get(policy, "rules");
+  for (size_t i = 0; old && old->k == V_LIST && i < old->l.n; i++)
+    if (!names_who(old->l.v[i], who)) list_push(a, kept, old->l.v[i]);
+  if (!old || old->k != V_LIST || kept->l.n == old->l.n)
+    fail(r, "phrase", "Nothing is shared with %s", who);
+  rec_set(a, policy, "default", v_cstr(a, "closed"));
+  rec_set(a, policy, "rules", kept);
+  return policy_save(r, policy);
 }
 
 ////////// 5. /ONSAY //////////
@@ -1251,15 +1364,15 @@ static val *sign_out(run *r, val **v) {
   pl_enter(lock);
   attempt++;
   signing = 0;
-  *handle = *device = 0;
+  *handle = *device = *account = 0;
   if (link_) pl_close(link_);
   pl_leave(lock);
   return NOTHING;
 }
 
-/* {signed_in, signing_in, failed, running, connected, handle, device, key}: failed is why the last sign in didn't finish,
-   or nothing, and running whether this lingo runs. signing_in, failed, connected, handle and device only in a lingo
-   client that serves. */
+/* {signed_in, signing_in, failed, running, connected, handle, device, account, key}: failed is why the last sign in
+   didn't finish, or nothing, and running whether this lingo runs. signing_in, failed, connected, handle, device and
+   account only in a lingo client that serves. */
 static val *status(run *r, val **v) {
   arena *a = r->a;
   val *out = v_rec(a);
@@ -1278,6 +1391,7 @@ static val *status(run *r, val **v) {
   rec_set(a, out, "connected", VBOOL(ready));
   rec_set(a, out, "handle", *handle ? v_cstr(a, handle) : NOTHING);
   rec_set(a, out, "device", *device ? v_cstr(a, device) : NOTHING);
+  rec_set(a, out, "account", *account ? v_cstr(a, account) : NOTHING);
   pl_leave(lock);
   rec_set(a, out, "key", shown.n ? v_text(a, shown.s, shown.n) : NOTHING);
   buf_free(&shown);
@@ -1326,7 +1440,7 @@ void base_calls(void);   // the calls every computer has, built for its platform
 
 // Called once as the lingo client starts (core.c, BUILTINS).
 void onsay_lingo(void) {
-  static const lingo_hooks hooks = { "public", running, decided, ask, key, said };
+  static const lingo_hooks hooks = { running, decided, ask, key, said };
   lock = pl_gate_new();
   logging = pl_gate_new();
   lingo_hook(&hooks);
@@ -1350,5 +1464,13 @@ void onsay_lingo(void) {
       "ai() -> {plan: text, ends?: text, over: bool}: Onsay's AI for this account: its plan, trial or paid, when its free "
       "trial ends, and whether it is over",
       ai);
+  phrase_add("onsay", "net",
+      "share(values: record) -> {version, policy, signed}: shares with who at routes, full paths like [\"/photos/share\"] "
+      "or every route when none, on devices when named. who is a handle, handle#tag, acct_..., public, me, my devices or "
+      "onsay. Every computer is told",
+      share);
+  phrase_add("onsay", "net",
+      "unshare(values: record) -> {version, policy, signed}: stops sharing with who, taking out every rule that names them",
+      unshare);
   base_calls();
 }

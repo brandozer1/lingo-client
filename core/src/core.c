@@ -5,8 +5,7 @@
 //                    the native lingo that answers them, or of the settings' ask
 // 3. Lingos          .lingo files and folders: read, loaded, their OpenAPI manifests, running or stopped, the catalog,
 //                    and the hooks of native lingos that run
-// 4. Policy          policy.json and the account's: callers, signatures and access, the ceiling, grants, the root, asks
-//                    and the log
+// 4. Policy          policy.json and the account's: callers, signatures and rules, the ceiling, the root, asks and the log
 // 5. Stops           stopping a running request, and those running inside its wait
 // 6. Calls           one function of a lingo, run
 // 7. Lingo settings  setting(...), settings.get and settings.set, kept on this computer, never on Onsay
@@ -1115,11 +1114,11 @@ void lingo_hook(const lingo_hooks *h) { hooks[loading] = *h; }
 
 /* Who may reach what, and what each lingo may do here. A request's caller is this computer, which reaches every running
    lingo, or me, the account's own call handed in by a native lingo, a device that signed it, or anyone else by their
-   address: they reach a lingo when an access rule lets them in, and anyone else gets a 404, as if it weren't there.
+   address: they reach a lingo when a rule lets them in, and anyone else gets a 404, as if it weren't there.
    At every phrase, a need must be under the ceiling, the most this computer ever allows, and said in the lingo's
-   manifest. net, store and files inside the root, this lingo client's home, are given then; files outside it, run,
-   screen.read, screen.act and lingos, making and changing lingos, need a grant, or the person's yes, asked through an app. Every decision but a routine one
-   goes in home/decisions.log. */
+   manifest. Anything under it is allowed. net, store and files inside the root, this lingo client's home, are routine;
+   files outside it, run, screen.read, screen.act and lingos, making and changing lingos, are logged. Every decision but
+   a routine one goes in home/decisions.log. */
 static const char *NEEDS[] = { "net", "store", "files.read", "files.write", "screen.read", "screen.act", "run",
   "lingos", NULL };   // the first four routine
 #define ATTACHED 10   // seconds an app counts as open after it last asked for the questions waiting
@@ -1136,64 +1135,26 @@ static long questions;   // their ids
 static double polled;   // when an app last asked for them
 
 /* 4. The policy in force, read as each request comes, so a change from the command line or by hand holds at once:
-   {ceiling, access, block, grants, local, account}. Its base is the account's, home/policy.account.json, with its
-   grants for this computer by its device, its name on the account, or with none this computer's defaults. The
-   overrides of policy.json go first, and every grant is clamped to the ceiling. A rule naming devices holds on those
-   alone. After every rule written, the defaults every lingo client has, marked default: me and my devices reach every
-   lingo, and a running native lingo may be open to someone of its own (open in lingo_hooks). local and account are the
-   two files as they are. */
+   {ceiling, default, rules, device, local, account}. Its rules are the account's, home/policy.account.json, as Onsay
+   signed them, and its ceiling is this computer's, home/policy.json, the most any lingo may ever do here. Nothing is
+   merged in: the server's policy already carries me, my devices and onsay. local and account are the two files as they
+   are. */
 static val *policy(arena *a) {
   val *local = home_json(a, "policy.json");
   val *account = home_json(a, "policy.account.json");
   val *out = v_rec(a);
-  val *grants = v_rec(a);
-  val *access;
+  val *ceiling;
   if (!local || local->k != V_REC) local = v_rec(a);
   if (account && account->k != V_REC) account = NULL;
-  val *over = rec_get(local, "overrides");
-  val *base = account ? account : rec_get(local, "defaults");
-  val *ceiling = rec_get(local, "ceiling");
-  val *given[2] = { rec_get(over, "grants"),
-    account ? rec_get(rec_get(account, "grants"), text_or(account, "device", "")) : rec_get(base, "grants") };
-  const char *parts[] = { "access", "block" };
+  ceiling = rec_get(local, "ceiling");
   if (!ceiling || ceiling->k != V_LIST) {
     ceiling = v_list(a);
     for (int i = 0; NEEDS[i]; i++) list_push(a, ceiling, v_cstr(a, NEEDS[i]));
   }
   rec_set(a, out, "ceiling", ceiling);
-  for (int k = 0; k < 2; k++) {
-    val *both = v_list(a);
-    val *from[2] = { rec_get(over, parts[k]), rec_get(base, parts[k]) };
-    for (int s = 0; s < 2; s++)
-      for (size_t i = 0; from[s] && from[s]->k == V_LIST && i < from[s]->l.n; i++) {
-        val *devices = rec_get(from[s]->l.v[i], "devices");
-        if (!devices || devices->k != V_LIST || has(devices, text_or(account, "device", "")))
-          list_push(a, both, from[s]->l.v[i]);
-      }
-    rec_set(a, out, parts[k], both);
-  }
-  access = rec_get(out, "access");
-  for (size_t i = 0; i < native_total + 2; i++) {
-    const char *who = i == 0 ? "me" : i == 1 ? "my devices" : on[i - 2] ? hooks[i - 2].open : NULL;
-    val *rule = v_rec(a);
-    if (!who) continue;
-    rec_set(a, rule, "who", v_cstr(a, who));
-    rec_set(a, rule, "lingos", v_cstr(a, i < 2 ? "*" : natives[i - 2]));
-    rec_set(a, rule, "default", VBOOL(1));
-    list_push(a, access, rule);
-  }
-  for (int s = 0; s < 2; s++)
-    for (size_t i = 0; given[s] && given[s]->k == V_REC && i < given[s]->r.n; i++) {
-      val *list = given[s]->r.v[i];
-      val *mine = rec_get(grants, given[s]->r.key[i]);
-      if (!mine) rec_set(a, grants, given[s]->r.key[i], mine = v_list(a));
-      for (size_t k = 0; list->k == V_LIST && k < list->l.n; k++) {
-        val *g = list->l.v[k];
-        if (g->k == V_TEXT && has(ceiling, v_text(a, g->t.s, strcspn(g->t.s, " "))->t.s) && !has(mine, g->t.s))
-          list_push(a, mine, g);
-      }
-    }
-  rec_set(a, out, "grants", grants);
+  rec_set(a, out, "default", v_cstr(a, "closed"));
+  rec_set(a, out, "rules", account && rec_get(account, "rules") ? rec_get(account, "rules") : v_list(a));
+  rec_set(a, out, "device", v_cstr(a, account ? text_or(account, "device", "") : ""));
   rec_set(a, out, "local", local);
   rec_set(a, out, "account", account ? account : NOTHING);
   return out;
@@ -1242,24 +1203,29 @@ static int ip_of(const char *s, unsigned char out[16]) {
   return 1;
 }
 
-/* A request's caller: this computer, me, a device that signed it, or anyone else by their address, ip. name is how the
-   log names them: this computer, me, ip 203.0.113.7, or a signer's keyid, like laptop.brandon. */
+/* A request's caller: this computer, me, Onsay acting for the account, a device that signed it, or anyone else by their
+   address, ip. name is how the log names them: this computer, me, onsay, ip 203.0.113.7, or a signer's keyid, like
+   laptop.brandon. account is a signer's account id, and onsay when Onsay itself sent the call. */
 typedef struct {
-  const char *name, *ip, *handle;
-  int here, me, mine;
+  const char *name, *ip, *handle, *account;
+  int here, me, mine, onsay;
 } caller;
 
-// Whether who, an access rule's or a block's, names the caller: public, anyone, me, my devices, a device signed on this
-// computer's own handle, a handle, any device of it, or ip and an address, or a range of them like 10.0.0.0/8.
+// Whether who, a rule's, names the caller: public, anyone, me, my devices, onsay, Onsay's own search and agent.
 static int names(const char *who, const caller *c) {
-  unsigned char want[16], have[16];
-  char address[64];
-  const char *slash = strchr(who, '/');
   if (!strcmp(who, "public")) return 1;
   if (!strcmp(who, "me")) return c->me;
   if (!strcmp(who, "my devices")) return c->mine;
-  if (strncmp(who, "ip ", 3)) return c->handle && !strcmp(who, c->handle);
-  snprintf(address, sizeof address, "%.*s", slash ? (int)(slash - who - 3) : 63, who + 3);
+  if (!strcmp(who, "onsay")) return c->onsay;
+  return 0;
+}
+
+// Whether an address or range, like 10.0.0.0/8, holds the caller's address.
+static int addresses(const char *ip, const caller *c) {
+  unsigned char want[16], have[16];
+  char address[64];
+  const char *slash = strchr(ip, '/');
+  snprintf(address, sizeof address, "%.*s", slash ? (int)(slash - ip) : 63, ip);
   int bits = slash ? atoi(slash + 1) + (strchr(address, ':') ? 0 : 96) : 128;
   if (!c->ip || !ip_of(address, want) || !ip_of(c->ip, have)) return 0;
   for (int i = 0; i < bits && i < 128; i++)
@@ -1267,42 +1233,61 @@ static int names(const char *who, const caller *c) {
   return 1;
 }
 
-/* Whether the caller may reach lingo at rest, the path after its route like /share, by the policy p: never when a block
-   names their address, else by the first access rule that names them and the lingo, "*" or its name, and the route when
-   it names routes. One that says lingos: "none" lets them reach nothing. rest NULL asks for any of its routes. why says
-   which rule decided. */
-static int let_in(arena *a, val *p, const caller *c, const char *lingo, const char *rest, const char **why) {
-  val *block = rec_get(p, "block");
-  val *access = rec_get(p, "access");
-  for (size_t i = 0; i < block->l.n; i++)
-    if (block->l.v[i]->k == V_TEXT && names(arena_fmt(a, "ip %s", block->l.v[i]->t.s), c)) {
-      *why = arena_fmt(a, "blocked: %s", block->l.v[i]->t.s);
-      return 0;
-    }
-  for (size_t i = 0; i < access->l.n; i++) {
-    val *rule = access->l.v[i];
-    val *lingos = rec_get(rule, "lingos");
+// Whether path is route itself or inside it, / separating, so /memo/recall is under /memo but /memoirs is not.
+static int under(const char *path, const char *route) {
+  size_t n = strlen(route);
+  if (n == 1 && route[0] == '/') return path[0] == '/';
+  return n && !strncmp(path, route, n) && (!path[n] || path[n] == '/');
+}
+
+/* Whether the caller may reach route, a lingo's own, or any of it when rest is NULL (a listing), by the policy p: a rule
+   that names them, names their account, or names their address lets them in when allow is true and keeps them out when
+   it is false, and deny wins. A rule naming devices holds only on those computers, and one naming routes only on those
+   paths. No rule lets nobody. A listing shows a lingo when an allow rule's routes touch its route, and hides it only
+   when a deny rule's routes cover the whole of it. why says which rule decided. */
+static int let_in(arena *a, val *p, const caller *c, const char *route, const char *rest, const char **why) {
+  val *rules = rec_get(p, "rules");
+  const char *device = text_or(p, "device", "");
+  const char *full = rest ? arena_fmt(a, "%s%s", route, rest) : NULL;
+  int allowed = 0;
+  const char *by = NULL;
+  for (size_t i = 0; rules && rules->k == V_LIST && i < rules->l.n; i++) {
+    val *rule = rules->l.v[i];
+    val *devices = rec_get(rule, "devices");
     val *routes = rec_get(rule, "routes");
-    const char *who = text_or(rule, "who", "");
-    int hit = !rest || !routes || routes->k != V_LIST;
-    if (!names(who, c)) continue;
-    if (lingos && lingos->k == V_TEXT && !strcmp(lingos->t.s, "none")) {
-      *why = arena_fmt(a, "rule: %s, none", who);
+    const char *who = text_or(rule, "who", NULL);
+    const char *account = text_or(rule, "account", NULL);
+    const char *handle = text_or(rule, "handle", NULL);
+    const char *ip = text_or(rule, "ip", NULL);
+    const char *label = handle ? handle : who ? who : account ? account : ip ? ip : "";
+    int allow = truthy(rec_get(rule, "allow"));
+    int hit = 1;
+    if (who) hit = names(who, c);
+    else if (account) hit = c->account && !strcmp(account, c->account);
+    else if (ip) hit = addresses(ip, c);
+    else hit = 0;
+    if (!hit) continue;
+    if (devices && devices->k == V_LIST && !has(devices, device)) continue;
+    if (routes && routes->k == V_LIST) {
+      hit = 0;
+      for (size_t k = 0; !hit && k < routes->l.n; k++) {
+        const char *r = routes->l.v[k]->k == V_TEXT ? routes->l.v[k]->t.s : "";
+        if (full) hit = under(full, r);
+        else if (allow) hit = under(r, route) || under(route, r);
+        else hit = under(route, r);
+      }
+      if (!hit) continue;
+    }
+    if (!allow) {
+      *why = arena_fmt(a, "deny: %s", label);
       return 0;
     }
-    if (!lingos ||
-        !((lingos->k == V_TEXT && (!strcmp(lingos->t.s, "*") || !strcmp(lingos->t.s, lingo))) || has(lingos, lingo)))
-      continue;
-    for (size_t k = 0; !hit && k < routes->l.n; k++) {
-      const char *route = routes->l.v[k]->k == V_TEXT ? routes->l.v[k]->t.s : "";
-      const char *at = *rest ? rest : "/";
-      size_t n = strlen(route);
-      hit = n && !strncmp(at, route, n) && (!at[n] || at[n] == '/');
-    }
-    if (hit) {
-      *why = arena_fmt(a, "rule: %s", who);
-      return 1;
-    }
+    allowed = 1;
+    by = label;
+  }
+  if (allowed) {
+    *why = arena_fmt(a, "rule: %s", by);
+    return 1;
   }
   *why = "no rule lets them in";
   return 0;
@@ -1418,6 +1403,7 @@ static const char *signer(arena *a, val *h, const char *method, const char *path
       nonces[nonce_count++].at = now;
       c->name = keyid;
       c->handle = text_or(who, "handle", NULL);
+      c->account = text_or(who, "account", NULL);
       c->mine = truthy(rec_get(who, "mine") ? rec_get(who, "mine") : NOTHING);
     }
   }
@@ -1461,12 +1447,6 @@ _Noreturn static void refuse(run *r, const char *need, const char *why, const ch
   fail(r, "denied", "%s", words);
 }
 
-// A grant's path, ~ at its start being this computer's person's own folder.
-static const char *place(arena *a, const char *path) {
-  const char *mine = getenv("USERPROFILE") ? getenv("USERPROFILE") : getenv("HOME");
-  return path[0] == '~' && mine ? arena_fmt(a, "%s%s", mine, path + 1) : path;
-}
-
 // Whether path is folder or inside it, / and \ the same, and case aside in a Windows path, like C:\Users.
 static int inside(const char *path, const char *folder) {
   size_t n = strlen(folder);
@@ -1484,29 +1464,13 @@ static int inside(const char *path, const char *folder) {
   return !path[n] || path[n] == '/' || path[n] == '\\' || folder[n - 1] == '/' || folder[n - 1] == '\\';
 }
 
-// Adds a grant to policy.json's overrides, like files.read C:\Users\me\Pictures for photos. 1 when it was kept.
-static int granting(arena *a, const char *lingo, const char *grant) {
-  val *local = home_json(a, "policy.json");
-  val *over;
-  val *grants;
-  val *mine;
-  if (!local || local->k != V_REC) local = v_rec(a);
-  if (!(over = rec_get(local, "overrides")) || over->k != V_REC) rec_set(a, local, "overrides", over = v_rec(a));
-  if (!(grants = rec_get(over, "grants")) || grants->k != V_REC) rec_set(a, over, "grants", grants = v_rec(a));
-  if (!(mine = rec_get(grants, lingo)) || mine->k != V_LIST) rec_set(a, grants, lingo, mine = v_list(a));
-  if (!has(mine, grant)) list_push(a, mine, v_cstr(a, grant));
-  return keep_json("policy.json", local);
-}
-
-// 4.
+/* 4. A need under the ceiling, and said in the lingo's manifest, is allowed. The ceiling is the one hard local limit:
+   net, store and files inside the root, this lingo client's home, are routine; anything else is logged so the person
+   can see it. There is no per-caller grant and no prompt. */
 void may(run *r, const char *need, const char *path) {
   val *p = job.policy ? job.policy : policy(r->a);
-  val *granted;
-  val *ask;
-  val *got;
   const char *lingo = job.lingo;
   const char *what = path ? arena_fmt(r->a, "%s %s", need, path) : need;
-  const char *said;
   int k = 0;
   while (NEEDS[k] && strcmp(NEEDS[k], need)) k++;
   if (!has(rec_get(p, "ceiling"), need))
@@ -1516,42 +1480,7 @@ void may(run *r, const char *need, const char *path) {
   if (!has(job.needs, need))
     refuse(r, what, "not declared", arena_fmt(r->a, "%s needs %s, which its openapi.json doesn't say", lingo, need));
   if (k < 2 || (k < 4 && (!path || inside(path, set.root)))) return;
-  granted = rec_get(rec_get(p, "grants"), lingo);
-  for (size_t i = 0; granted && i < granted->l.n; i++) {
-    const char *g = granted->l.v[i]->t.s;
-    size_t w = strcspn(g, " ");
-    if (w == strlen(need) && !strncmp(g, need, w) && (!g[w] || (path && inside(path, place(r->a, g + w + 1))))) {
-      decided(what, 1, arena_fmt(r->a, "granted: %s", g));
-      return;
-    }
-  }
-  for (size_t i = 0; i < job.answers->l.n; i++)
-    if (!strcmp(text_or(job.answers->l.v[i], "what", ""), what)) {
-      if (truthy(rec_get(job.answers->l.v[i], "yes"))) return;
-      refuse(r, what, "asked: no", arena_fmt(r->a, "The person said no to %s using %s", lingo, what));
-    }
-  // Asked through the app, which answers once, always or no, waiting up to a minute while other requests are answered.
-  ask = v_rec(r->a);
-  rec_set(r->a, ask, "need", v_cstr(r->a, need));
-  rec_set(r->a, ask, "path", path ? v_cstr(r->a, path) : NOTHING);
-  if (!(got = lingo_ask(r, ask, 60)))
-    refuse(r, what, "no app to ask",
-        arena_fmt(r->a,
-            "%s needs %s here, which takes a yes from the person, and no app is open to ask them. To allow it, grant it: grant %s \"%s\"",
-            lingo, what, lingo, what));
-  said = got->k == V_TEXT ? got->t.s : "";
-  val *answer = v_rec(r->a);
-  rec_set(r->a, answer, "what", v_cstr(r->a, what));
-  rec_set(r->a, answer, "yes", VBOOL(strcmp(said, "once") == 0 || strcmp(said, "always") == 0));
-  list_push(r->a, job.answers, answer);
-  if (!strcmp(said, "always")) granting(r->a, lingo, what);
-  if (truthy(rec_get(answer, "yes"))) {
-    decided(what, 1, arena_fmt(r->a, "asked: %s", said));
-    return;
-  }
-  if (*said) refuse(r, what, "asked: no", arena_fmt(r->a, "The person said no to %s using %s", lingo, what));
-  refuse(
-      r, what, "nobody answered", arena_fmt(r->a, "Nobody answered whether %s may use %s, so it didn't", lingo, what));
+  decided(what, 1, "allowed");
 }
 
 /* 4. A question for the person, with its id, the lingo asking and its caller, and waited for in asks until an app
@@ -1871,10 +1800,6 @@ static val *lingo_save(run *r, val **a) {
      set {lingo, key, value}         one of them changed
      manifest {lingo}                its whole OpenAPI manifest, as the catalog has it, or why it can't load
      policy                          the policy in force, and the files it comes from
-     share {lingo, who, route}       an access rule added to policy.json's overrides: who may reach lingo, or "*"
-     unshare {lingo, who}            every rule there that lets who reach lingo, or "*", taken out
-     grant {lingo, need}             a grant added there, like run or files.read C:\Users\me\Pictures
-     ungrant {lingo, need}           that grant taken out of there
      ceiling {needs}                 the most this computer ever allows
      call {fn, values}               a function of any lingo here, or a phrase, run as this computer, its values in order,
                                      like onsay.sign_in, its value */
@@ -1885,10 +1810,8 @@ val *core_control(arena *a, const char *verb, val *v, const char **why) {
   val *out = NOTHING;
   val *local = home_json(a, "policy.json");
   val *values = v_list(a);
-  val *over;
   volatile int stop = 0;
   if (!local || local->k != V_REC) local = v_rec(a);
-  if (!(over = rec_get(local, "overrides")) || over->k != V_REC) rec_set(a, local, "overrides", over = v_rec(a));
   *why = NULL;
   if (!strcmp(verb, "start") || !strcmp(verb, "stop")) {
     val *was = home_json(a, "running.json");
@@ -1963,103 +1886,7 @@ val *core_control(arena *a, const char *verb, val *v, const char **why) {
     out = rec_get(e, "manifest");
   } else if (!strcmp(verb, "policy"))
     out = policy(a);
-  else if (!strcmp(verb, "share")) {
-    const char *who = text_or(v, "who", "");
-    const char *route = text_or(v, "route", NULL);
-    const char *slash = strchr(who, '/');
-    unsigned char ip[16];
-    char address[64];
-    int known = !strcmp(who, "public") || !strcmp(who, "me") || !strcmp(who, "my devices") || named(who);
-    val *rule = v_rec(a);
-    val *access = rec_get(over, "access");
-    if (!strncmp(who, "ip ", 3)) {
-      snprintf(address, sizeof address, "%.*s", slash ? (int)(slash - who - 3) : 63, who + 3);
-      known = ip_of(address, ip) &&
-          (!slash ||
-              (slash[1] && strspn(slash + 1, "0123456789") == strlen(slash + 1) &&
-                  atoi(slash + 1) <= (strchr(address, ':') ? 128 : 32)));
-    }
-    if (strcmp(lingo, "*") && !entry_of(lingo)) {
-      *why = arena_fmt(a, "There's no lingo called %s here", lingo);
-      return NULL;
-    }
-    if (!known) {
-      *why =
-          "Who is public, me, my devices, a handle like james, or ip and an address like ip 192.168.1.20 or ip 10.0.0.0/8";
-      return NULL;
-    }
-    if (route && (route[0] != '/' || strpbrk(route, "?# "))) {
-      *why = "A route starts with /, like /share";
-      return NULL;
-    }
-    rec_set(a, rule, "who", v_cstr(a, who));
-    rec_set(a, rule, "lingos", v_cstr(a, lingo));
-    if (route) {
-      val *routes = v_list(a);
-      list_push(a, routes, v_cstr(a, route));
-      rec_set(a, rule, "routes", routes);
-    }
-    if (!access || access->k != V_LIST) rec_set(a, over, "access", access = v_list(a));
-    list_push(a, access, rule);
-    if (!keep_json("policy.json", local)) {
-      *why = "This computer couldn't save policy.json";
-      return NULL;
-    }
-    out = policy(a);
-  } else if (!strcmp(verb, "unshare")) {
-    const char *who = text_or(v, "who", "");
-    val *access = rec_get(over, "access");
-    val *kept = v_list(a);
-    for (size_t i = 0; access && access->k == V_LIST && i < access->l.n; i++)
-      if (strcmp(text_or(access->l.v[i], "who", ""), who) || strcmp(text_or(access->l.v[i], "lingos", ""), lingo))
-        list_push(a, kept, access->l.v[i]);
-    if (!access || access->k != V_LIST || kept->l.n == access->l.n) {
-      *why = arena_fmt(a, "Nothing on this computer shares %s with %s", lingo, who);
-      return NULL;
-    }
-    rec_set(a, over, "access", kept);
-    if (!keep_json("policy.json", local)) {
-      *why = "This computer couldn't save policy.json";
-      return NULL;
-    }
-    out = policy(a);
-  } else if (!strcmp(verb, "ungrant")) {
-    const char *need = text_or(v, "need", "");
-    val *grants = rec_get(over, "grants");
-    val *mine = rec_get(grants, lingo);
-    val *kept = v_list(a);
-    for (size_t i = 0; mine && mine->k == V_LIST && i < mine->l.n; i++)
-      if (mine->l.v[i]->k != V_TEXT || strcmp(mine->l.v[i]->t.s, need)) list_push(a, kept, mine->l.v[i]);
-    if (!mine || mine->k != V_LIST || kept->l.n == mine->l.n) {
-      *why = arena_fmt(a, "%s has no grant %s on this computer", lingo, need);
-      return NULL;
-    }
-    rec_set(a, grants, lingo, kept);
-    if (!keep_json("policy.json", local)) {
-      *why = "This computer couldn't save policy.json";
-      return NULL;
-    }
-    out = policy(a);
-  } else if (!strcmp(verb, "grant")) {
-    const char *need = text_or(v, "need", "");
-    size_t w = strcspn(need, " ");
-    int k = 0;
-    while (NEEDS[k] && (strlen(NEEDS[k]) != w || strncmp(NEEDS[k], need, w))) k++;
-    if (!named(lingo)) {
-      *why = "Say which lingo, like photos";
-      return NULL;
-    }
-    if (!NEEDS[k] || (need[w] && (k < 2 || k > 3 || !need[w + 1]))) {
-      *why =
-          "A grant is a need, like run or screen.read, or files.read or files.write and a path, like files.read C:\\Users\\me\\Pictures";
-      return NULL;
-    }
-    if (!granting(a, lingo, need)) {
-      *why = "This computer couldn't save policy.json";
-      return NULL;
-    }
-    out = policy(a);
-  } else if (!strcmp(verb, "ceiling")) {
+  else if (!strcmp(verb, "ceiling")) {
     val *needs = rec_get(v, "needs");
     int good = needs && needs->k == V_LIST;
     for (size_t i = 0; good && i < needs->l.n; i++) {
@@ -2088,7 +1915,7 @@ val *core_control(arena *a, const char *verb, val *v, const char **why) {
     }
   } else {
     *why = arena_fmt(a,
-        "There's nothing called %s here. It does start, stop, asks, answer, settings, set, manifest, policy, share, unshare, grant, ungrant, ceiling and call",
+        "There's nothing called %s here. It does start, stop, asks, answer, settings, set, manifest, policy, ceiling and call",
         verb);
     return NULL;
   }
@@ -2098,14 +1925,13 @@ val *core_control(arena *a, const char *verb, val *v, const char **why) {
 ////////// 9. HOOKS //////////
 
 /* 9. The account's policy as this computer keeps it, home/policy.account.json: device first, then the policy as it came.
-   A version older than the one kept is refused. Every grant of this device's that the ceiling refuses is given back, a
-   record by lingo, so whoever handed it in can say what was clamped. */
+   A version older than the one kept is refused. It returns an empty record, kept for callers that report what was
+   clamped: there is nothing to clamp any more, since the ceiling is checked at each phrase. */
 val *lingo_policy(arena *a, val *account, const char *device, const char **why) {
   val *kept = home_json(a, "policy.account.json");
   val *v = rec_get(account, "version");
   val *was = rec_get(kept, "version");
   val *out = v_rec(a);
-  val *clamped = v_rec(a);
   if (!v || v->k != V_NUM) {
     *why = "The account's policy has no version";
     return NULL;
@@ -2121,18 +1947,8 @@ val *lingo_policy(arena *a, val *account, const char *device, const char **why) 
     *why = "This computer couldn't save policy.account.json";
     return NULL;
   }
-  val *now = rec_get(policy(a), "grants");
-  val *mine = rec_get(rec_get(account, "grants"), device);
-  for (size_t i = 0; mine && mine->k == V_REC && i < mine->r.n; i++)
-    for (size_t k = 0; mine->r.v[i]->k == V_LIST && k < mine->r.v[i]->l.n; k++) {
-      val *g = mine->r.v[i]->l.v[k];
-      val *list = rec_get(clamped, mine->r.key[i]);
-      if (g->k != V_TEXT || has(rec_get(now, mine->r.key[i]), g->t.s)) continue;
-      if (!list) rec_set(a, clamped, mine->r.key[i], list = v_list(a));
-      list_push(a, list, g);
-    }
   say("The account's policy %g is in force here", v->n);
-  return clamped;
+  return v_rec(a);
 }
 
 // 9. The seed of this device's key called name, in home/keys, made and sealed first when missing and make is set.
@@ -2189,16 +2005,17 @@ const char *lingo_home(void) { return set.root; }
 int lingo_serves(void) { return live; }
 
 // When anything in the lingos folder or running.json changed: everything read again, and each running native lingo told
-// the new catalog. 1 when an access rule written in the policy in force lets in public or an ip, so the port opens to
-// other computers. A lingo's own default rule never opens it: it is reached through what connects it, like Onsay.
+// the new catalog. 1 when a rule in force allows public or an address, so the port opens to other computers. A rule for
+// an account never opens it: that call arrives over Onsay's connection, signed by the person's device.
 int core_look(void) {
   arena *a = arena_new();
   unsigned long long now;
-  val *access = rec_get(policy(a), "access");
+  val *rules = rec_get(policy(a), "rules");
   int outside = 0;
-  for (size_t i = 0; i < access->l.n; i++) {
-    const char *who = text_or(access->l.v[i], "who", "");
-    outside |= !rec_get(access->l.v[i], "default") && (!strcmp(who, "public") || !strncmp(who, "ip ", 3));
+  for (size_t i = 0; rules && rules->k == V_LIST && i < rules->l.n; i++) {
+    val *rule = rules->l.v[i];
+    const char *who = text_or(rule, "who", "");
+    outside |= truthy(rec_get(rule, "allow")) && (!strcmp(who, "public") || rec_get(rule, "ip"));
   }
   look(a, &now);
   arena_free(a);
@@ -2288,7 +2105,7 @@ void core_serve(const char *text, size_t n, const char *given, buf *out) {
   const char *method = text_or(m, "method", "GET");
   const char *ip = given ? NULL : text_or(m, "ip", "");
   const char *refused = NULL;
-  caller c = { "this computer", ip, NULL, 0, 0, 0 };
+  caller c = { "this computer", ip, NULL, NULL, 0, 0, 0, 0 };
   int status = 200;
   int json = 1;   // json: the body is written as JSON
   size_t at = strcspn(p, "?");
@@ -2304,9 +2121,10 @@ void core_serve(const char *text, size_t n, const char *given, buf *out) {
      and no page elsewhere sent it, since a page in a browser here can send requests too. One handed in is me, the
      account's own, or by its address. Anyone else who signed it is its signer, and a signature that doesn't check out
      is a 401. */
-  if (given && !strcmp(given, "me")) {
-    c.me = 1;
-    c.name = "me";
+  if (given && (!strcmp(given, "me") || !strcmp(given, "onsay"))) {
+    c.me = !strcmp(given, "me");
+    c.onsay = !strcmp(given, "onsay");
+    c.name = given;
   } else if (given)
     c.ip = !strncmp(given, "ip ", 3) ? given + 3 : "";
   else if (!strcmp(ip, "::1") || !strncmp(ip, "127.", 4)) {
@@ -2321,8 +2139,8 @@ void core_serve(const char *text, size_t n, const char *given, buf *out) {
         !(origin && (strncmp(origin, "http://", 7) || strcmp(origin + 7, host))) &&
         (!strcmp(site, "none") || !strcmp(site, "same-origin"));
   }
-  if (!c.here && !c.me) c.name = arena_fmt(a, "ip %s", c.ip);
-  if (!c.here && !c.me && rec_get(headers, "signature-input")) refused = signer(a, headers, method, p, body, &c);
+  if (!c.here && !c.me && !c.onsay) c.name = arena_fmt(a, "ip %s", c.ip);
+  if (!c.here && !c.me && !c.onsay && rec_get(headers, "signature-input")) refused = signer(a, headers, method, p, body, &c);
   for (const char *q = p + at + (p[at] == '?'); *q;) {
     size_t len = strcspn(q, "&");
     size_t eq = strcspn(q, "=&");
@@ -2368,7 +2186,7 @@ void core_serve(const char *text, size_t n, const char *given, buf *out) {
       val *one = v_rec(a);
       const char *name = text_or(e, "name", "");
       int runs = truthy(rec_get(e, "running"));
-      if (!c.here && (rec_get(e, "error") || !runs || !let_in(a, pol, &c, name, NULL, &why))) continue;
+      if (!c.here && (rec_get(e, "error") || !runs || !let_in(a, pol, &c, route_of(a, e), NULL, &why))) continue;
       rec_set(a, one, "name", v_cstr(a, name));
       if (!rec_get(e, "error")) rec_set(a, one, "route", v_cstr(a, route_of(a, e)));
       rec_set(a, one, "running", VBOOL(runs));
@@ -2393,7 +2211,7 @@ void core_serve(const char *text, size_t n, const char *given, buf *out) {
     val *was_answers = job.answers;
     size_t left = at - best;
     size_t nl = left ? left - 1 : 0;
-    int in = c.here || let_in(a, pol, &c, lingo, v_text(a, rest, left)->t.s, &why);
+    int in = c.here || let_in(a, pol, &c, v_text(a, p, best)->t.s, v_text(a, rest, left)->t.s, &why);
     // /onsay is open, for its door checks its own key, but a base call is only for this account's own devices or that key.
     int base = 0;
     if (!strcmp(lingo, "onsay") && nl) {

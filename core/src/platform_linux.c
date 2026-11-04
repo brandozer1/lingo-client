@@ -6,6 +6,8 @@
 // 4. Files and device, and loading a native lingo
 // 5. Web                http.send, one request through curl
 // 6. Port               web requests coming in, on plain sockets
+// 7. Android            the same file built into the Android app, where the app does links, the web and what is
+//                       around (pl_device), in place of 2, 3, 5 and the context
 // libcurl's own WebSocket API is left alone, since many distributions build curl without it.
 #define _GNU_SOURCE
 #include <dlfcn.h>
@@ -60,11 +62,15 @@ static void (*fault_recover)(const char *what);
 static pthread_t fault_thread;
 
 static void on_fault(int number) {
+  const char *what = number == SIGFPE ? "dividing by zero" : number == SIGILL ? "a bad instruction" : "a bad memory address";
   if (!pthread_equal(pthread_self(), fault_thread) || !*fault_active) {
+#ifdef __ANDROID__
+    pl_crashed(what);
+#endif
     signal(number, SIG_DFL);
     return;   // the same crash again, now ending the program
   }
-  fault_recover(number == SIGFPE ? "dividing by zero" : number == SIGILL ? "a bad instruction" : "a bad memory address");
+  fault_recover(what);
 }
 
 void pl_faults(void *volatile *active, void (*recover)(const char *what)) {
@@ -125,6 +131,7 @@ void pl_wait(pl_gate *g, double seconds) {
   pthread_cond_timedwait(&g->wake, &g->lock, &t);
 }
 
+#ifndef __ANDROID__
 ////////// 2. CURL //////////
 
 // The few parts of curl/curl.h the core uses, with their numbers, which curl never changes.
@@ -505,6 +512,7 @@ void pl_free(pl_link *l) {
   buf_free(&l->held);
   free(l);
 }
+#endif
 
 ////////// 4. FILES AND DEVICE //////////
 
@@ -600,6 +608,7 @@ void pl_list(
   closedir(d);
 }
 
+#ifndef __ANDROID__
 // A server has no app or window in front. The zone is TZ, or the system's own: /etc/timezone, or where /etc/localtime
 // points, like /usr/share/zoneinfo/America/New_York. The language is LANG's, like en_US.UTF-8 as en-US.
 void pl_context(buf *out) {
@@ -643,6 +652,7 @@ void pl_context(buf *out) {
   }
   buf_chr(out, '}');
 }
+#endif
 
 // Never closed: its phrases are in the table from now on. The core is built with -rdynamic, so a library finds its words.
 lingo_entry pl_library(const char *path, buf *error) {
@@ -657,6 +667,7 @@ lingo_entry pl_library(const char *path, buf *error) {
   return entry;
 }
 
+#ifndef __ANDROID__
 ////////// 5. WEB //////////
 
 #define ROOM (4u << 20)   // the most an answer may be
@@ -745,6 +756,7 @@ val *pl_http(arena *a, const char *method, const char *url, val *headers, const 
   buf_free(&raw);
   return out;
 }
+#endif
 
 ////////// 6. PORT //////////
 
@@ -821,3 +833,120 @@ void pl_hang_up(pl_socket *c) {
   close(c->s);
   free(c);
 }
+
+////////// 7. ANDROID //////////
+
+#ifdef __ANDROID__
+// An app on Android has no curl, and Android's own does the web, so the app around the core reaches it, holds the links
+// and knows what is around (pl_device in platform.h).
+
+// The app's answer to name, asked with the record in ask, read into a, or NULL with why in error.
+static val *ask_app(arena *a, const char *name, buf *ask, buf *error) {
+  buf out = { 0 };
+  val *got = NULL;
+  int ok = pl_device(name, ask->s ? ask->s : "{}", &out);
+  if (ok)
+    got = json_parse(a, out.s ? out.s : "null", out.s ? out.n : 4, NULL);
+  else
+    buf_add(error, out.s ? out.s : "", out.n);
+  if (ok && !got) buf_fmt(error, "the phone's answer to %s couldn't be read", name);
+  buf_free(&out);
+  return got;
+}
+
+struct pl_link {
+  double id;   // the app's number for it
+};
+
+pl_link *pl_connect(const char *url, buf *error) {
+  arena *a = arena_new();
+  buf ask = { 0 };
+  buf_str(&ask, "{\"url\":");
+  buf_json_str(&ask, url, strlen(url));
+  buf_chr(&ask, '}');
+  val *got = ask_app(a, "link.open", &ask, error);
+  val *id = got ? rec_get(got, "id") : NULL;
+  pl_link *l = NULL;
+  if (id && id->k == V_NUM) {
+    l = malloc(sizeof *l);
+    l->id = id->n;
+  } else if (!error->n) {
+    buf_str(error, "the phone couldn't open the link");
+  }
+  buf_free(&ask);
+  arena_free(a);
+  return l;
+}
+
+// One of a link's calls after it opened: each names the link, and a send gives its text too.
+static val *link_call(arena *a, pl_link *l, const char *name, const char *text, size_t n) {
+  buf ask = { 0 };
+  buf error = { 0 };
+  buf_fmt(&ask, "{\"id\":%.0f", l->id);
+  if (text) {
+    buf_str(&ask, ",\"text\":");
+    buf_json_str(&ask, text, n);
+  }
+  buf_chr(&ask, '}');
+  val *got = ask_app(a, name, &ask, &error);
+  buf_free(&ask);
+  buf_free(&error);
+  return got;
+}
+
+int pl_send(pl_link *l, const char *text, size_t n) {
+  arena *a = arena_new();
+  int sent = link_call(a, l, "link.send", text, n) != NULL;
+  arena_free(a);
+  return sent;
+}
+
+// The app waits for the next message, and gives {} with no text once the link is closed.
+int pl_receive(pl_link *l, buf *out) {
+  arena *a = arena_new();
+  val *got = link_call(a, l, "link.receive", NULL, 0);
+  val *text = got ? rec_get(got, "text") : NULL;
+  int open = text && text->k == V_TEXT;
+  if (open) buf_add(out, text->t.s, text->t.len);
+  arena_free(a);
+  return open;
+}
+
+void pl_close(pl_link *l) {
+  arena *a = arena_new();
+  link_call(a, l, "link.close", NULL, 0);
+  arena_free(a);
+}
+
+void pl_free(pl_link *l) {
+  arena *a = arena_new();
+  link_call(a, l, "link.free", NULL, 0);
+  arena_free(a);
+  free(l);
+}
+
+// The app knows the time, the zone, the language and the app in front.
+void pl_context(buf *out) {
+  size_t start = out->n;
+  if (pl_device("context", "{}", out)) return;
+  out->n = start;
+  buf_str(out, "{\"os\":\"android\"}");
+}
+
+val *pl_http(arena *a, const char *method, const char *url, val *headers, const char *body, size_t n, double seconds,
+    buf *error) {
+  buf ask = { 0 };
+  buf_str(&ask, "{\"method\":");
+  buf_json_str(&ask, method, strlen(method));
+  buf_str(&ask, ",\"url\":");
+  buf_json_str(&ask, url, strlen(url));
+  buf_str(&ask, ",\"headers\":");
+  buf_json(&ask, headers);
+  buf_str(&ask, ",\"body\":");
+  buf_json_str(&ask, body ? body : "", body ? n : 0);
+  buf_fmt(&ask, ",\"seconds\":%g}", seconds);
+  val *got = ask_app(a, "http", &ask, error);
+  buf_free(&ask);
+  return got;
+}
+#endif
