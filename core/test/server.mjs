@@ -853,7 +853,7 @@ const WEB_CASES = [
   ['/onsay: its sessions, the newest first, and one with every turn', async () => {
     const auth = { headers: { authorization: `Bearer ${onsayed.key}` } }
     const [list, one, missing] = [await web('/onsay/sessions', auth), await web(`/onsay/sessions/${onsayed.session}`, auth), await web('/onsay/sessions/nope', auth)]
-    return list.status === 200 && same(list.json[0], { session: onsayed.session, prompt: 'hello' }) && one.json.turns.length === 4 && one.json.turns[2].prompt === 'plan a trip' &&
+    return list.status === 200 && list.json[0].session === onsayed.session && list.json[0].prompt === 'hello' && typeof list.json[0].status === 'string' && one.json.turns.length === 4 && one.json.turns[2].prompt === 'plan a trip' &&
       same(one.json.turns[2].questions, ['Where to?', 'When?']) && missing.status === 404
   }],
   ['/onsay: the agent loop runs the calls Onsay decides on this computer, as me, each joining the log with what it gave, until the reply, and a follow-up carries the whole log', async () => {
@@ -868,6 +868,28 @@ const WEB_CASES = [
       same(turn?.messages, [...log.slice(1), { role: 'assistant', content: 'You kept: oat milk' }]) && turn.text === 'You kept: oat milk' &&
       same(r.json.steps.map((s) => s.text), ['Understanding what you asked', 'Picked: Keeps a thing under a name', 'Running it on this computer', 'Picked: What was kept under a name', 'Running it on this computer']) &&
       next.json?.text === 'Onsay heard: what did you keep?' && same(decided.at(-1).messages, [...log, { role: 'assistant', content: 'You kept: oat milk' }, { role: 'user', content: 'what did you keep?' }])
+  }],
+  ['/onsay: a follow-up is a new session that carries the whole log of the one it follows, and the list says which', async () => {
+    const headers = { authorization: `Bearer ${onsayed.key}` }
+    const first = await web('/onsay', { method: 'POST', body: { prompt: 'hello again' }, headers })
+    const next = await web('/onsay', { method: 'POST', body: { prompt: 'not quite', from: first.json?.session }, headers })
+    const list = (await web('/onsay/sessions', { headers })).json, row = list?.find((x) => x.session === next.json?.session)
+    return next.status === 200 && next.json.session !== first.json.session && next.json.text === 'Onsay heard: not quite' &&
+      same(decided.at(-1).messages, [{ role: 'user', content: 'hello again' }, { role: 'assistant', content: 'Onsay heard: hello again' }, { role: 'user', content: 'not quite' }]) &&
+      row?.from === first.json.session && row.prompt === 'not quite' && row.status === 'done' && row.text === 'Onsay heard: not quite'
+  }],
+  ['/onsay: a call to a device that is off holds the prompt, the list says what it waits for, and it runs again once the device is back', async () => {
+    const headers = { authorization: `Bearer ${onsayed.key}` }
+    const r = await web('/onsay', { method: 'POST', body: { prompt: 'use the desk' }, headers })
+    const row = () => web('/onsay/sessions', { headers }).then((l) => l.json?.find((x) => x.session === r.json?.session))
+    const held = await row()
+    deskOnline = true
+    const resumed = await web('/onsay/resume', { method: 'POST', body: {}, headers })
+    const done = await soon(async () => (await row())?.status === 'done')
+    const after = await row()
+    deskOnline = false
+    return r.status === 200 && r.json.waiting === 'desk' && held?.status === 'waiting' && held.waiting === 'desk' && held.prompt === 'use the desk' &&
+      resumed.json?.resumed === 1 && done && after.text === 'desk said: from the desk'
   }],
   ['/onsay: the loop stops after 8 calls, says so plainly, and keeps every one', async () => {
     const headers = { authorization: `Bearer ${onsayed.key}` }
@@ -1016,11 +1038,13 @@ const LINGO = [
   [/^the ways to do it$/, ({ mode }) => mode === 'list' ? [{ does: 'Does it', where: 'on your laptop', address: 'laptop.tester/memo/all', inputs: {} }] : 'it ran'],
   [/^trip\/plan$/, () => ({ questions: ['Where to?', 'When?'] })],
 ]
+let deskOnline = false   // the account's computer desk, off until a test turns it on
 const answer = async (m, send) => {
   asked = m
   every.push(m)
   const found = LINGO.find(([match]) => match.test(m.ask ?? m.address))
   try {
+    if (m.address?.startsWith('desk.')) return deskOnline ? { value: 'from the desk' } : { error: `desk.${HANDLE} is offline, so ${m.address} can't run there now`, code: 'offline' }
     if (!found) throw new Error(m.address ? `There's no lingo called ${m.address.split(/[./]/)[0]}` : `Nothing can do "${m.ask}" yet`)
     return { value: (await found[1](m, send)) ?? null }
   } catch (e) { return { error: e.message, code: 'phrase' } }
@@ -1079,6 +1103,7 @@ const decide = (m, link) => {
   const first = here('memo/recall', 'The first', { k: 'milk' }), second = here('checks/greet', 'The second', { who: 'Ana' })
   if (!gave.length) link.send({ type: 'step', id: m.id, text: 'Understanding what you asked', depth: 0 })
   link.send({ type: 'decision', id: m.id, ...(/remember milk/.test(asked) ? [here('memo/remember', 'Keeps a thing under a name', { k: 'milk', v: 'oat milk' }), here('memo/recall', 'What was kept under a name', { k: 'milk' }), { reply: `You kept: ${gave[1]}` }][gave.length]
+    : /use the desk/.test(asked) ? (gave.length ? { reply: `desk said: ${gave[0]}` } : { call: `desk.${HANDLE}/memo/recall`, does: 'What was kept under a name', where: 'on desk', inputs: { k: 'milk' } })
     : /go on and on/.test(asked) ? here('memo/recall', 'What was kept under a name', { k: 'milk' })
     : /spin forever/.test(asked) ? here('checks/forever', 'Spins until it is stopped')
     : /plan a trip/.test(asked) ? { call: 'trip/plan', does: 'Plans a trip', where: 'on the web', inputs: {} }
@@ -1096,7 +1121,7 @@ const API = {
   'POST /connect/poll': (q, s) => json(s, 200, named === 'refused' ? { status: 'error', error: 'The code was turned down' }
     : { status: 'done', token: 'signed-in-token', account: { handle: 'tester', email: 'tester@example.com' } }),
   'GET /lingos': (q, s) => q.headers.authorization !== `Bearer ${TOKEN}` ? json(s, 401, { error: 'Sign in to continue' })
-    : json(s, 200, { computers: [{ name: 'laptop', online: true, seen: ADDED, lingos: [] }, { name: 'desk', online: false, seen: null, lingos: [] }] }),
+    : json(s, 200, { computers: [{ name: 'laptop', online: true, seen: ADDED, lingos: [] }, { name: 'desk', online: deskOnline, seen: null, lingos: [] }] }),
   'GET /policy': (q, s) => {
     if (q.headers.authorization !== `Bearer ${TOKEN}`) return json(s, 401, { error: 'Sign in first' })
     const p = policies.at(-1) ?? { version: 0, policy: { default: 'closed', rules: DEFAULT_RULES } }

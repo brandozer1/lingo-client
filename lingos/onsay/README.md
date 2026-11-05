@@ -29,8 +29,9 @@ the wire*.
 
   | Request | Answer |
   |---------|--------|
-  | `POST /onsay` `{prompt, session, mode}` | `{session, text, steps}` or `{session, questions, steps}`, the reply and every step it took. With no session, a new one. `mode` is `run`, the default, or `list`, where the person picks every call |
-  | `GET /onsay/sessions` | `[{session, prompt}]`, the newest first, each named by its first prompt |
+  | `POST /onsay` `{prompt, session, from, mode}` | `{session, text, steps}`, `{session, questions, steps}` or `{session, waiting, steps}`, the reply and every step it took. With no session, a new one; `from` makes it a follow-up of that session, whose whole log, and the log of whatever it follows, goes before its own. `mode` is `run`, the default, or `list`, where the person picks every call. A 409 while that session is still working |
+  | `GET /onsay/sessions` | `[{session, prompt, from, status, step, waiting, text, questions}]`, the newest first, each named by its first prompt, for an app's list: `status` is `working`, with its newest `step`, `asking`, `waiting`, with the device it `waiting`s for (empty for Onsay itself), or `done`, and `text` or `questions` its last answer |
+  | `POST /onsay/resume` | `{resumed}`: runs again each prompt held for a device that is back. The heartbeat asks it once a minute while something is held |
   | `GET /onsay/sessions/<session>` | `{session, turns}`, each turn `{prompt, text}` or `{prompt, questions}`, and `messages`, what its loop added to the log |
   | `GET /onsay/sessions/<session>/live` | `{running, steps, questions}`: while a prompt of it runs, its newest 100 steps in plain words, each `{text, depth}`, and the questions it waits on the person for, as a prompt's answer has them, or `null` |
   | `POST /onsay/sessions/<session>/answers` `{answers}` | the person's answers to those questions, in order. `{}`, or a 404 when nothing waits |
@@ -55,6 +56,11 @@ the wire*.
   way and I'll look again.", and the pick runs. A card waits 2 minutes. A call whose
   answer has `questions` ends the prompt with them, and their answers come as the next prompt, a line each. A decision
   that carries `value`, a lingo Onsay's library wrote and ran for it, joins the log without running again.
+
+  A call to a device that is off (Onsay answers it with `code: "offline"`), or Onsay out of reach from here, holds
+  the prompt instead of failing it: kept as `onsay/waiting/<session>`, `{prompt, mode, device, messages}`, and shown
+  as `waiting` in the list, until `/resume` sees that device online and runs it again, going on from the calls it
+  already made. A new prompt to that session replaces it.
 
   Its steps are kept as it goes for `/live`: those Onsay sends as it decides (`{type: "step"}`), and its own, "Picked:
   ..." with what the call does, "Running it ..." with where, "Waiting for you to choose" and "Waiting for your answer".
