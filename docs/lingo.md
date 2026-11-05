@@ -701,11 +701,14 @@ back, and fails when it takes longer than its timeout. Windows makes it with Win
 and certificates work as they do for every other program. Most lingos use `request` (`lingos/standard/request.ls`),
 built on it, or `use(...)` for one plain request.
 
-`socket.open` takes a `ws://` or `wss://` address, `ws://127.0.0.1:9222/session` on this computer too, with headers like
-`http.send`'s, and gives the socket's number for the other three. `send` sends one text message, and `receive` gives
+`socket.open` takes a `ws://` or `wss://` address, `ws://127.0.0.1:9222/session` on this computer too, or an Onsay name
+(below), with headers like `http.send`'s, and gives the socket's number for the other three. `send` sends one text message, and `receive` gives
 the oldest message come and not yet taken, else waits up to its seconds for the next, and gives `nothing` when none came.
 Both fail once the other side has closed it. Every socket a run opens is closed as that run ends, so a lingo opens its
-socket again on each call, and keeps what it needs to find it again, like an address, with `store.put`.
+socket again on each call, and keeps what it needs to find it again, like an address, with `store.put`. Each socket is
+kept as one call of kind `socket`, as its run lets it go, or at once when it couldn't open: its address, its headers with
+keys taken out, how many messages went each way and their bytes, who closed it and how long it was open, never what the
+messages said (`lingos/onsay/README.md`).
 
 **Onsay names work wherever web addresses do.** A web address given to `http.send`, so to `request`, may name a host on
 the web or an Onsay name, told apart by one rule every Onsay program keeps: a host is on the web when it is an IP,
@@ -715,6 +718,12 @@ other, like `laptop.brandon` or `brandon`, is an Onsay name: the lingo client as
 name after it. So `request.get("laptop.brandon/weather/now")` reaches that computer's `weather` lingo through the free
 proxy, as anyone on the web would, when it is open to them. `http://` or `https://` may be left off. A name with nowhere to go fails with why:
 `There's no computer or route called nobody.brandon`. `use(...)` reads both kinds the same way, through Onsay.
+
+`socket.open` reads names the same way, `ws://` or `wss://` in place of `http://` or `https://`, and left off too: a
+name on the web with none is `wss://`, an IP `ws://`, and an Onsay name goes where Onsay resolves it, `https://` made `wss://`, like a
+route that points at a WebSocket service on the web. A computer's own route can't be opened as a socket yet, and says so:
+Onsay's proxy carries one request at a time to a computer, down its lingo client's connection, and the lingo client
+answers each request at its route with one response, so neither has a way to hold a WebSocket open.
 
 **The standard functions** are built into the lingo client on every computer, written in Lingo on this floor
 (`lingos/standard/`). They are part of the language: nothing to install or import, no app, no route, no entry in the

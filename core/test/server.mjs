@@ -297,8 +297,10 @@ const CASES = [
   { name: 'http: a redirect is followed', path: '/checks/http_moved', values: { base: HTTP }, check: gives('hello ') },
   { name: 'http: a timeout', path: '/checks/http_slow', values: { base: HTTP }, check: fails(500, /http\.send: /) },
   { name: 'http: nothing at that address', path: '/checks/http_nowhere', check: (r) => r.status === 200 && /^http\.send: /.test(r.json) },
-  { name: 'socket: opened with a header, a message echoed, nothing when none comes in time, then closed', path: '/checks/socket_echo', values: { base: `ws://127.0.0.1:${PORT}` }, check: (r) => r.status === 200 && same(r.json.slice(0, 3), ['hi Ada', 'héllo', null]) && /^socket\.send: no socket \d+ is open in this run$/.test(r.json[3]) },
-  { name: 'socket: nothing at that address, and an address that is not a WebSocket', path: '/checks/socket_nowhere', check: (r) => r.status === 200 && /^socket\.open: /.test(r.json[0]) && r.json[1] === "socket.open: a WebSocket's address starts with ws:// or wss://" },
+  { name: 'socket: opened with a header, a message echoed, nothing when none comes in time, then closed', path: '/checks/socket_echo', values: { base: `ws://127.0.0.1:${PORT}/http` }, check: (r) => r.status === 200 && same(r.json.slice(0, 3), ['hi Ada', 'héllo', null]) && /^socket\.send: no socket \d+ is open in this run$/.test(r.json[3]) },
+  { name: 'socket: nothing at that address, and an address that is not a WebSocket', path: '/checks/socket_nowhere', check: (r) => r.status === 200 && /^socket\.open: /.test(r.json[0]) && r.json[1] === "socket.open: a WebSocket's address starts with ws:// or wss://, or leaves it off" },
+  { name: 'socket: an Onsay name, with ws:// or without, is opened where Onsay resolves it', path: '/checks/socket_names', values: { names: ['ws://pages.tester', 'Pages.tester'] }, check: gives([['hi Ada', 'héllo'], ['hi Ada', 'héllo']]) },
+  { name: "socket: an Onsay name of a computer says a WebSocket can't reach it yet", path: '/checks/socket_names', values: { names: ['laptop.tester'] }, check: gives(["socket.open: laptop.tester is on a computer, which Onsay reaches one request at a time, so a WebSocket can't reach it yet"]) },
   { name: 'request: a GET with a query, tried again after a 503', path: '/checks/request_busy', values: { base: HTTP }, check: gives([200, true, { tries: 3 }]) },
   { name: 'names: an Onsay name, with https:// or without, is sent where Onsay resolves it, what followed it after', path: '/checks/http_get', values: { base: 'https://pages.tester' }, check: gives([200, 'yes', 'hello ?x=1']) },
   { name: 'names: a POST to an Onsay name', path: '/checks/http_post', values: { base: 'Pages.tester' }, check: gives([201, { method: 'POST', name: 'Ada', type: 'text/plain', body: 'héllo' }]) },
@@ -948,17 +950,28 @@ const WEB_CASES = [
       (await control('policy')).json.rules.some((r) => r.who === 'onsay' && same(r.routes, ['/onsay']))
   }],
   ['socket: a socket its run leaves open is closed as the run ends', async (send) => {
-    const r = await send('/checks/socket_left', { base: `ws://127.0.0.1:${PORT}` })
+    const r = await send('/checks/socket_left', { base: `ws://127.0.0.1:${PORT}/http` })
     return r.status === 200 && r.json === true && await soon(() => echoing === 0)
   }],
   ['calls: every http.send reaches Onsay in chunks, with its status, and a key in a header or the address never does', async () => {
     const deadline = Date.now() + 30_000
     while (Date.now() < deadline && !called.some((c) => c.request.url.includes('/http/missing'))) await new Promise((r) => setTimeout(r, 250))
-    const post = called.find((c) => c.request.url.endsWith('/http/echo')), missing = called.find((c) => c.request.url.endsWith('/http/missing'))
+    const post = called.find((c) => c.kind === 'web' && c.request.url.endsWith('/http/echo')), missing = called.find((c) => c.request.url.endsWith('/http/missing'))
     const secret = called.find((c) => c.request.url.includes('api_key'))
     return post?.kind === 'web' && post.request.method === 'POST' && post.response.status === 201 && post.request.body === 'héllo' && typeof post.ms === 'number' &&
       missing?.response.status === 404 && secret?.request.url.includes('api_key=(redacted)') && secret.request.url.includes('x=1') &&
       secret.request.headers.Authorization === '(redacted)' && !JSON.stringify(called.map((c) => c.request)).includes('sekrit')
+  }],
+  ['calls: each socket reaches Onsay as one call of kind socket, as it closes or fails to open, with how many messages went each way', async () => {
+    await soon(() => called.some((c) => c.kind === 'socket' && c.response.body?.closed === 'as the run ended'), 30)
+    const sockets = called.filter((c) => c.kind === 'socket')
+    const echo = sockets.find((c) => c.request.url === `ws://127.0.0.1:${PORT}/http/echo` && c.request.headers['x-name'] === 'Ada')
+    const left = sockets.find((c) => c.response.body?.closed === 'as the run ended'), named = sockets.find((c) => c.address === 'ws://pages.tester/echo')
+    const nowhere = sockets.find((c) => c.request.url === 'ws://127.0.0.1:1/'), computer = sockets.find((c) => c.address === 'laptop.tester/echo')
+    return echo?.request.method === 'GET' && echo.response.status === 101 && typeof echo.ms === 'number' && echo.error === '' &&
+      same(echo.response.body, { sent: { messages: 1, bytes: 6 }, received: { messages: 2, bytes: 12 }, closed: 'by the lingo' }) &&
+      same(left?.response.body.sent, { messages: 0, bytes: 0 }) && named?.response.body.closed === 'by the lingo' &&
+      nowhere?.response.status === 0 && nowhere.response.body === null && nowhere.error !== '' && /can't reach it yet/.test(computer?.error)
   }],
   ['sent.log: every message sent to Onsay kept, a line each with when, every token masked, pings left out', async () => {
     const text = readFileSync(new URL('sent.log', DATA), 'utf8'), lines = text.trim().split('\n').map((l) => JSON.parse(l)), types = new Set(lines.map((l) => l.message.type))
@@ -1135,7 +1148,8 @@ const decide = (m, link) => {
 const json = (s, status, body) => s.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body))
 // Onsay's API: signing in, as Onsay does it, a code to show, then the token once the person pressed Connect, here at
 // once, or turned down for a computer called refused; the account's policy, signed; its computers; and names resolved,
-// each device with its key and Onsay's statement on it, and pages.tester, whose web address is the pages for http.send.
+// each device with its proxy address, its key and Onsay's statement on it, and pages.tester, whose web address is the
+// pages for http.send and socket.open.
 const resolved = []   // every name the lingo client asked /resolve about
 const API = {
   'POST /connect': (q, s, body) => { named = JSON.parse(body).name; json(s, 201, { url: 'http://127.0.0.1:8787/connect', code: 'TEST-CODE', poll: 'p1' }) },
@@ -1167,11 +1181,11 @@ const API = {
     if (name === 'pages.tester') return json(s, 200, { name, kind: 'address', target: HTTP, address: HTTP })
     if (!key || !handle) return json(s, 404, { error: `There's no computer or route called ${name}` })
     const account = `acct_${handle}`, card = { account, name: device, key: publicOf(key), added: ADDED }
-    json(s, 200, { name, kind: 'computer', online: true, devices: [{ ...card, statement: sign({ account, added: ADDED, device, handle, key: card.key }, device === 'tablet' ? DEVICES.tablet : ONSAY) }] })
+    json(s, 200, { name, kind: 'computer', address: `http://127.0.0.1:${PORT}/proxy/${name}`, online: true, devices: [{ ...card, statement: sign({ account, added: ADDED, device, handle, key: card.key }, device === 'tablet' ? DEVICES.tablet : ONSAY) }] })
   },
 }
 
-// Pages for http.send and request, by their path under /http, and how many sockets are open at /echo, below.
+// Pages for http.send and request, by their path under /http, and how many sockets are open at /http/echo, below.
 const tries = {}
 let echoing = 0
 const PAGES = {
@@ -1338,7 +1352,7 @@ server.on('upgrade', (req, socket) => {
   const accept = crypto.createHash('sha1').update(req.headers['sec-websocket-key'] + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64')
   socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`)
   // For socket.open: hi to the X-Name header, then every message back as it came.
-  if (req.url === '/echo') {
+  if (req.url === '/http/echo') {
     echoing++
     socketOf(socket, (t) => socket.write(frame(1, t)), () => echoing--)
     return socket.write(frame(1, `hi ${req.headers['x-name']}`))

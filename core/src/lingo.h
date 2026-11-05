@@ -229,9 +229,10 @@ void lingo_hook(const lingo_hooks *hooks);
                     sends such lines on (said in lingo_hooks). 1 when it took it, else 0, and this computer shows it
      lingo_called   one request this lingo client made, handed to each running native lingo that keeps calls (called in
                     lingo_hooks) as {at, ms, kind, address, ask, request {method, url, path, headers, body}, response
-                    {status, headers, body}, error, stopped}. kind is web or lingo, got what pl_http gives, {status,
-                    headers, text}, or NULL. A header that carries a key, and a query value whose name says it is one,
-                    are taken out first, and each body cut to 4 KB */
+                    {status, headers, body}, error, stopped}. kind is web, lingo or socket, got what pl_http gives, {status,
+                    headers, text}, or NULL. For a socket, text is {sent, received, closed} (core.c let_go). A header
+                    that carries a key, and a query value whose name says it is one, are taken out first, and each body
+                    text cut to 4 KB */
 void lingo_hand(const char *request, size_t n, const char *caller, void (*answered)(void *arg, const char *response, size_t n), void *arg);
 void lingo_stop(const char *id);
 void lingo_wait(volatile int *done, volatile int *stop, double seconds);

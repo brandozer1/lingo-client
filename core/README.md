@@ -218,7 +218,7 @@ command line.
 | `ask(values, n, stop, answer)` | answers `lingo(...)` and `use(...)`: `values` is `{ask, values, gives, context, asking, for}` or `{address, values, for}`, `for` the id of the request whose run asks, when one does, and the answer a record with `value`, or `error` and `code`. With no running lingo to ask, they are asked of the settings' `ask`, else fail with "This lingo client isn't connected to Onsay" |
 | `key(a, keyid)` | a request's signer, by its keyid like `laptop.brandon`: `{key: "ed25519:<base64>", handle, mine}`, or `NULL` |
 | `said(for, text)` | a line the run of request `for` says for the person, `chat.step` or `chat.say`: 1 when it sent it on to whoever asked, like the onsay lingo for a request Onsay sent, else 0 and it is a show line here |
-| `called(line)` | each request this lingo client made, a line of JSON: `{at, ms, kind, address, ask, request {method, url, path, headers, body}, response {status, headers, body}, error, stopped}`, a key in a header or in the address taken out and each body cut to 4 KB. The onsay lingo sends them to Onsay in chunks |
+| `called(line)` | each request this lingo client made, a line of JSON: `{at, ms, kind, address, ask, request {method, url, path, headers, body}, response {status, headers, body}, error, stopped}`, a key in a header or in the address taken out and each body cut to 4 KB. `kind` is `web`, `lingo` or `socket`, one for each WebSocket a lingo opened, as its run lets it go or as it fails to open (`../lingos/onsay/README.md`). The onsay lingo sends them to Onsay in chunks |
 
 What the lingo client offers it back, from any thread:
 
@@ -230,7 +230,7 @@ What the lingo client offers it back, from any thread:
 | `lingo_ask(r, question, seconds)` | on the job thread, a question for the person, a record, waited for in `/.lingo/asks` until an app answers it, the run is stopped or `seconds` pass: its answer, `nothing` when none came, or `NULL` when no app is open to ask |
 | `lingo_policy(a, account, device, why)` | keeps the account's policy, with its version, as the one in force, its rules for this computer by `device`. Refused when older than the one kept. Gives an empty record, which callers report as `clamped`: there is nothing to clamp any more |
 | `lingo_setting`, `lingo_set` | one of a lingo's settings, as this computer keeps them |
-| `lingo_called(kind, address, ask, method, url, headers, body, n, got, error, stopped, ms)` | one request made, handed to every running native lingo with `called`: each `http.send` does, and a native lingo calls it for a request it makes itself |
+| `lingo_called(kind, address, ask, method, url, headers, body, n, got, error, stopped, ms)` | one request made, handed to every running native lingo with `called`: each `http.send` does, each socket is kept the same way, and a native lingo calls it for a request it makes itself |
 | `lingo_home` | its home folder, as a whole path, for a file a native lingo keeps there, like the onsay lingo's `sent.log` |
 | `lingo_said(text)` | on the job thread, a line the running request says, handed to the running native lingo that fills `said`: 1 when it took it |
 | `key_of`, `key_sign`, `key_forget` | this computer's own key pairs, in `home/keys`, the private half never handed out |

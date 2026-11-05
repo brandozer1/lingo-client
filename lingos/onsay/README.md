@@ -19,6 +19,12 @@ the wire*.
   and what this computer applied is said back: its version, and an empty `clamped`, since the ceiling is checked at
   each phrase.
 - **Every decision** of the lingo client goes to Onsay for the account's activity feed.
+- **Every call this computer makes** goes to Onsay too, in chunks, `{type: "calls", calls}`, each as the core hands it
+  over (`core/README.md`, `called`), by its `kind`: `web`, an `http.send`, `lingo`, a call of a prompt's agent loop to
+  a lingo on this computer, and `socket`, a WebSocket a lingo opened, one call each, never its messages. A socket's
+  `request` is what opened it, its headers with keys taken out, and its `response` `{status: 101, body: {sent, received,
+  closed}}`: `sent` and `received` each `{messages, bytes}`, `closed` `by the lingo`, `as the run ended` or `by the other
+  side`, and `ms` how long it was open. One that couldn't open has status 0 and why in `error`, kept at once.
 - **Everything it sends Onsay** is kept in the lingo client's home as `sent.log`, `{at, message}` a line, every token
   masked and pings left out, so the person can read what went: each message down the connection (`hello`, `catalog`,
   `lingo`, `response`, `decide`, `stop`, `applied`, `log`) and each call to Onsay's API, as `{type: "api", method, path, body}`.

@@ -252,6 +252,20 @@ fn socket_echo(base) {
 // socket: one left open, which the end of the run closes.
 fn socket_left(base) {return socket.open(base + "/echo") > 0}
 
+// socket.open at Onsay names: each one's greeting and echo, or why it couldn't open.
+fn socket_names(names) {
+  out = []
+  for name in names {
+    try {
+      s = socket.open(name + "/echo", {"X-Name": "Ada"})
+      socket.send(s, "héllo")
+      out += [[socket.receive(s, 5), socket.receive(s, 5)]]
+      socket.close(s)
+    } catch e {out += [e]}
+  }
+  return out
+}
+
 // socket.open where nothing answers, and to an address that isn't a WebSocket's.
 fn socket_nowhere() {
   out = []

@@ -254,8 +254,9 @@ static val *keys(run *r, val **a) {
    server/lib/names.js web): a host is on the web when it is an IP, localhost, or a name with a dot ending in one of the
    web's top level domains, like example.com, and is itself, http:// or https:// left off when it likes, http for an IP.
    Any other, like laptop.brandon, is an Onsay name: Onsay's resolve endpoint (ONSAY and RESOLVE, core.h) gives its web
-   address, and what followed the name goes on after it. NULL, with why, when it has none. */
-static const char *reached(arena *a, const char *url, buf *why) {
+   address, and what followed the name goes on after it. ws, for a WebSocket: ws:// and wss:// read as http:// and
+   https://, and the address given is ws:// or wss://, but never a computer's. NULL, with why, when it has none. */
+static const char *reached(arena *a, const char *url, int ws, buf *why) {
   size_t s = strspn(url, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+.-");
   size_t n;
   size_t dots = 0;
@@ -275,7 +276,7 @@ static const char *reached(arena *a, const char *url, buf *why) {
   int ip = host[0] == '[' || !strcmp(host, "localhost") || (digits && dots == 3);
   snprintf(word, sizeof word, " %s ", last ? last + 1 : "");
   if (ip || (last && strlen(last) < 70 && strstr(TLDS, word)))
-    return rest != url ? url : arena_fmt(a, "%s://%s", ip ? "http" : "https", url);
+    return rest != url ? url : arena_fmt(a, "%s%s://%s", ws ? "ws" : "http", ip ? "" : "s", url);
   buf at = { 0 };
   buf_fmt(&at, "%s%s%s", ONSAY, RESOLVE, host);
   val *got = pl_http(a, "GET", at.s, v_rec(a), "", 0, 30, why);
@@ -285,7 +286,16 @@ static const char *reached(arena *a, const char *url, buf *why) {
   buf_free(&at);
   if (!address && got) buf_fmt(why, "%s", said && said->k == V_REC ? text_or(said, "error", "") : "");
   if (!address && got && !why->n) buf_fmt(why, "%s has nowhere to send a request yet", host);
-  return address ? arena_fmt(a, "%s%s", address, rest + n) : NULL;
+  if (!address) return NULL;
+  if (!ws || strncmp(address, "http", 4)) return arena_fmt(a, "%s%s", address, rest + n);
+  // Onsay's proxy address for a computer, or a route to one, ends with its name (onsay's server/lib/proxy.js address).
+  size_t length = strlen(address);
+  size_t name = strlen(host);
+  if (length > name && address[length - name - 1] == '/' && !strcmp(address + length - name, host)) {
+    buf_fmt(why, "%s is on a computer, which Onsay reaches one request at a time, so a WebSocket can't reach it yet", host);
+    return NULL;
+  }
+  return arena_fmt(a, "ws%s%s", address + 4, rest + n);   // http://x is ws://x, https://x wss://x
 }
 
 static pl_gate *gate;
@@ -353,11 +363,12 @@ void lingo_called(const char *kind, const char *address, const char *ask, const 
   rec_set(a, request, "path", v_cstr(a, path && *path ? path : "/"));
   rec_set(a, request, "headers", kept_headers(a, headers));
   rec_set(a, request, "body", v_text(a, body ? body : "", body ? (n < CALL_BODY ? n : CALL_BODY) : 0));
-  val *said = got ? rec_get(got, "text") : NULL;
+  val *said = got ? rec_get(got, "text") : NULL;   // text, or for a socket a record of what went each way, kept whole
   val *status = got ? rec_get(got, "status") : NULL;
+  if (said && said->k == V_TEXT && said->t.len > CALL_BODY) said = v_text(a, said->t.s, CALL_BODY);
   rec_set(a, response, "status", status && status->k == V_NUM ? status : v_num(a, 0));
   rec_set(a, response, "headers", kept_headers(a, got ? rec_get(got, "headers") : NULL));
-  rec_set(a, response, "body", said && said->k == V_TEXT ? v_text(a, said->t.s, said->t.len < CALL_BODY ? said->t.len : CALL_BODY) : NOTHING);
+  rec_set(a, response, "body", said ? said : NOTHING);
   rec_set(a, line, "at", v_cstr(a, at));
   rec_set(a, line, "ms", v_num(a, ms));
   rec_set(a, line, "kind", v_cstr(a, kind));
@@ -394,7 +405,7 @@ static void trip_free(trip *t) {
 
 static void travel(void *arg) {
   trip *t = arg;
-  const char *to = reached(t->a, t->url, &t->why);
+  const char *to = reached(t->a, t->url, 0, &t->why);
   if (to) t->got = pl_http(t->a, t->method, to, t->headers, t->body, t->n, t->seconds, &t->why);
   pl_enter(gate);
   t->finished = 1;
@@ -480,16 +491,19 @@ static val *send_(run *r, val **a) {
 
 /* socket: WebSockets a run opens, each opened and read on a thread of its own (talk), every message that comes kept in
    waiting until socket.receive takes it. Every socket a run opened is closed as that run ends (core_call). talk frees a
-   socket its run let go of once talk ends, else the run frees it, the way a trip is freed. */
+   socket its run let go of once talk ends, else the run frees it, the way a trip is freed. Each is kept as a call of
+   kind socket as its run lets go of it, and one that couldn't open at once (let_go). */
 typedef struct sock {
   struct sock *next;
   long id;
-  char *url, *headers;   // headers whole lines, or NULL
+  char *url, *headers;   // url as the lingo wrote it, headers whole lines, or NULL
   pl_link *l;            // set once, as it opens, and freed with it
   buf waiting;           // each message come and not yet taken: its length, a size_t, then its text
   buf why;               // why it didn't open
   volatile int news;     // set as it opens or ends and as each message comes, for lingo_wait
   int ended, finished, left;   // ended: closed, or never opened. left: let go by its run
+  double began, over;          // when it was asked for, and when it ended
+  double sent, sent_bytes, came, came_bytes;   // messages each way, and their size
 } sock;
 
 static sock *socks;   // the open ones, newest first, so those a run opened are on top as it ends
@@ -507,7 +521,10 @@ static void sock_free(sock *s) {
 static void talk(void *arg) {
   sock *s = arg;
   buf in = { 0 };
-  pl_link *l = pl_connect(s->url, s->headers, &s->why);
+  arena *a = arena_new();
+  const char *to = reached(a, s->url, 1, &s->why);
+  pl_link *l = to ? pl_connect(to, s->headers, &s->why) : NULL;
+  arena_free(a);
   pl_enter(gate);
   s->l = l;
   if (l && s->left) pl_close(l);
@@ -517,6 +534,8 @@ static void talk(void *arg) {
     pl_enter(gate);
     buf_add(&s->waiting, (const char *)&in.n, sizeof in.n);
     buf_add(&s->waiting, in.s ? in.s : "", in.n);
+    s->came++;
+    s->came_bytes += (double)in.n;
     pl_leave(gate);
     lingo_done(&s->news);
     in.n = 0;
@@ -524,6 +543,7 @@ static void talk(void *arg) {
   buf_free(&in);
   pl_enter(gate);
   s->ended = 1;
+  s->over = pl_now();
   pl_leave(gate);
   lingo_done(&s->news);
   pl_enter(gate);
@@ -533,11 +553,39 @@ static void talk(void *arg) {
   if (left) sock_free(s);
 }
 
-// Closed and taken off the open ones, freed now when talk has ended, else by talk as it ends.
-static void let_go(sock *s) {
+/* Kept as a call, closed and taken off the open ones, freed now when talk has ended, else by talk as it ends. closed: by
+   the lingo, or as the run ended, unless the other side closed it first. stopped: the person stopped it opening. */
+static void let_go(sock *s, const char *closed, int stopped) {
   sock **at = &socks;
+  arena *a = arena_new();
+  val *got = NULL;
   while (*at != s) at = &(*at)->next;
   *at = s->next;
+  pl_enter(gate);
+  int opened = s->l != NULL;
+  if (opened && s->ended) closed = "by the other side";
+  double ms = ((opened && s->ended ? s->over : pl_now()) - s->began) * 1000;
+  if (opened) {
+    val *sent = v_rec(a);
+    val *received = v_rec(a);
+    val *body = v_rec(a);
+    rec_set(a, sent, "messages", v_num(a, s->sent));
+    rec_set(a, sent, "bytes", v_num(a, s->sent_bytes));
+    rec_set(a, received, "messages", v_num(a, s->came));
+    rec_set(a, received, "bytes", v_num(a, s->came_bytes));
+    rec_set(a, body, "sent", sent);
+    rec_set(a, body, "received", received);
+    rec_set(a, body, "closed", v_cstr(a, closed));
+    got = v_rec(a);
+    rec_set(a, got, "status", v_num(a, 101));
+    rec_set(a, got, "text", body);
+  }
+  const char *why = "Stopped by the person";
+  if (!stopped) why = s->why.n ? v_cstr(a, s->why.s)->t.s : "It couldn't open";
+  pl_leave(gate);
+  lingo_called("socket", NULL, NULL, "GET", s->url, header_lines(a, s->headers ? s->headers : ""), NULL, 0, got,
+      opened ? NULL : why, stopped, ms);
+  arena_free(a);
   pl_enter(gate);
   s->left = 1;
   if (s->l) pl_close(s->l);
@@ -553,12 +601,14 @@ static sock *sock_of(run *r, val *id) {
   return s;
 }
 
-// socket.open: its address ws:// or wss://, and each header one whole line, as for http.send.
+// socket.open: its address ws://, wss:// or with none, an Onsay name too (reached), and each header one whole line, as
+// for http.send.
 static val *socket_open(run *r, val **a) {
   val *url = text_of(r, a[0]);
   buf lines = { 0 };
-  if (strncmp(url->t.s, "ws://", 5) && strncmp(url->t.s, "wss://", 6))
-    fail(r, "phrase", "a WebSocket's address starts with ws:// or wss://");
+  size_t scheme = strspn(url->t.s, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+.-");
+  if (!strncmp(url->t.s + scheme, "://", 3) && strncmp(url->t.s, "ws://", 5) && strncmp(url->t.s, "wss://", 6))
+    fail(r, "phrase", "a WebSocket's address starts with ws:// or wss://, or leaves it off");
   for (size_t i = 0; a[1]->k == V_REC && i < a[1]->r.n; i++) {
     val *value = text_of(r, a[1]->r.v[i]);
     if (strpbrk(a[1]->r.key[i], "\r\n:") || strpbrk(value->t.s, "\r\n")) {
@@ -571,6 +621,7 @@ static val *socket_open(run *r, val **a) {
   s->id = ++socks_made;
   s->url = strdup(url->t.s);
   s->headers = lines.s;
+  s->began = pl_now();
   s->next = socks;
   socks = s;
   pl_thread(talk, s);
@@ -580,7 +631,7 @@ static val *socket_open(run *r, val **a) {
   pl_leave(gate);
   if (open) return v_num(r->a, (double)s->id);
   val *why = v_text(r->a, s->why.s ? s->why.s : "", s->why.n);
-  let_go(s);
+  let_go(s, "as the run ended", *r->stop);   // closed so, should it open just as it is stopped
   if (*r->stop) fail(r, "stopped", "Stopped by the person");
   fail(r, "phrase", "%s", why->t.s);
 }
@@ -589,6 +640,8 @@ static val *socket_send(run *r, val **a) {
   sock *s = sock_of(r, a[0]);
   val *text = text_of(r, a[1]);
   if (!pl_send(s->l, text->t.s, text->t.len)) fail(r, "phrase", "the socket was closed");
+  s->sent++;
+  s->sent_bytes += (double)text->t.len;
   return NOTHING;
 }
 
@@ -619,7 +672,7 @@ static val *socket_receive(run *r, val **a) {
 }
 
 static val *socket_close(run *r, val **a) {
-  let_go(sock_of(r, a[0]));
+  let_go(sock_of(r, a[0]), "by the lingo", 0);
   return NOTHING;
 }
 
@@ -645,7 +698,7 @@ static val *asked(run *r, buf *in) {
   else if (at) {
     val *headers = v_rec(r->a);
     rec_set(r->a, headers, "content-type", v_cstr(r->a, "application/json"));
-    if ((at = reached(r->a, at, &why)) &&
+    if ((at = reached(r->a, at, 0, &why)) &&
         (answer = pl_http(r->a, "POST", at, headers, in->s, in->n, set.ms / 1000, &why)) &&
         (text = rec_get(answer, "text")) && text->k == V_TEXT)
       got = json_parse(r->a, text->t.s, text->t.len, NULL);
@@ -725,8 +778,8 @@ static void floor_phrases(void) {
       "headers a record, body text, redirects followed, at most 4 MB back",
       send_);
   phrase_add("socket", "net",
-      "open(url: url, headers: record=nothing) -> whole: a WebSocket to a ws:// or wss:// address, its number for the other "
-      "socket phrases. Closed when the run ends, if not before",
+      "open(url: url, headers: record=nothing) -> whole: a WebSocket to a ws:// or wss:// address or an Onsay name, its "
+      "number for the other socket phrases. Closed when the run ends, if not before",
       socket_open);
   phrase_add("socket", "net", "send(socket: whole, text: text): one message", socket_send);
   phrase_add("socket", "net",
@@ -1800,7 +1853,7 @@ static val *core_call(
   }
   long before = socks_made;
   val *got = run_program(a, program, input, (limits){ set.steps, set.ms, stop }, code, message);
-  while (socks && socks->id > before) let_go(socks);
+  while (socks && socks->id > before) let_go(socks, "as the run ended", 0);
   return got;
 }
 
