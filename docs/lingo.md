@@ -777,14 +777,17 @@ Conventions that matter in practice:
   client's output.
 - **How input acts:** `input.modes(headless, no_follow)` says it, or changes either, and it is kept until changed again,
   as two of the onsay lingo's settings. No follow, on at first: no pointer or ring goes to where he acts, so the Windows
-  app shows nothing of it and its chat stays open. Headless, off at first: nothing on screen moves. Clicks and keys go to
+  app shows nothing of it and its chat stays open. Headless, on at first: nothing on screen moves. Clicks and keys go to
   the app in the background, as UI Automation and window messages, no window comes to the front and the person's mouse
   and keyboard are never taken, whatever `input.cursor` says. `controls` press, fill, toggle, pick and scroll and
   `input` click_text, click_on, click_in, scroll_in and scroll_to_text work that way; type_into fills the box the way
   `controls.fill` does; type, type_lines, paste and a single key in shortcut go to the window last clicked in; copy_all
-  reads the text instead of copying it. What can't be done that way fails saying so and that turning headless off lets
-  it work: a drag, keys held together like ctrl+s, a minimized window, a box that only takes typing in front. Some apps
-  ignore input in the background without saying so, which no call can tell.
+  reads the text instead of copying it. What can't be done that way is done in front for that one action, as with
+  headless off: a drag, keys held together like ctrl+s, a minimized window, a box that only takes typing in front, a
+  control with no window, typing before anything was clicked. The app comes forward, the pointer shows even with no
+  follow on, and a step says why, like "Notepad doesn't take a drag in the background, so I brought it forward for
+  this". Then the window the person had in front gets the keyboard back and headless is on again. Some apps ignore
+  input in the background without saying so, which no call can tell.
 - **The chat:** `chat.ask(questions, seconds=120)` asks the person and waits for their answers, so the work goes on with
   them, the way an AI asks mid-turn: `answers = chat.ask([{question: "Which one?", choices: ["Rome", "Oslo"]}, "When?"])`
   gives `["Rome", "May"]`, each question text, typed, or `{question, choices}`, picked, a text alone one question. It is

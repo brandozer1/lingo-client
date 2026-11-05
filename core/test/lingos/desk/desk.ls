@@ -64,8 +64,8 @@ fn lines_near() {
 // The pointer's mode, changed and back.
 fn cursor_modes() {return [input.cursor(), input.cursor("real"), input.cursor("virtual")]}
 
-// How input acts, changed and back to how it starts: not headless, no follow.
-fn input_modes() {return [input.modes(), input.modes(true, false), input.modes(false, true)]}
+// How input acts, changed and back to how it starts: headless, no follow.
+fn input_modes() {return [input.modes(), input.modes(false, false), input.modes(true, true)]}
 
 // Words on screen rung, then the ring taken away.
 fn point_at_words() {

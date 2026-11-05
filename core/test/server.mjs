@@ -336,7 +336,7 @@ const CASES = [
   { lingo: 'onsay', windows: true, name: 'look: lines, where one is, and what is near it', path: '/desk/lines_near', check: gives([true, true, true]) },
   { lingo: 'onsay', windows: true, name: 'input: the pointer mode', path: '/desk/cursor_modes', check: gives(['virtual', 'real', 'virtual']) },
   { lingo: 'onsay', windows: true, name: 'input: a mode it has not', path: '/onsay/input/cursor', values: { how: 'ghost' }, check: fails(500, /virtual or real/) },
-  { lingo: 'onsay', windows: true, name: 'input: how input acts, changed and back', path: '/desk/input_modes', check: gives([{ headless: false, no_follow: true }, { headless: true, no_follow: false }, { headless: false, no_follow: true }]) },
+  { lingo: 'onsay', windows: true, name: 'input: how input acts, changed and back', path: '/desk/input_modes', check: gives([{ headless: true, no_follow: true }, { headless: false, no_follow: false }, { headless: true, no_follow: true }]) },
   { lingo: 'onsay', windows: true, name: 'input: how input acts is true or false', path: '/onsay/input/modes', values: { headless: 'yes' }, check: fails(500, /headless is true or false/) },
   { lingo: 'onsay', windows: true, name: 'input: point at words on screen', path: '/desk/point_at_words', check: gives([true, true, true]) },
   { lingo: 'onsay', windows: true, name: 'input: point at a box, then stop', path: '/onsay/input/point_at', values: [10, 10, 60, 20, 'here', 1], check: (r) => gives(null)(r) },
@@ -509,18 +509,18 @@ const WEB_CASES = [
     (await raw('POST /memo/recall HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n')).startsWith('HTTP/1.1 411') &&
     (await raw('POST /memo/recall HTTP/1.1\r\nContent-Length: 5000000\r\n\r\n')).startsWith('HTTP/1.1 413')],
   ['web: a need above the ceiling is a 403', async () => (await post('/onsay/input/type', ['x'])).status === 403, 'onsay'],
-  // The ceiling is raised for one call only once headless is on, and a drag checks headless before anything else, so
-  // nothing on the screen moves.
-  ['input: headless, a drag fails saying so before anything moves', async () => {
+  // Headless as it starts, a drag is done in front instead, with one step saying why. The ceiling is raised for that one
+  // call, and the window is one that doesn't exist, so the drag in front stops before anything on the screen moves, and
+  // only the decision and the step are seen.
+  ['input: headless, a drag is done in front for that one action, with a step saying why', async () => {
     if (process.platform !== 'win32') return true
-    const on = await post('/onsay/input/modes', { headless: true })
-    if (on.json?.headless !== true) return false
-    await control('ceiling', { needs: [...POLICY.ceiling, 'screen.act'] })
-    const r = await post('/onsay/input/drag_in', { window: null, x1: 0.4, y1: 0.4, x2: 0.6, y2: 0.6 })
+    let out = ''
+    command('ceiling', ...POLICY.ceiling, 'screen.act')
+    try { command('call', 'input.drag_in', '{"id":1}', '0.4', '0.4', '0.6', '0.6') } catch (e) { out = String(e.stdout) }
     command('ceiling', ...POLICY.ceiling)
-    const off = await post('/onsay/input/modes', { headless: false })
-    return r.status === 500 && /Dragging can't be done in the background.* Turning headless off with input\.modes lets it work/.test(r.json.error) &&
-      off.json?.headless === false && same(policyFile().ceiling, POLICY.ceiling)
+    const modes = await post('/onsay/input/modes', {})
+    return /\{"show":"step","text":"[^"]* doesn't take a drag in the background, so I brought it forward for this"\}/.test(out) &&
+      out.split('"show":"step"').length === 2 && modes.json?.headless === true && same(policyFile().ceiling, POLICY.ceiling)
   }, 'onsay'],
   ['proxied: a request through Onsay is answered as the port answers it, once a rule lets anyone in to it', async (send) => {
     const r = await withRules([...DEFAULT_RULES, { allow: true, who: 'public', routes: ['/hello'] }], () => send('/hello/text?name=Bo', undefined, { as: undefined }))

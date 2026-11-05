@@ -13,8 +13,8 @@
 // 7. clipboard, commands, notifications
 // 8. input                    the mouse and keyboard the way a person uses them: words on screen, controls by name, places in a window
 // 9. look                     the screen read as text, and a picture of it
-// 10. base_calls()            -> every call joined to its function (../onsay/calls_every.h and calls_device.h), called as the
-//                               lingo client starts (onsay_lingo)
+// 10. base_calls()            -> every call joined to its function (../onsay/calls_every.h and calls_device.h, those through
+//                               or_in_front), called as the lingo client starts (onsay_lingo)
 // What is the same on every computer, like files.search and chat, is in ../onsay/calls_shared.c.
 #define COBJMACROS
 #include <initguid.h>
@@ -28,6 +28,7 @@
 #include <uiautomation.h>
 #include <ctype.h>
 #include <math.h>
+#include <setjmp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -676,10 +677,11 @@ static void *pattern(IUIAutomationElement *e, PATTERNID id, REFIID iid) {
   return p;
 }
 
-// The end of every failure of something that can't be done headless, see how input acts in section 5.
-#define TURN_OFF " Turning headless off with input.modes lets it work"
+// The end of the step said for something that can't be done headless, see how input acts in section 5.
+#define FORWARD ", so I brought it forward for this"
 
 static int headless(run *r);
+_Noreturn static void needs_front(run *r, HWND h, const char *why, ...);
 static void click(run *r, HWND top, int x, int y, int right, int times);
 static void glide(run *r, int x, int y, double seconds, int text);
 static void show_press(run *r, int right, int times);
@@ -813,7 +815,7 @@ static void press_element(run *r, IUIAutomationElement *e) {
     }
     if (at) IUIAutomationElement_Release(at);
     if (walk) IUIAutomationTreeWalker_Release(walk);
-    if (!own) fail(r, "phrase", "This control can't be pressed in the background." TURN_OFF);
+    if (!own) needs_front(r, NULL, "doesn't let this control be pressed in the background" FORWARD);
   }
   click(r, own ? GetAncestor((HWND)own, GA_ROOT) : NULL, p.x, p.y, 0, 1);
 }
@@ -851,7 +853,7 @@ static val *ui_fill(run *r, val **a) {
     if (own && type == UIA_EditControlTypeId)
       SendMessageTimeoutW((HWND)own, WM_SETTEXT, 0, (LPARAM)w, SMTO_ABORTIFHUNG, 2000, &done);
     free(w);
-    if (!done) fail(r, "phrase", "This app doesn't take typing in this box in the background." TURN_OFF);
+    if (!done) needs_front(r, NULL, "doesn't take typing in this box in the background" FORWARD);
     return NOTHING;
   }
   IUIAutomationElement_SetFocus(e);
@@ -1148,29 +1150,90 @@ static void key(HWND to, WORD vk, int up) {
    How input acts, set with input.modes and kept as two of the onsay lingo's settings, in home/settings/onsay.json:
      headless   true: nothing on screen moves. Clicks and keys go to the app's controls in the background, as UI Automation
                 and window messages, no window comes to the front, and the real mouse is never used, whatever real_mode
-                says. What can't be done that way fails saying so (TURN_OFF). false, the default
+                says. What can't be done that way is done in front for that one action (or_in_front). true, the default
      no_follow  true, the default: no hand, ring or ripple goes to where he acts, so the app shows nothing of it, he stays
                 where he is and the chat stays open. false: the hand glides to every click and the app follows it */
 static int real_mode;
 static int hand_x, hand_y, hand_known;
-static HWND worked;   // the window headless input last went to, where headless keys go
+static HWND worked;    // the window headless input last went to, where headless keys go
+static HWND forward;   // the window an action that can't be done headless is for, brought to the front for it
+static int shown;      // 1 while that action is done in front: not headless, and followed
 
 static int headless(run *r) {
+  if (shown) return 0;
   val *v = lingo_setting(r->a, "onsay", "headless");
-  return v && v->k == V_BOOL && truthy(v);
+  return !v || v->k != V_BOOL || truthy(v);
 }
 
 static int following(run *r) {
+  if (shown) return 1;
   val *v = lingo_setting(r->a, "onsay", "no_follow");
   return v && v->k == V_BOOL && !truthy(v);
+}
+
+/* What can't be done headless ends here instead of going on: h is the window it is for, brought to the front, or NULL
+   when the action brings its own, and why is the step the person sees after the app's name, like "doesn't take a drag in
+   the background" FORWARD. or_in_front does it again in front. */
+_Noreturn static void needs_front(run *r, HWND h, const char *why, ...) {
+  char text[512];
+  va_list ap;
+  va_start(ap, why);
+  vsnprintf(text, sizeof text, why, ap);
+  va_end(ap);
+  forward = h;
+  fail(r, "background", "%s", text);
+}
+
+/* Every call on this computer runs through here (base_calls). One that can't be done headless (needs_front) is done
+   again in front, as with headless off: its window brought forward, the real mouse used if input.cursor says so and the
+   pointer shown whatever no follow says, so the person sees why their screen moved, and a step tells them. Then the
+   window they had in front gets the keyboard back, unless it is the one acted in, and headless is on for the next. */
+static val *or_in_front(run *r, phrase_fn fn, val **a) {
+  jmp_buf caught;   // r->trap is where fail jumps: a jmp_buf (run.c)
+  void *outer = r->trap;
+  val *volatile out = NULL;
+  volatile int failed = 0;
+  r->trap = &caught;
+  if (!setjmp(caught)) {
+    out = fn(r, a);
+    r->trap = outer;
+    return out;
+  }
+  r->trap = outer;
+  if (strcmp(r->code, "background")) longjmp(*(jmp_buf *)outer, 1);
+  char why[512];
+  snprintf(why, sizeof why, "%s", r->message.s ? r->message.s : "");
+  HWND before = GetForegroundWindow();
+  if (forward && IsWindow(forward)) {
+    win_focus(r, (val *[]){ v_num(r->a, (double)(intptr_t)forward) });
+    nap(r, 0.15);
+  }
+  shown = 1;
+  r->trap = &caught;
+  if (!setjmp(caught))
+    out = fn(r, a);
+  else
+    failed = 1;
+  r->trap = outer;
+  shown = 0;
+  HWND after = GetForegroundWindow();
+  val *app = after ? part(window_rec(r, after), "app") : NOTHING;
+  const char *name = app->k == V_TEXT && app->t.s[0] ? app->t.s : "The app";
+  buf step = { 0 };
+  buf_fmt(&step, "%c%s %s", toupper((unsigned char)name[0]), name + 1, why);
+  chat_line(r, "step", v_text(r->a, step.s, step.n));
+  buf_free(&step);
+  if (before && before != after && IsWindow(before) && !IsIconic(before))
+    win_focus(r, (val *[]){ v_num(r->a, (double)(intptr_t)before) });
+  if (failed) longjmp(*(jmp_buf *)outer, 1);
+  return out;
 }
 
 // Where headless keys go: the control with the keyboard in the window headless input last went to, never taking it.
 static HWND keys_to(run *r) {
   GUITHREADINFO g = { .cbSize = sizeof g };
   if (!worked || !IsWindow(worked))
-    fail(r, "phrase", "In the background, keys go to the window last clicked in, and there isn't one yet. Click in it "
-                      "first, or use input.type_into");
+    needs_front(r, NULL, "got the typing in front, since nothing had been clicked in the background yet");
   if (GetGUIThreadInfo(GetWindowThreadProcessId(worked, NULL), &g) && g.hwndFocus &&
       GetAncestor(g.hwndFocus, GA_ROOT) == worked)
     return g.hwndFocus;
@@ -1273,8 +1336,8 @@ static HWND window_at(run *r, HWND top, int x, int y, LPARAM *inside) {
   if (!h) fail(r, "phrase", "there is no window at %d, %d", x, y);
   top = GetAncestor(h, GA_ROOT);
   if (quiet) {
-    if (IsIconic(top)) fail(r, "phrase", "That window is minimized, so it can't be used in the background." TURN_OFF);
     worked = top;
+    if (IsIconic(top)) needs_front(r, top, "was minimized" FORWARD);
   } else if (top && top != GetForegroundWindow()) {
     keybd_event(VK_MENU, 0, 0, 0);
     keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0);
@@ -1344,7 +1407,7 @@ static void click(run *r, HWND top, int x, int y, int right, int times) {
 static int at(run *r, val *v) { return (int)num_of(r, v, NULL); }
 
 // Held down at the start, carried to the end and let go. Virtually, the window under the start gets it all as messages.
-// Never headless: input.drag_in fails first.
+// Never headless: input.drag_in is done in front first.
 static void drag(run *r, int x1, int y1, int x2, int y2) {
   glide(r, x1, y1, 0, 0);
   show_press(r, 0, 0);
@@ -1570,9 +1633,8 @@ static void press_keys(run *r, const char *combo) {
     p = e;
   }
   HWND to = NULL;
-  if (headless(r) && n > 1)
-    fail(r, "phrase", "Keys held together, like %s, can't be pressed in the background, since Windows lets only the app "
-                      "in front see ctrl, shift, alt and win held down." TURN_OFF, combo);
+  // Windows lets only the app in front see ctrl, shift, alt and win held down.
+  if (headless(r) && n > 1) needs_front(r, worked, "doesn't take %s in the background" FORWARD, combo);
   if (headless(r)) to = keys_to(r);
   for (int i = 0; i < n; i++) key(to, keys[i], 0);
   for (int i = n; i-- > 0;) key(to, keys[i], 1);
@@ -2078,9 +2140,7 @@ static val *input_move_along(run *r, val **a) {
 }
 
 static val *input_drag_in(run *r, val **a) {
-  if (headless(r))
-    fail(r, "phrase", "Dragging can't be done in the background, since it needs the window in front to follow the "
-                      "mouse." TURN_OFF);
+  if (headless(r)) needs_front(r, NULL, "doesn't take a drag in the background" FORWARD);
   val *w = ready(r, a[0]);
   POINT from = place(r, w, a[1], a[2]);
   POINT to = place(r, w, a[3], a[4]);
@@ -2378,6 +2438,11 @@ static val *look_open_windows(run *r, val **a) {
 
 void native_calls(void);   // native.c
 
+// Each call that needs a screen as a function of its own that runs it through or_in_front.
+#define CALL(group, needs, line, fn) static val *fn##_or_in_front(run *r, val **a) { return or_in_front(r, fn, a); }
+#include "calls_device.h"
+#undef CALL
+
 // Called once as the lingo client starts (onsay_lingo).
 void base_calls(void) {
   // Every position is a real pixel, on every monitor, whatever its scale.
@@ -2387,6 +2452,8 @@ void base_calls(void) {
 
 #define CALL(group, needs, line, fn) phrase_add(group, needs, line, fn);
 #include "calls_every.h"
+#undef CALL
+#define CALL(group, needs, line, fn) phrase_add(group, needs, line, fn##_or_in_front);
 #include "calls_device.h"
 #undef CALL
   native_calls();
