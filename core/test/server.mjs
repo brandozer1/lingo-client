@@ -450,6 +450,23 @@ const raw = (text) => new Promise((done) => {
   s.on('close', () => done(got.split('\r\n')[0]))
   s.on('error', () => done(''))
 })
+// Watches path on the port as a WebSocket, as an app does, each message pushed onto got as JSON: its status, and end.
+const watching = (path, headers, got) => new Promise((done) => {
+  const s = net.connect(WEB, '127.0.0.1', () => s.write(`GET ${path} HTTP/1.1\r\nHost: 127.0.0.1:${WEB}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n` +
+    `Sec-WebSocket-Key: ${crypto.randomBytes(16).toString('base64')}\r\nSec-WebSocket-Version: 13\r\n` + Object.entries(headers).map(([k, v]) => `${k}: ${v}\r\n`).join('') + '\r\n'))
+  let head = Buffer.alloc(0)
+  const first = (d) => {
+    head = Buffer.concat([head, d])
+    const end = head.indexOf('\r\n\r\n')
+    if (end < 0) return
+    s.off('data', first)
+    socketOf(s, (text) => got.push(JSON.parse(text)), () => {})
+    if (head.length > end + 4) s.emit('data', head.subarray(end + 4))
+    done({ status: Number(head.toString('latin1').split(' ')[1]), end: () => s.destroy() })
+  }
+  s.on('data', first)
+  s.on('error', () => done({ status: 0, end: () => {} }))
+})
 // Polls until check passes, or seconds pass, for what the core sees at its next look at its lingos folder.
 const soon = async (check, seconds = 8) => {
   for (const until = Date.now() + seconds * 1000; Date.now() < until; await pause(250)) if (await check()) return true
@@ -875,6 +892,22 @@ const WEB_CASES = [
     return list.status === 200 && list.json[0].session === onsayed.session && list.json[0].prompt === 'hello' && typeof list.json[0].status === 'string' && one.json.turns.length === 4 && one.json.turns[2].prompt === 'plan a trip' &&
       same(one.json.turns[2].questions, ['Where to?', 'When?']) && missing.status === 404
   }],
+  ['/onsay/screens: a screen opened by a to-do\x27s work is kept with it, and an app watching gets every screen, then each change', async () => {
+    const headers = { authorization: `Bearer ${onsayed.key}` }, got = [], dot = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+    const [refused, watch] = [await watching('/onsay/screens', { authorization: 'Bearer nope' }, []), await watching('/onsay/screens', headers, got)]
+    const r = await web('/onsay', { method: 'POST', body: { prompt: 'open a screen' }, headers }), id = Number(r.json?.text?.split(': ')[1])
+    const json = { ...headers, 'content-type': 'application/json' }
+    const shown = await web('/onsay/screen/show', { method: 'POST', body: { screen: id, picture: `data:image/png;base64,${dot}` }, headers: json })
+    const bad = await web('/onsay/screen/show', { method: 'POST', body: { screen: id, picture: 'hello' }, headers: json })
+    const listed = await web('/onsay/screens', { headers }), closed = await web(`/onsay/screens/${id}`, { method: 'DELETE', headers })
+    await soon(() => got.length >= 4, 3)
+    watch.end()
+    const mine = listed.json?.screens?.find((x) => x.screen === id)
+    return refused.status === 401 && watch.status === 101 && Array.isArray(got[0]?.screens) && id > 0 && shown.status === 200 && bad.status >= 400 &&
+      mine?.session === r.json.session && mine?.title === 'The tab' && mine?.picture === dot && closed.status === 200 &&
+      same(got[1].screens[0], { screen: id, session: r.json.session, title: 'The tab', picture: null }) && got[2].screens[0].picture === dot &&
+      same(got[3].screens[0], { screen: id, closed: true })
+  }],
   ['/onsay: the agent loop runs the calls Onsay decides on this computer, as me, each joining the log with what it gave, until the reply, and a follow-up carries the whole log', async () => {
     const headers = { authorization: `Bearer ${onsayed.key}` }, asked = 'remember milk then tell me what you kept'
     const r = await web('/onsay', { method: 'POST', body: { prompt: asked }, headers }), mine = decided.filter((m) => m.messages.findLast((x) => x.role === 'user').content === asked)
@@ -1138,6 +1171,7 @@ const decide = (m, link) => {
   if (!gave.length) link.send({ type: 'step', id: m.id, text: 'Understanding what you asked', depth: 0 })
   link.send({ type: 'decision', id: m.id, ...(/remember milk/.test(asked) ? [here('memo/remember', 'Keeps a thing under a name', { k: 'milk', v: 'oat milk' }), here('memo/recall', 'What was kept under a name', { k: 'milk' }), { reply: `You kept: ${gave[1]}` }][gave.length]
     : /use the desk/.test(asked) ? (gave.length ? { reply: `desk said: ${gave[0]}` } : { call: `desk.${HANDLE}/memo/recall`, does: 'What was kept under a name', where: 'on desk', inputs: { k: 'milk' } })
+    : /open a screen/.test(asked) ? (gave.length ? { reply: `opened: ${gave[0]}` } : here('onsay/screen/open', 'Opens a screen', { title: 'The tab' }))
     : /go on and on/.test(asked) ? here('memo/recall', 'What was kept under a name', { k: 'milk' })
     : /spin forever/.test(asked) ? here('checks/forever', 'Spins until it is stopped')
     : /plan a trip/.test(asked) ? { call: 'trip/plan', does: 'Plans a trip', where: 'on the web', inputs: {} }
@@ -1255,7 +1289,8 @@ const session = (link) => {
         same(schema(click), { type: 'object', properties: { words: { type: 'string' }, window: { type: ['integer', 'object', 'null'], format: 'window', default: null }, nth: { type: 'integer', default: 0 } }, required: ['words'] }) &&
         same(click.responses['200'].content['application/json'].schema, { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, text: { type: 'string' } }, required: ['x', 'y', 'text'] }))
       report('windows: one layer, input and look, the low level groups gone', ['look.screenshot', 'input.type', 'input.point_at', 'input.cursor'].every((id) => ids.includes(id)) &&
-        !ids.some((id) => /^(mouse|keyboard|screen|pointer)\.|^look\.see$|^input\.move_and_click$/.test(id)))
+        ['screen.open', 'screen.show', 'screen.close'].every((id) => ids.includes(id)) &&
+        !ids.some((id) => /^(mouse|keyboard|pointer)\.|^screen\.(read|click|move)|^look\.see$|^input\.move_and_click$/.test(id)))
     } else report('catalog: windows set aside where it can\'t load', !!entry('windows')?.error)
     report('catalog: settings are named in its manifest', same(entry('prefs')?.openapi['x-lingo'].settings.map((x) => x.name ?? x), ['units', 'name']) &&
       !entry('memo')?.openapi['x-lingo'].settings)

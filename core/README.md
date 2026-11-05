@@ -228,6 +228,8 @@ What the lingo client offers it back, from any thread:
 | `lingo_stop(id)` | stops the request whose id, as JSON, it is, between two steps or while it waits, with every request running inside its wait |
 | `lingo_wait(done, stop, seconds)`, `lingo_done(done)` | waits on the job thread, answering requests meanwhile, until `done` is set from any thread |
 | `lingo_ask(r, question, seconds)` | on the job thread, a question for the person, a record, waited for in `/.lingo/asks` until an app answers it, the run is stopped or `seconds` pass: its answer, `nothing` when none came, or `NULL` when no app is open to ask |
+| `lingo_job()` | on the job thread, the id, as JSON, of the request running now, or `NULL` outside one |
+| `lingo_push(path, text, n)` | one message for everything watching `path` on the port as a WebSocket. A GET to the port with `Upgrade: websocket` is answered like any other first, so every check applies, and on a 200 it stays open: what the lingo answered is the first message, then each push, until either side closes it. The onsay lingo streams `/onsay/screens` this way |
 | `lingo_policy(a, account, device, why)` | keeps the account's policy, with its version, as the one in force, its rules for this computer by `device`. Refused when older than the one kept. Gives an empty record, which callers report as `clamped`: there is nothing to clamp any more |
 | `lingo_setting`, `lingo_set` | one of a lingo's settings, as this computer keeps them |
 | `lingo_called(kind, address, ask, method, url, headers, body, n, got, error, stopped, ms)` | one request made, handed to every running native lingo with `called`: each `http.send` does, each socket is kept the same way, and a native lingo calls it for a request it makes itself |

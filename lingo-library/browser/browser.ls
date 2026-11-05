@@ -19,7 +19,8 @@
 // (dl.librewolf.net), one version pinned in release() and checked against its SHA-256, into a folder of its own with its
 // own profile, so it never touches the person's own browser. It drives it over WebDriver BiDi, the W3C standard built
 // into Firefox, through the core's socket phrases: each call starts it when it isn't running, opens a socket to it,
-// begins a session, does its work and ends the session, so later calls find the same browser and its tabs. Its settings,
+// begins a session, does its work and ends the session, so later calls find the same browser and its tabs. As each call
+// ends, the open tab is drawn on a screen, Browser, beside the to-do it works for, so the person can watch. Its settings,
 // in openapi.json beside it: show, to see its window, and folder, where it keeps LibreWolf.
 
 ////////// 1. THE BROWSER //////////
@@ -332,8 +333,16 @@ fn reached(p) {
   return s
 }
 
-// For browser's own use: the session ended, so the next call can begin one, and the socket closed.
+// For browser's own use: the open tab drawn on the Browser screen, then the session ended, so the next call can begin
+// one, and the socket closed. A computer without screens draws nothing.
 fn finish(b) {
+  try {
+    tabs = asked(b.socket, "browsingContext.getTree", {maxDepth: 0}).contexts
+    n = std.number(store.get("browser/tab") ?? 1) ?? 1
+    if n < 1 or n > std.length(tabs) {n = 1}
+    picture = asked(b.socket, "browsingContext.captureScreenshot", {context: tabs[n - 1].context}).data
+    screen.show(screen.open("Browser"), picture)
+  } catch e {}
   try {asked(b.socket, "session.end")} catch e {}
   socket.close(b.socket)
 }

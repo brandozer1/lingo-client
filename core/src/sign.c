@@ -2,6 +2,7 @@
 // base64 for both.
 //
 // 1. sha256(data, n, out)              the SHA-256 of bytes
+//    sha1(data, n, out)                the SHA-1 of bytes, only for a WebSocket's handshake
 // 2. base64(out, data, n)              bytes as base64, with its = at the end
 //    unbase64(s, n, out)               and back. 0 when it isn't base64
 // 3. ed25519_key(seed, key)            the public key of a private one, its 32 byte seed
@@ -9,6 +10,7 @@
 //    ed25519_check(key, msg, n, sig)   1 when key signed msg
 #include "lingo.h"
 #include "monocypher-ed25519.h"
+#include <stdlib.h>
 #include <string.h>
 
 ////////// 1. SHA-256 //////////
@@ -58,6 +60,57 @@ void sha256(const void *data, size_t n, unsigned char out[32]) {
   block(h, last);
   if (size == 128) block(h, last + 64);
   for (int i = 0; i < 32; i++) out[i] = (unsigned char)(h[i / 4] >> (24 - 8 * (i % 4)));
+}
+
+// SHA-1, only for a WebSocket's Sec-WebSocket-Accept, base64 of SHA-1 of its key and the protocol's own GUID.
+void sha1(const unsigned char *s, size_t n, unsigned char digest[20]) {
+  unsigned h[5] = { 0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0 };
+  size_t total = (n + 9 + 63) / 64 * 64;
+  unsigned char *m = calloc(total, 1);
+  memcpy(m, s, n);
+  m[n] = 0x80;
+  for (int i = 0; i < 8; i++) m[total - 1 - i] = (unsigned char)((unsigned long long)n * 8 >> (8 * i));
+  for (size_t at = 0; at < total; at += 64) {
+    unsigned w[80];
+    unsigned a = h[0];
+    unsigned b = h[1];
+    unsigned c = h[2];
+    unsigned d = h[3];
+    unsigned e = h[4];
+    for (int i = 0; i < 16; i++)
+      w[i] = (unsigned)m[at + 4 * i] << 24 | (unsigned)m[at + 4 * i + 1] << 16 | (unsigned)m[at + 4 * i + 2] << 8 |
+          m[at + 4 * i + 3];
+    for (int i = 16; i < 80; i++) {
+      unsigned x = w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16];
+      w[i] = x << 1 | x >> 31;
+    }
+    for (int i = 0; i < 80; i++) {
+      unsigned f = b ^ c ^ d;
+      unsigned k = 0xCA62C1D6;
+      if (i < 20) {
+        f = (b & c) | (~b & d);
+        k = 0x5A827999;
+      } else if (i < 40) {
+        k = 0x6ED9EBA1;
+      } else if (i < 60) {
+        f = (b & c) | (b & d) | (c & d);
+        k = 0x8F1BBCDC;
+      }
+      unsigned t = (a << 5 | a >> 27) + f + e + k + w[i];
+      e = d;
+      d = c;
+      c = b << 30 | b >> 2;
+      b = a;
+      a = t;
+    }
+    h[0] += a;
+    h[1] += b;
+    h[2] += c;
+    h[3] += d;
+    h[4] += e;
+  }
+  free(m);
+  for (int i = 0; i < 20; i++) digest[i] = (unsigned char)(h[i / 4] >> (24 - 8 * (i % 4)));
 }
 
 ////////// 2. BASE64 //////////

@@ -14,7 +14,8 @@
 //                                            value is JSON, or text as it is when it isn't JSON
 //
 // Threads: main (runs queued requests one at a time, in order, and looks at the lingos folder), listener (takes each
-// connection to the port), and one for each web request (reads it, queues it, and writes its answer). A native lingo
+// connection to the port), and one for each web request (reads it, queues it, and writes its answer, or keeps it open
+// as a stream). A native lingo
 // hands in requests from its own threads (lingo_hand). A request that waits, on lingo(...) or the person's answer, waits
 // on main, answering the requests that come meanwhile (lingo_wait), and so does one in a command, a web request or a
 // pause. A crash under a phrase ends only its request, with an error (pl_faults in run.c).
@@ -37,6 +38,7 @@ typedef struct message {
 } message;
 
 static pl_gate *gate;
+static pl_gate *watch;   // keeps watchers, and each frame whole on its connection
 static message *first, *last;
 static long requests;   // web requests taken from the port, for their ids
 static int port, outside;   // the port, and whether it is open to other computers, as core_look says
@@ -172,6 +174,93 @@ void host_stop(void) {
   if (id[0]) lingo_stop(id);
 }
 #endif
+
+////////// STREAMS //////////
+
+/* A web request asking to be a WebSocket, a GET with Upgrade: websocket, is answered like any other first, so every
+   check applies, and on a 200 it stays open: its body is the first message, then each the lingo at its path pushes
+   (lingo_push), until either side closes it. What the other side sends is not read, but its close. */
+typedef struct watcher {
+  struct watcher *next;
+  pl_socket *c;
+  char path[256];
+} watcher;
+static watcher *watchers;
+
+// One frame, unmasked, as a server sends it: text, opcode 1, or a ping, 9. Under watch.
+static int frame(pl_socket *c, int opcode, const char *text, size_t n) {
+  unsigned char head[10];
+  size_t k = 2;
+  head[0] = (unsigned char)(0x80 | opcode);
+  if (n < 126)
+    head[1] = (unsigned char)n;
+  else if (n < 65536) {
+    head[1] = 126;
+    head[2] = (unsigned char)(n >> 8);
+    head[3] = (unsigned char)n;
+    k = 4;
+  } else {
+    head[1] = 127;
+    for (int i = 0; i < 8; i++) head[2 + i] = (unsigned char)((unsigned long long)n >> (56 - 8 * i));
+    k = 10;
+  }
+  return pl_give(c, (const char *)head, k) && (!n || pl_give(c, text, n));
+}
+
+// lingo.h
+void lingo_push(const char *path, const char *text, size_t n) {
+  pl_enter(watch);
+  for (watcher *w = watchers; w; w = w->next)
+    if (!strcmp(w->path, path)) frame(w->c, 1, text, n);
+  pl_leave(watch);
+}
+
+// On the visitor's thread, until it closes: a quiet 10 seconds is asked about with a ping, and nothing coming back at
+// once means it closed.
+static void stream(pl_socket *c, const char *path, size_t n, const char *key, const char *first, size_t size) {
+  buf joined = { 0 };
+  buf accept = { 0 };
+  buf head = { 0 };
+  unsigned char digest[20];
+  char chunk[4096];
+  watcher w = { NULL, c, "" };
+  size_t len = 0;
+  while (len < n && path[len] != '?') len++;
+  snprintf(w.path, sizeof w.path, "%.*s", (int)len, path);
+  buf_fmt(&joined, "%s258EAFA5-E914-47DA-95CA-C5AB0DC85B11", key);
+  sha1((const unsigned char *)joined.s, joined.n, digest);
+  base64(&accept, digest, sizeof digest);
+  buf_fmt(&head,
+      "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+      "Sec-WebSocket-Accept: %s\r\n\r\n", accept.s);
+  pl_enter(watch);
+  int open = pl_give(c, head.s, head.n) && frame(c, 1, first, size);
+  if (open) {
+    w.next = watchers;
+    watchers = &w;
+  }
+  pl_leave(watch);
+  for (int got; open;) {
+    double began = pl_now();
+    if ((got = pl_take(c, chunk, sizeof chunk)) > 0) {
+      open = (chunk[0] & 0x0f) != 8;
+      continue;
+    }
+    pl_enter(watch);
+    open = pl_now() - began > 1 && frame(c, 9, "", 0);
+    pl_leave(watch);
+  }
+  pl_enter(watch);
+  for (watcher **at = &watchers; *at; at = &(*at)->next)
+    if (*at == &w) {
+      *at = w.next;
+      break;
+    }
+  pl_leave(watch);
+  buf_free(&joined);
+  buf_free(&accept);
+  buf_free(&head);
+}
 
 ////////// THE PORT //////////
 
@@ -311,7 +400,12 @@ static void visitor(void *arg) {
     val *r = json_parse(a, to.response.s ? to.response.s : "", to.response.n, NULL);
     val *status_ = rec_get(r, "status");
     val *body = rec_get(r, "body");
-    respond(v.c, status_ && status_->k == V_NUM ? (int)status_->n : 500, rec_get(r, "headers"), body ? body->t.s : "",
+    const char *key = text_or(headers, "sec-websocket-key", "");
+    int ok = status_ && status_->k == V_NUM && status_->n == 200;
+    if (ok && *key && method == 3 && !strncmp(in.s, "GET", 3) && strstr(text_or(headers, "upgrade", ""), "ebsocket"))
+      stream(v.c, in.s + method + 1, path, key, body ? body->t.s : "", body ? body->t.len : 0);
+    else
+      respond(v.c, status_ && status_->k == V_NUM ? (int)status_->n : 500, rec_get(r, "headers"), body ? body->t.s : "",
         body ? body->t.len : 0);
     buf_free(&to.response);
   }
@@ -392,6 +486,7 @@ int main(int argc, char **argv) {
   buf_free(&text);
   if (!s) return 1;
   gate = pl_gate_new();
+  watch = pl_gate_new();
   if (!core_begin(!verb)) return 1;
   if (verb && !strcmp(verb, "pack")) {
     if (argc < 4) {

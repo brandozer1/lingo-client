@@ -799,6 +799,10 @@ Conventions that matter in practice:
   lingo run for someone on another computer, through Onsay, sends its lines there instead, as steps of their call
   (`said` in `core/README.md`, Hooks), and each one tells Onsay the work is still going, so a long job that says a step
   every so often is never stopped as stuck.
+- **Screens:** `screen.open(title)` gives a new screen, a picture the person can watch beside the to-do the work is
+  for, `screen.show(screen, picture)` puts a PNG or JPEG on it as base64, a data: address too, replacing what it
+  showed, and `screen.close(screen)` takes it away. Onsay decides where it shows. It stays open until closed, by the
+  lingo or the person, so a lingo working in the background, like `browser`, shows what it does without being asked.
 - **Places:** `input`'s `click_in`, `move_in`, `drag_in`, `scroll_in` and `position_in` take a place in a window,
   wherever it is now, or on the main screen when the window is `nothing`.
 - **New windows:** a window builds its controls a moment after it appears, so wait for one with `controls.wait_for`

@@ -721,6 +721,8 @@ int lingo_said(const char *text) {
   return k < 64 && job.id && hooks[k].said(job.id, text);
 }
 
+const char *lingo_job(void) { return job.id; }
+
 /* A request of the lingo function, with what was around it (pl_context) and the function asking, never the answer
    itself. gives is what lingo.run says it wants, NULL for lingo.ways, which asks for the ways, nothing run. */
 static val *lingo_asked(run *r, val *ask, val *values, val *gives) {

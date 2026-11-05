@@ -10,9 +10,11 @@
 // 4. Policy         fetched, checked and handed to the core
 // 5. /onsay         prompts, with the prompt key, each worked through as the agent loop, and sessions: the whole log,
 //                   what a prompt is doing as it runs, and the person's answers to what it asks
-// 6. Signing in     sign_in, sign_out and status, from an app through /.lingo/call or from onsay-core <settings> call,
+// 6. Screens       what lingos draw on, screen.open, show and close, each kept with its to-do, and streamed to
+//                   anything watching /onsay/screens
+// 7. Signing in     sign_in, sign_out and status, from an app through /.lingo/call or from onsay-core <settings> call,
 //                   the account's devices, and where its trial of Onsay's AI stands
-// 7. onsay_lingo()  adds its phrases and the base calls, as the lingo client starts
+// 8. onsay_lingo()  adds its phrases and the base calls, as the lingo client starts
 #include "core.h"
 #include "platform.h"
 #include <stdio.h>
@@ -204,6 +206,21 @@ static unsigned char mine[32];   // this device's public key
 static buf catalog, pending, calls_;   // the catalog now, and decisions and calls not sent yet, a line each
 static wait *waits;
 static turn *turns_;
+// The screens lingos draw on, section 6.
+#define MOST_SCREENS 32
+static struct {
+  long id;
+  char session[72], title[128];
+  buf picture;
+} screens[MOST_SCREENS];
+static long screens_made;
+static struct {
+  char id[32], session[72];
+} calling[16];   // each request called hands in now, its id as JSON, and its turn's session
+static void screens_json(buf *b, int k);   // one screen, or every screen, as the stream says them
+static int screen_at(double id);
+static void screen_gone(int k, buf *said);
+static void screen_push(buf *said);
 static long ids;
 
 // One step of a turn, {text, depth}, a line of its steps, its newest STEPS kept. Inside the lock.
@@ -927,8 +944,17 @@ static val *called(run *r, turn *t, const char *address, val *inputs, const char
     val *headers = v_rec(a);
     rec_set(a, headers, "content-type", v_cstr(a, "application/json"));
     double began = pl_now();
+    int slot = 0;
+    pl_enter(lock);
+    while (slot < 15 && calling[slot].id[0]) slot++;
+    snprintf(calling[slot].id, sizeof calling[slot].id, "%s", id);
+    snprintf(calling[slot].session, sizeof calling[slot].session, "%s", t ? t->session : "");
+    pl_leave(lock);
     lingo_hand(request.s, request.n, "me", handed_back, h);
     lingo_wait(&h->done, r->stop, 600);
+    pl_enter(lock);
+    calling[slot].id[0] = 0;
+    pl_leave(lock);
     if (!h->done) {
       h->left = 1;
       lingo_stop(id);
@@ -1000,6 +1026,9 @@ static val *called(run *r, turn *t, const char *address, val *inputs, const char
      GET /onsay/sessions/<id>/live     {running, steps, questions}: while a prompt of it runs, its newest steps, each
                                        {text, depth}, and the questions it waits on the person for, or nothing
      POST /onsay/sessions/<id>/answers {answers}   the person's answers to those questions, in order
+     GET /onsay/screens                {screens}: every screen open, each {screen, session, title, picture}, and as a
+                                       WebSocket, each change after (section 6)
+     DELETE /onsay/screens/<screen>    the person closed it
    A prompt is the agent loop, Onsay's lingo function in the AI's seat: the whole log goes to Onsay, which decides the next
    step, a call with its inputs or the reply; the call runs here (called), and it and what it gave join the log, until
    the decision is the reply, at most MOST calls. In list mode each call is first the person's pick of the closest
@@ -1019,6 +1048,24 @@ static val *serve(run *r, val **v) {
   const char *auth = text_or(rec_get(q, "headers"), "authorization", "");
   if (!key_ || key_->k != V_TEXT || !key_->t.len || strncmp(auth, "Bearer ", 7) || strcmp(auth + 7, key_->t.s))
     return answer(r, 401, "That isn't this computer's prompt key. Send it as Authorization: Bearer <prompt key>");
+  if (!strcmp(method, "GET") && !strcmp(path, "/screens")) {
+    buf said = { 0 };
+    pl_enter(lock);
+    screens_json(&said, -1);
+    pl_leave(lock);
+    val *got = json_parse(a, said.s, said.n, NULL);
+    buf_free(&said);
+    return got;
+  }
+  if (!strcmp(method, "DELETE") && !strncmp(path, "/screens/", 9)) {
+    buf said = { 0 };
+    pl_enter(lock);
+    int k = screen_at(atof(path + 9));
+    if (k >= 0) screen_gone(k, &said);
+    pl_leave(lock);
+    screen_push(&said);
+    return out;
+  }
   if (!strcmp(method, "GET") && !strcmp(path, "/sessions")) {
     val *keys = store(r, "store.keys", v_cstr(a, "onsay/sessions/"), NULL);
     val *held = store(r, "store.keys", v_cstr(a, "onsay/waiting/"), NULL);
@@ -1436,7 +1483,120 @@ static val *serve(run *r, val **v) {
   return out;
 }
 
-////////// 6. SIGNING IN //////////
+////////// 6. SCREENS //////////
+
+/* The screens lingos draw on, the newest MOST_SCREENS: each with the session of the to-do whose work opened it, found
+   from the request it runs in (calling), its title, and its picture, a PNG or JPEG as base64. Anything watching
+   /onsay/screens on the port as a WebSocket is given every screen, {screens}, then each change, {screens: [one]}, a
+   closed one as {screen, closed: true} (lingo_push). */
+// One screen, or every screen when k is -1, as the stream says them. Under lock.
+static void screens_json(buf *b, int k) {
+  buf_str(b, "{\"screens\":[");
+  for (int i = k < 0 ? 0 : k, first = 1; i < (k < 0 ? MOST_SCREENS : k + 1); i++) {
+    if (!screens[i].id) continue;
+    if (!first) buf_chr(b, ',');
+    first = 0;
+    buf_fmt(b, "{\"screen\":%ld,\"session\":", screens[i].id);
+    buf_json_str(b, screens[i].session, strlen(screens[i].session));
+    buf_str(b, ",\"title\":");
+    buf_json_str(b, screens[i].title, strlen(screens[i].title));
+    buf_str(b, ",\"picture\":");
+    if (screens[i].picture.n)
+      buf_json_str(b, screens[i].picture.s, screens[i].picture.n);
+    else
+      buf_str(b, "null");
+    buf_chr(b, '}');
+  }
+  buf_str(b, "]}");
+}
+
+// A screen taken away, by its place, told to everything watching. Under lock; pushed once it is let go, into said.
+static void screen_gone(int k, buf *said) {
+  buf_fmt(said, "{\"screens\":[{\"screen\":%ld,\"closed\":true}]}", screens[k].id);
+  buf_free(&screens[k].picture);
+  memset(&screens[k], 0, sizeof screens[k]);
+}
+
+// The place of an open screen, by its number, or -1. Under lock.
+static int screen_at(double id) {
+  for (int k = 0; k < MOST_SCREENS; k++)
+    if (screens[k].id && screens[k].id == (long)id) return k;
+  return -1;
+}
+
+static void screen_push(buf *said) {
+  if (said->n) lingo_push("/onsay/screens", said->s, said->n);
+  buf_free(said);
+}
+
+// screen.open(title): the session is the one of the turn whose call this request is, none for anything else. One of
+// that title open for the same session is given back, so a lingo called again and again in one to-do draws on one.
+static val *screen_open(run *r, val **a) {
+  const char *job = lingo_job();
+  const char *title = text_of(r, a[0])->t.s;
+  char session[72] = "";
+  buf said = { 0 };
+  int k = 0;
+  pl_enter(lock);
+  for (int i = 0; job && i < 16; i++)
+    if (!strcmp(calling[i].id, job)) snprintf(session, sizeof session, "%s", calling[i].session);
+  for (int i = 0; i < MOST_SCREENS; i++)
+    if (screens[i].id && !strcmp(screens[i].session, session) && !strncmp(screens[i].title, title, sizeof screens[i].title - 1)) {
+      long id = screens[i].id;
+      pl_leave(lock);
+      return v_num(r->a, (double)id);
+    }
+  for (int i = 0; i < MOST_SCREENS; i++)
+    if (!screens[i].id || (screens[k].id && screens[i].id < screens[k].id)) k = i;
+  if (screens[k].id) screen_gone(k, &said);
+  screens[k].id = ++screens_made;
+  snprintf(screens[k].title, sizeof screens[k].title, "%s", title);
+  snprintf(screens[k].session, sizeof screens[k].session, "%s", session);
+  long id = screens[k].id;
+  pl_leave(lock);
+  screen_push(&said);
+  pl_enter(lock);
+  k = screen_at((double)id);
+  if (k >= 0) screens_json(&said, k);
+  pl_leave(lock);
+  screen_push(&said);
+  return v_num(r->a, (double)id);
+}
+
+// screen.show(screen, picture): a data: address's base64 is taken as it is.
+static val *screen_show(run *r, val **a) {
+  const char *p = text_of(r, a[1])->t.s;
+  const char *comma = strchr(p, ',');
+  if (!strncmp(p, "data:", 5) && comma) p = comma + 1;
+  if (strncmp(p, "iVBORw0KGgo", 11) && strncmp(p, "/9j/", 4))
+    fail(r, "phrase", "A screen shows a PNG or JPEG picture, as base64");
+  if (strlen(p) > (4 << 20)) fail(r, "phrase", "That picture is more than 4 MB as base64, too big for a screen");
+  buf said = { 0 };
+  pl_enter(lock);
+  int k = screen_at(a[0]->n);
+  if (k >= 0) {
+    screens[k].picture.n = 0;
+    buf_str(&screens[k].picture, p);
+    screens_json(&said, k);
+  }
+  pl_leave(lock);
+  if (k < 0) fail(r, "phrase", "There's no screen %.0f open: it was closed, or never opened", a[0]->n);
+  screen_push(&said);
+  return NOTHING;
+}
+
+// screen.close(screen), and the person closing one (serve).
+static val *screen_close(run *r, val **a) {
+  buf said = { 0 };
+  pl_enter(lock);
+  int k = screen_at(a[0]->n);
+  if (k >= 0) screen_gone(k, &said);
+  pl_leave(lock);
+  screen_push(&said);
+  return NOTHING;
+}
+
+////////// 7. SIGNING IN //////////
 
 static int attempt,
     signing;   // the sign in now, by its number, so a newer one or signing out ends it; signing: it waits
@@ -1652,7 +1812,7 @@ static val *ai(run *r, val **v) {
   return said;
 }
 
-////////// 7. ITS PHRASES //////////
+////////// 8. ITS PHRASES //////////
 
 void base_calls(void);   // the calls every computer has, built for its platform: windows.c or linux.c
 
@@ -1690,5 +1850,14 @@ void onsay_lingo(void) {
   phrase_add("onsay", "net",
       "unshare(values: record) -> {version, policy, signed}: stops sharing with who, taking out every rule that names them",
       unshare);
+  phrase_add("screen", "none",
+      "open(title: text) -> whole: a new screen, a picture the person can watch beside the to-do this work is for, like "
+      "a browser tab working in the background. Onsay decides where it shows. It stays until closed. One of the same title "
+      "already open for that to-do is given back",
+      screen_open);
+  phrase_add("screen", "none",
+      "show(screen: whole, picture: text): puts a picture on a screen, a PNG or JPEG as base64, replacing what it showed",
+      screen_show);
+  phrase_add("screen", "none", "close(screen: whole): takes a screen away", screen_close);
   base_calls();
 }

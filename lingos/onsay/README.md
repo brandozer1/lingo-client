@@ -41,6 +41,8 @@ the wire*.
   | `GET /onsay/sessions/<session>` | `{session, turns}`, each turn `{prompt, text}` or `{prompt, questions}`, and `messages`, what its loop added to the log |
   | `GET /onsay/sessions/<session>/live` | `{running, steps, questions}`: while a prompt of it runs, its newest 100 steps in plain words, each `{text, depth}`, and the questions it waits on the person for, as a prompt's answer has them, or `null` |
   | `POST /onsay/sessions/<session>/answers` `{answers}` | the person's answers to those questions, in order. `{}`, or a 404 when nothing waits |
+  | `GET /onsay/screens` | `{screens}`: every screen open on this computer, each `{screen, session, title, picture}`, `session` the to-do whose work opened it, empty for anything else, and `picture` a PNG or JPEG as base64, or `null` until one is shown. Asked as a WebSocket, it stays open and gives each change after: `{screens: [one]}`, a closed one `{screen, closed: true}` |
+  | `DELETE /onsay/screens/<screen>` | `{}`: the person closed it |
 
 - **The agent loop.** Each prompt is the callback side of an agent loop, with Onsay's lingo function in the AI's seat
   (the onsay repo's `docs/lingo-function.md`, *The loop*):

@@ -169,6 +169,7 @@ val *text_of(run *r, val *x);                                           // any v
 
 // sign.c, on Monocypher. A key is 32 bytes, a private one its seed, and a signature 64.
 void sha256(const void *data, size_t n, unsigned char out[32]);
+void sha1(const unsigned char *s, size_t n, unsigned char digest[20]);
 void base64(buf *out, const void *data, size_t n);
 int unbase64(const char *s, size_t n, buf *out);   // 0 when it isn't base64
 void ed25519_key(const unsigned char seed[32], unsigned char key[32]);
@@ -227,6 +228,9 @@ void lingo_hook(const lingo_hooks *hooks);
      lingo_serves   1 in a lingo client that serves, whether or not the native lingo asking runs, 0 at the command line
      lingo_said     on the job thread: a line the running request says for the person, handed to the native lingo that
                     sends such lines on (said in lingo_hooks). 1 when it took it, else 0, and this computer shows it
+     lingo_job      on the job thread: the id, as JSON, of the request running now, or NULL outside one
+     lingo_push     one message for everything watching path on the port as a WebSocket, like an app watching
+                    /onsay/screens: what the lingo at that path answered its GET with came first (host.c, Streams)
      lingo_called   one request this lingo client made, handed to each running native lingo that keeps calls (called in
                     lingo_hooks) as {at, ms, kind, address, ask, request {method, url, path, headers, body}, response
                     {status, headers, body}, error, stopped}. kind is web, lingo or socket, got what pl_http gives, {status,
@@ -244,6 +248,8 @@ int lingo_set(const char *lingo, const char *key, val *value);
 const char *lingo_home(void);
 int lingo_serves(void);
 int lingo_said(const char *text);
+const char *lingo_job(void);
+void lingo_push(const char *path, const char *text, size_t n);
 void lingo_called(const char *kind, const char *address, const char *ask, const char *method, const char *url, val *headers,
     const char *body, size_t n, val *got, const char *error, int stopped, double ms);
 
