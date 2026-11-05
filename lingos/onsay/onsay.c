@@ -212,7 +212,20 @@ static struct {
   long id;
   char session[72], title[128];
   buf picture;
+  char at[128];   // a far one's: the computer that draws it, like desk.brandon, and its number there
+  long far;
 } screens[MOST_SCREENS];
+static struct {
+  char at[128];
+  long id;
+  int heard;
+} watching[8];   // the streams of far screens this computer watches through Onsay, one a computer, and whether each
+                 // has said its first message, which has every screen it keeps
+typedef struct streamed {
+  struct streamed *next;
+  char id[80], path[256];
+} streamed;
+static streamed *streams;   // streams Onsay asked of this computer for another of the account, each frame passed on
 static long screens_made;
 static struct {
   char id[32], session[72];
@@ -220,7 +233,11 @@ static struct {
 static void screens_json(buf *b, int k);   // one screen, or every screen, as the stream says them
 static int screen_at(double id);
 static void screen_gone(int k, buf *said);
+static void lines_sent(buf *b);   // each line sent down the link
 static void screen_push(buf *said);
+static void far_heard(val *id, const char *text, int closed);   // a message of a far computer's stream, or its end
+static void far_opened(const char *session, val *shown, buf *gone, buf *opened, buf *watch);
+static void far_check(buf *unwatch);   // streams with no screen left to watch, ended
 static long ids;
 
 // One step of a turn, {text, depth}, a line of its steps, its newest STEPS kept. Inside the lock.
@@ -277,6 +294,56 @@ static void answered(void *arg, const char *response, size_t n) {
   buf_free(&m);
 }
 
+// One message of a stream this computer serves another, passed on down the link as a frame of its request.
+static void relay(void *arg, const char *text, size_t n) {
+  streamed *s = arg;
+  buf m = { 0 };
+  buf_fmt(&m, "{\"type\":\"frame\",\"id\":%s,\"text\":", s->id);
+  buf_json_str(&m, text, n);
+  buf_chr(&m, '}');
+  send_(m.s, m.n);
+  buf_free(&m);
+}
+
+/* A stream Onsay asked for answered like any request, its answer the first message, and on a 200 kept open, each
+   message after a frame (relay), until Onsay says stop or the link drops. */
+static void opened(void *arg, const char *response, size_t n) {
+  streamed *s = arg;
+  arena *a = arena_new();
+  val *status = rec_get(json_parse(a, response, n, NULL), "status");
+  answered(NULL, response, n);
+  if (status && status->k == V_NUM && status->n == 200) {
+    pl_enter(lock);
+    s->next = streams;
+    streams = s;
+    pl_leave(lock);
+    lingo_watch(s->path, relay, s);
+  } else
+    free(s);
+  arena_free(a);
+}
+
+// The streams this computer serves others that match id, as JSON, or every one when id is NULL, ended.
+static void unstreamed(const char *id) {
+  streamed *gone = NULL;
+  pl_enter(lock);
+  for (streamed **at = &streams; *at;)
+    if (!id || !strcmp((*at)->id, id)) {
+      streamed *s = *at;
+      *at = s->next;
+      s->next = gone;
+      gone = s;
+    } else
+      at = &(*at)->next;
+  pl_leave(lock);
+  while (gone) {
+    streamed *s = gone;
+    gone = s->next;
+    lingo_unwatch(s);
+    free(s);
+  }
+}
+
 // A request this lingo hands itself, /onsay/resume and the prompts it runs again: whoever asked follows them in the list.
 static void ignored(void *arg, const char *response, size_t n) {}
 
@@ -320,7 +387,18 @@ static void request(arena *a, val *m, const char *text, size_t n) {
   rec_set(a, signed_, "sha256", v_text(a, sum64.s, sum64.n));
   double at = seconds_of(text_or(m, "at", NULL));
   double now = pl_now();
+  int stream = rec_get(m, "stream") && truthy(rec_get(m, "stream"));
   if ((!strcmp(as, "me") || !strcmp(as, "onsay")) && at > now - FRESH && at < now + FRESH &&
+      signed_by(signed_, rec_get(m, "signed"), NULL) && stream) {
+    streamed *s = calloc(1, sizeof *s);
+    buf j = { 0 };
+    const char *p = text_or(m, "path", "/");
+    buf_json(&j, rec_get(m, "id") ? rec_get(m, "id") : NOTHING);
+    snprintf(s->id, sizeof s->id, "%s", j.s);
+    snprintf(s->path, sizeof s->path, "%.*s", (int)strcspn(p, "?"), p);
+    buf_free(&j);
+    lingo_hand(text, n, as, opened, s);
+  } else if ((!strcmp(as, "me") || !strcmp(as, "onsay")) && at > now - FRESH && at < now + FRESH &&
       signed_by(signed_, rec_get(m, "signed"), NULL))
     lingo_hand(text, n, as, answered, NULL);
   else {
@@ -375,6 +453,7 @@ static void heard_(pl_link *l, const char *text, size_t n) {
   else if (!strcmp(type, "stop")) {
     buf j = { 0 };
     buf_json(&j, id ? id : NOTHING);
+    unstreamed(j.s);
     lingo_stop(j.s);
     buf_free(&j);
   } else if ((!strcmp(type, "lingo") || !strcmp(type, "decision")) && id && id->k == V_NUM) {
@@ -387,11 +466,24 @@ static void heard_(pl_link *l, const char *text, size_t n) {
     pl_leave(lock);
   } else if (!strcmp(type, "step") && id && id->k == V_NUM) {
     val *depth = rec_get(m, "depth");
+    val *shown = rec_get(m, "screen");
+    buf gone = { 0 };
+    buf made = { 0 };
+    buf watch = { 0 };
     pl_enter(lock);
     for (wait *w = waits; w; w = w->next)
-      if ((double)w->id == id->n && w->turn)
+      if ((double)w->id == id->n && w->turn) {
         step(w->turn, text_or(m, "text", ""), depth && depth->k == V_NUM ? depth->n : 0);
+        if (shown && shown->k == V_REC) far_opened(w->turn->session, shown, &gone, &made, &watch);
+      }
     pl_leave(lock);
+    screen_push(&gone);
+    screen_push(&made);
+    if (watch.n) send_(watch.s, watch.n);
+    buf_free(&watch);
+  } else if (!strcmp(type, "frame") && id && id->k == V_NUM) {
+    val *closed = rec_get(m, "closed");
+    far_heard(id, text_or(m, "text", ""), closed && truthy(closed));
   } else if (!strcmp(type, "policy"))
     policy_pull();
   else if (!strcmp(type, "pong")) {
@@ -456,6 +548,13 @@ static void connection(void *arg) {
       for (wait *w = waits; w; w = w->next) lingo_done(&w->done);
       pl_leave(lock);
       pl_free(l);
+      unstreamed(NULL);
+      for (int i = 0; i < 8; i++) {
+        pl_enter(lock);
+        long gone = watching[i].id;
+        pl_leave(lock);
+        if (gone) far_heard(v_num(a, (double)gone), "", 1);
+      }
       say("The connection to Onsay closed");
     }
     buf_free(&hello);
@@ -1027,7 +1126,8 @@ static val *called(run *r, turn *t, const char *address, val *inputs, const char
                                        {text, depth}, and the questions it waits on the person for, or nothing
      POST /onsay/sessions/<id>/answers {answers}   the person's answers to those questions, in order
      GET /onsay/screens                {screens}: every screen open, each {screen, session, title, picture}, and as a
-                                       WebSocket, each change after (section 6)
+                                       WebSocket, each change after (section 6). Another computer of the account
+                                       watches it as me, through Onsay, with no prompt key
      DELETE /onsay/screens/<screen>    the person closed it
    A prompt is the agent loop, Onsay's lingo function in the AI's seat: the whole log goes to Onsay, which decides the next
    step, a call with its inputs or the reply; the call runs here (called), and it and what it gave join the log, until
@@ -1046,7 +1146,8 @@ static val *serve(run *r, val **v) {
   const char *method = text_or(q, "method", "");
   const char *path = text_or(q, "path", "/");
   const char *auth = text_or(rec_get(q, "headers"), "authorization", "");
-  if (!key_ || key_->k != V_TEXT || !key_->t.len || strncmp(auth, "Bearer ", 7) || strcmp(auth + 7, key_->t.s))
+  int watched = !strcmp(method, "GET") && !strcmp(path, "/screens") && !strcmp(text_or(q, "caller", ""), "me");
+  if (!watched && (!key_ || key_->k != V_TEXT || !key_->t.len || strncmp(auth, "Bearer ", 7) || strcmp(auth + 7, key_->t.s)))
     return answer(r, 401, "That isn't this computer's prompt key. Send it as Authorization: Bearer <prompt key>");
   if (!strcmp(method, "GET") && !strcmp(path, "/screens")) {
     buf said = { 0 };
@@ -1060,10 +1161,13 @@ static val *serve(run *r, val **v) {
   if (!strcmp(method, "DELETE") && !strncmp(path, "/screens/", 9)) {
     buf said = { 0 };
     pl_enter(lock);
+    buf unwatch = { 0 };
     int k = screen_at(atof(path + 9));
     if (k >= 0) screen_gone(k, &said);
+    far_check(&unwatch);
     pl_leave(lock);
     screen_push(&said);
+    lines_sent(&unwatch);
     return out;
   }
   if (!strcmp(method, "GET") && !strcmp(path, "/sessions")) {
@@ -1512,7 +1616,7 @@ static void screens_json(buf *b, int k) {
 
 // A screen taken away, by its place, told to everything watching. Under lock; pushed once it is let go, into said.
 static void screen_gone(int k, buf *said) {
-  buf_fmt(said, "{\"screens\":[{\"screen\":%ld,\"closed\":true}]}", screens[k].id);
+  buf_fmt(said, "{\"screens\":[{\"screen\":%ld,\"closed\":true}]}\n", screens[k].id);
   buf_free(&screens[k].picture);
   memset(&screens[k], 0, sizeof screens[k]);
 }
@@ -1524,13 +1628,28 @@ static int screen_at(double id) {
   return -1;
 }
 
+// Each line of said pushed to everything watching /onsay/screens. Never under lock: a push may go down the link.
 static void screen_push(buf *said) {
-  if (said->n) lingo_push("/onsay/screens", said->s, said->n);
+  for (size_t at = 0, end; at < said->n; at = end + 1) {
+    for (end = at; end < said->n && said->s[end] != '\n'; end++) {}
+    if (end > at) lingo_push("/onsay/screens", said->s + at, end - at);
+  }
   buf_free(said);
 }
 
-// screen.open(title): the session is the one of the turn whose call this request is, none for anything else. One of
-// that title open for the same session is given back, so a lingo called again and again in one to-do draws on one.
+// Each line of b sent down the link to Onsay. Never under lock.
+static void lines_sent(buf *b) {
+  for (size_t at = 0, end; at < b->n; at = end + 1) {
+    for (end = at; end < b->n && b->s[end] != '\n'; end++) {}
+    if (end > at) send_(b->s + at, end - at);
+  }
+  buf_free(b);
+}
+
+/* screen.open(title): the session is the one of the turn whose call this request is, none for anything else. One of
+   that title open for the same session is given back, so a lingo called again and again in one to-do draws on one.
+   Opened for a request another computer asked for, through Onsay, it tells that computer, as a step with the screen,
+   so it shows it as its own (far_opened). */
 static val *screen_open(run *r, val **a) {
   const char *job = lingo_job();
   const char *title = text_of(r, a[0])->t.s;
@@ -1553,14 +1672,113 @@ static val *screen_open(run *r, val **a) {
   snprintf(screens[k].title, sizeof screens[k].title, "%s", title);
   snprintf(screens[k].session, sizeof screens[k].session, "%s", session);
   long id = screens[k].id;
+  buf told = { 0 };
+  if (job && strncmp(job, "\"port ", 6) && strncmp(job, "\"onsay ", 7)) {
+    buf_fmt(&told, "{\"type\":\"step\",\"id\":%s,\"text\":", job);
+    buf_str(&told, "\"Showing it on a screen\",\"screen\":{\"at\":");
+    char here[160];
+    snprintf(here, sizeof here, "%s.%s", device, handle);
+    buf_json_str(&told, here, strlen(here));
+    buf_fmt(&told, ",\"screen\":%ld,\"title\":", id);
+    buf_json_str(&told, title, strlen(title));
+    buf_str(&told, "}}");
+  }
   pl_leave(lock);
   screen_push(&said);
+  if (told.n) send_(told.s, told.n);
+  buf_free(&told);
   pl_enter(lock);
   k = screen_at((double)id);
   if (k >= 0) screens_json(&said, k);
   pl_leave(lock);
   screen_push(&said);
   return v_num(r->a, (double)id);
+}
+
+/* A far screen: one another computer drew for a to-do of this one, which said so in a step. It is kept here like any
+   other, with where it is drawn, and this computer watches that computer's /onsay/screens through Onsay, one stream a
+   computer, to show each picture as it comes. Under lock: what changes goes into gone and opened, to push, and the
+   stream to open into watch, to send. */
+static void far_opened(const char *session, val *shown, buf *gone, buf *opened, buf *watch) {
+  const char *at = text_or(shown, "at", "");
+  val *far = rec_get(shown, "screen");
+  int k = 0;
+  int w = 0;
+  if (!*at || strlen(at) >= sizeof watching[0].at || !far || far->k != V_NUM) return;
+  for (int i = 0; i < MOST_SCREENS; i++)
+    if (screens[i].id && !strcmp(screens[i].at, at) && screens[i].far == (long)far->n) return;
+  for (int i = 0; i < MOST_SCREENS; i++)
+    if (!screens[i].id || (screens[k].id && screens[i].id < screens[k].id)) k = i;
+  if (screens[k].id) screen_gone(k, gone);
+  screens[k].id = ++screens_made;
+  screens[k].far = (long)far->n;
+  snprintf(screens[k].session, sizeof screens[k].session, "%s", session);
+  snprintf(screens[k].title, sizeof screens[k].title, "%s", text_or(shown, "title", ""));
+  snprintf(screens[k].at, sizeof screens[k].at, "%s", at);
+  screens_json(opened, k);
+  buf_chr(opened, '\n');
+  while (w < 8 && strcmp(watching[w].at, at)) w++;
+  if (w < 8) return;
+  for (w = 0; w < 8 && watching[w].id; w++) {}
+  if (w == 8) return;
+  snprintf(watching[w].at, sizeof watching[w].at, "%s", at);
+  watching[w].id = ++ids;
+  watching[w].heard = 0;
+  buf_fmt(watch, "{\"type\":\"watch\",\"id\":%ld,\"to\":", watching[w].id);
+  buf_json_str(watch, at, strlen(at));
+  buf_str(watch, ",\"path\":\"/onsay/screens\"}");
+}
+
+/* A message of a far computer's stream: each screen it names that is shown here takes its title and picture, or goes
+   when it closed. Its first message has every screen it keeps, so one shown here and not in it closed meanwhile. A
+   stream that ended takes every screen it drew with it. */
+static void far_heard(val *id, const char *text, int closed) {
+  arena *a = arena_new();
+  val *list = closed ? NULL : rec_get(json_parse(a, text, strlen(text), NULL), "screens");
+  buf said = { 0 };
+  buf unwatch = { 0 };
+  int w = 0;
+  pl_enter(lock);
+  while (w < 8 && !(watching[w].id && watching[w].id == (long)id->n)) w++;
+  for (int i = 0; w < 8 && i < MOST_SCREENS; i++) {
+    if (!screens[i].id || strcmp(screens[i].at, watching[w].at)) continue;
+    val *mine = NULL;
+    for (size_t j = 0; list && list->k == V_LIST && j < list->l.n && !mine; j++) {
+      val *n = rec_get(list->l.v[j], "screen");
+      if (n && n->k == V_NUM && (long)n->n == screens[i].far) mine = list->l.v[j];
+    }
+    val *picture = rec_get(mine, "picture");
+    if (closed || (!mine && !watching[w].heard) || (mine && rec_get(mine, "closed")))
+      screen_gone(i, &said);
+    else if (mine) {
+      snprintf(screens[i].title, sizeof screens[i].title, "%s", text_or(mine, "title", screens[i].title));
+      if (picture && picture->k == V_TEXT) {
+        screens[i].picture.n = 0;
+        buf_add(&screens[i].picture, picture->t.s, picture->t.len);
+      }
+      screens_json(&said, i);
+      buf_chr(&said, '\n');
+    }
+  }
+  if (w < 8) watching[w].heard = 1;
+  if (w < 8 && closed) memset(&watching[w], 0, sizeof watching[w]);
+  far_check(&unwatch);
+  pl_leave(lock);
+  screen_push(&said);
+  lines_sent(&unwatch);
+  arena_free(a);
+}
+
+// Under lock: each stream with no screen of its computer left here, ended, its message to Onsay a line of unwatch.
+static void far_check(buf *unwatch) {
+  for (int w = 0; w < 8; w++) {
+    int left = 0;
+    for (int i = 0; watching[w].id && i < MOST_SCREENS && !left; i++)
+      left = screens[i].id && !strcmp(screens[i].at, watching[w].at);
+    if (!watching[w].id || left) continue;
+    buf_fmt(unwatch, "{\"type\":\"unwatch\",\"id\":%ld}\n", watching[w].id);
+    memset(&watching[w], 0, sizeof watching[w]);
+  }
 }
 
 // screen.show(screen, picture): a data: address's base64 is taken as it is.
@@ -1574,6 +1792,10 @@ static val *screen_show(run *r, val **a) {
   buf said = { 0 };
   pl_enter(lock);
   int k = screen_at(a[0]->n);
+  if (k >= 0 && screens[k].at[0]) {
+    pl_leave(lock);
+    fail(r, "phrase", "Screen %.0f is drawn on %s, so it can only be shown there", a[0]->n, screens[k].at);
+  }
   if (k >= 0) {
     screens[k].picture.n = 0;
     buf_str(&screens[k].picture, p);

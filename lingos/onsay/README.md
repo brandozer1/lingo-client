@@ -30,6 +30,11 @@ the wire*.
   `lingo`, `response`, `decide`, `stop`, `applied`, `log`) and each call to Onsay's API, as `{type: "api", method, path, body}`.
 - **Signed requests** from other devices are checked by the lingo client, each signer's key looked up on Onsay's
   `/resolve` with Onsay's statement on it, and kept 5 minutes.
+- **Screens drawn elsewhere.** A run another computer asked for, through Onsay, that opens a screen says so in a
+  step, `{type: "step", id, text, screen: {at, screen, title}}`. That computer shows it with its own to-do and watches
+  this one's `/onsay/screens` through Onsay, `{type: "watch", id, to, path}`, each message coming back as a `frame`,
+  until no screen of it is left, `{type: "unwatch", id}`. Asked for a stream, a `request` with `stream`, this one
+  answers it, then sends each message pushed to its path as `{type: "frame", id, text}` until Onsay says `stop`.
 - **`/onsay`**, reached by the account's own devices and by Onsay, takes prompts with its prompt key, its secret setting
   `prompt_key`, made on its first start, as `Authorization: Bearer <prompt key>`:
 
@@ -41,7 +46,7 @@ the wire*.
   | `GET /onsay/sessions/<session>` | `{session, turns}`, each turn `{prompt, text}` or `{prompt, questions}`, and `messages`, what its loop added to the log |
   | `GET /onsay/sessions/<session>/live` | `{running, steps, questions}`: while a prompt of it runs, its newest 100 steps in plain words, each `{text, depth}`, and the questions it waits on the person for, as a prompt's answer has them, or `null` |
   | `POST /onsay/sessions/<session>/answers` `{answers}` | the person's answers to those questions, in order. `{}`, or a 404 when nothing waits |
-  | `GET /onsay/screens` | `{screens}`: every screen open on this computer, each `{screen, session, title, picture}`, `session` the to-do whose work opened it, empty for anything else, and `picture` a PNG or JPEG as base64, or `null` until one is shown. Asked as a WebSocket, it stays open and gives each change after: `{screens: [one]}`, a closed one `{screen, closed: true}` |
+  | `GET /onsay/screens` | `{screens}`: every screen open on this computer, each `{screen, session, title, picture}`, `session` the to-do whose work opened it, empty for anything else, and `picture` a PNG or JPEG as base64, or `null` until one is shown. Asked as a WebSocket, it stays open and gives each change after: `{screens: [one]}`, a closed one `{screen, closed: true}`. Another computer of the account watches it as `me`, through Onsay, with no prompt key |
   | `DELETE /onsay/screens/<screen>` | `{}`: the person closed it |
 
 - **The agent loop.** Each prompt is the callback side of an agent loop, with Onsay's lingo function in the AI's seat

@@ -231,6 +231,9 @@ void lingo_hook(const lingo_hooks *hooks);
      lingo_job      on the job thread: the id, as JSON, of the request running now, or NULL outside one
      lingo_push     one message for everything watching path on the port as a WebSocket, like an app watching
                     /onsay/screens: what the lingo at that path answered its GET with came first (host.c, Streams)
+     lingo_watch    a native lingo watching path the same way, each message handed to send with arg, like the onsay
+                    lingo passing a stream on to another computer. lingo_unwatch(arg) ends it, after which send is
+                    never called with arg again
      lingo_called   one request this lingo client made, handed to each running native lingo that keeps calls (called in
                     lingo_hooks) as {at, ms, kind, address, ask, request {method, url, path, headers, body}, response
                     {status, headers, body}, error, stopped}. kind is web, lingo or socket, got what pl_http gives, {status,
@@ -250,6 +253,8 @@ int lingo_serves(void);
 int lingo_said(const char *text);
 const char *lingo_job(void);
 void lingo_push(const char *path, const char *text, size_t n);
+void lingo_watch(const char *path, void (*send)(void *arg, const char *text, size_t n), void *arg);
+void lingo_unwatch(void *arg);
 void lingo_called(const char *kind, const char *address, const char *ask, const char *method, const char *url, val *headers,
     const char *body, size_t n, val *got, const char *error, int stopped, double ms);
 

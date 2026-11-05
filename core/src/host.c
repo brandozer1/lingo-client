@@ -182,7 +182,9 @@ void host_stop(void) {
    (lingo_push), until either side closes it. What the other side sends is not read, but its close. */
 typedef struct watcher {
   struct watcher *next;
-  pl_socket *c;
+  pl_socket *c;   // a connection to the port, or NULL for a native lingo's (lingo_watch)
+  void (*send)(void *arg, const char *text, size_t n);
+  void *arg;
   char path[256];
 } watcher;
 static watcher *watchers;
@@ -211,7 +213,37 @@ static int frame(pl_socket *c, int opcode, const char *text, size_t n) {
 void lingo_push(const char *path, const char *text, size_t n) {
   pl_enter(watch);
   for (watcher *w = watchers; w; w = w->next)
-    if (!strcmp(w->path, path)) frame(w->c, 1, text, n);
+    if (strcmp(w->path, path))
+      continue;
+    else if (w->c)
+      frame(w->c, 1, text, n);
+    else
+      w->send(w->arg, text, n);
+  pl_leave(watch);
+}
+
+// lingo.h
+void lingo_watch(const char *path, void (*send)(void *arg, const char *text, size_t n), void *arg) {
+  watcher *w = calloc(1, sizeof *w);
+  w->send = send;
+  w->arg = arg;
+  snprintf(w->path, sizeof w->path, "%s", path);
+  pl_enter(watch);
+  w->next = watchers;
+  watchers = w;
+  pl_leave(watch);
+}
+
+// lingo.h
+void lingo_unwatch(void *arg) {
+  pl_enter(watch);
+  for (watcher **at = &watchers; *at; at = &(*at)->next)
+    if (!(*at)->c && (*at)->arg == arg) {
+      watcher *gone = *at;
+      *at = gone->next;
+      free(gone);
+      break;
+    }
   pl_leave(watch);
 }
 
@@ -223,7 +255,7 @@ static void stream(pl_socket *c, const char *path, size_t n, const char *key, co
   buf head = { 0 };
   unsigned char digest[20];
   char chunk[4096];
-  watcher w = { NULL, c, "" };
+  watcher w = { NULL, c, NULL, NULL, "" };
   size_t len = 0;
   while (len < n && path[len] != '?') len++;
   snprintf(w.path, sizeof w.path, "%.*s", (int)len, path);

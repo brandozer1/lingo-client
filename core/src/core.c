@@ -2554,6 +2554,7 @@ void core_serve(const char *text, size_t n, const char *given, buf *out) {
       rec_set(a, request, "headers", headers);
       rec_set(a, request, "body", body);
       rec_set(a, request, "json", problem ? NOTHING : parsed);
+      rec_set(a, request, "caller", v_cstr(a, c.here ? "this computer" : c.name));
       list_push(a, values, request);
     } else {
       call.n = 0;

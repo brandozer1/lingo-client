@@ -908,6 +908,40 @@ const WEB_CASES = [
       same(got[1].screens[0], { screen: id, session: r.json.session, title: 'The tab', picture: null }) && got[2].screens[0].picture === dot &&
       same(got[3].screens[0], { screen: id, closed: true })
   }],
+  ['/onsay/screens: Onsay asks for the stream for another computer of the account, as me with no prompt key: every screen, then each change as a frame, until a stop', async (send) => {
+    const json = { authorization: `Bearer ${onsayed.key}`, 'content-type': 'application/json' }
+    frames.length = 0
+    const r = await send('/onsay/screens', undefined, { stream: true })
+    const opened = await web('/onsay/screen/open', { method: 'POST', body: { title: 'Far' }, headers: json })
+    await soon(() => frames.length >= 1, 3)
+    linkNow.send({ type: 'stop', id: r.id })
+    await pause(300)
+    const before = frames.length
+    await web(`/onsay/screens/${opened.json}`, { method: 'DELETE', headers: json })
+    await pause(500)
+    return r.status === 200 && Array.isArray(r.json?.screens) && frames[0]?.id === r.id && JSON.parse(frames[0].text).screens[0]?.title === 'Far' &&
+      before >= 1 && frames.length === before
+  }],
+  ['/onsay/screens: a screen another computer opened for a to-do here shows as its own, watched through Onsay, each picture as it comes, gone when it closes there', async () => {
+    const headers = { authorization: `Bearer ${onsayed.key}` }
+    watched.length = 0
+    deskOnline = true
+    deskScreen = { at: `desk.${HANDLE}`, screen: 7, title: 'Desk tab' }
+    const r = await web('/onsay', { method: 'POST', body: { prompt: 'use the desk' }, headers })
+    deskScreen = null
+    deskOnline = false
+    await soon(() => watched.length >= 1, 3)
+    const w = watched[0] ?? {}
+    linkNow.send({ type: 'frame', id: w.id, text: JSON.stringify({ screens: [{ screen: 7, session: '', title: 'Desk tab', picture: DOT }, { screen: 9, session: '', title: 'Not ours', picture: null }] }) })
+    await pause(300)
+    const listed = (await web('/onsay/screens', { headers })).json?.screens ?? []
+    const shown = listed.find((x) => x.title === 'Desk tab')
+    linkNow.send({ type: 'frame', id: w.id, text: JSON.stringify({ screens: [{ screen: 7, closed: true }] }) })
+    await soon(() => watched.length >= 2, 3)
+    const after = (await web('/onsay/screens', { headers })).json?.screens ?? []
+    return w.type === 'watch' && w.to === `desk.${HANDLE}` && w.path === '/onsay/screens' && shown?.session === r.json?.session && shown?.picture === DOT &&
+      !listed.some((x) => x.title === 'Not ours') && !after.some((x) => x.title === 'Desk tab') && watched[1]?.type === 'unwatch' && watched[1]?.id === w.id
+  }],
   ['/onsay: the agent loop runs the calls Onsay decides on this computer, as me, each joining the log with what it gave, until the reply, and a follow-up carries the whole log', async () => {
     const headers = { authorization: `Bearer ${onsayed.key}` }, asked = 'remember milk then tell me what you kept'
     const r = await web('/onsay', { method: 'POST', body: { prompt: asked }, headers }), mine = decided.filter((m) => m.messages.findLast((x) => x.role === 'user').content === asked)
@@ -1106,6 +1140,10 @@ const LINGO = [
   [/^trip\/plan$/, () => ({ questions: ['Where to?', 'When?'] })],
 ]
 let deskOnline = false   // the account's computer desk, off until a test turns it on
+let deskScreen = null   // a screen desk says it opened, as a step, as it answers a call
+let linkNow = null   // the core's connection now
+const frames = [], watched = []   // the frames of streams the core serves, and the streams it asks to watch and stop
+const DOT = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
 const answer = async (m, send) => {
   asked = m
   every.push(m)
@@ -1247,6 +1285,7 @@ const report = (name, ok, more = '', ms) => {
 let next = 0
 const session = (link) => {
   const waiting = new Map()
+  linkNow = link
   /* A request down the connection, the account's own unless more says otherwise: as "me", at now, and signed by Onsay
      over {as, at, device, id, method, path, sha256}, unless more gives its own. Its response, its body read as JSON too. */
   const send = (path, values, more = {}) => new Promise((done) => {
@@ -1341,7 +1380,11 @@ const session = (link) => {
         process.exit(failed ? 1 : 0)
       }
     } else if (m.type === 'response') waiting.get(m.id)?.(m)
-    else if (m.type === 'lingo' && 'id' in m) answer(m, send).then((a) => link.send({ type: 'lingo', id: m.id, ...a }))
+    else if (m.type === 'lingo' && 'id' in m) {
+      if (deskScreen && m.address?.startsWith('desk.')) link.send({ type: 'step', id: m.id, text: 'Showing it on a screen', screen: deskScreen })
+      answer(m, send).then((a) => link.send({ type: 'lingo', id: m.id, ...a }))
+    } else if (m.type === 'frame') frames.push(m)
+    else if (m.type === 'watch' || m.type === 'unwatch') watched.push(m)
     else if (m.type === 'decide') decide(m, link)
     else if (m.type === 'applied') applied.push(m)
     else if (m.type === 'log') logged.push(...m.entries)

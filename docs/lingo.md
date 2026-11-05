@@ -545,9 +545,10 @@ fn serve(request) {
 }
 ```
 
-`request` is `{method, path, query, headers, body, json}`: `path` is the part after its route, starting with `/`,
-`query` a record, `headers` a record by lower case name, `body` text, and `json` the body read as JSON when it is
-JSON, else nothing. What serve gives is the answer: a record with a number `status` is `{status, headers, body}`, its
+`request` is `{method, path, query, headers, body, json, caller}`: `path` is the part after its route, starting with
+`/`, `query` a record, `headers` a record by lower case name, `body` text, `json` the body read as JSON when it is
+JSON, else nothing, and `caller` who asked as the log names them: `this computer`, `me`, `onsay`, a signer or
+`ip <address>`. What serve gives is the answer: a record with a number `status` is `{status, headers, body}`, its
 body text, or written as JSON when it isn't text, and anything else is the body of a 200, as text when it is text and
 as JSON when it isn't. A lingo without `serve` is called function by function, `POST /memo/recall` with its values as a
 JSON record by name, `{"k": "milk"}`, or a list in order, or `GET /memo/recall?k=milk`, answered with the function's
