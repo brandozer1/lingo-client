@@ -350,8 +350,8 @@ static void heard_(pl_link *l, const char *text, size_t n) {
       flush(&calls_, "calls", "calls");
       pl_leave(lock);
       say("Signed in. This computer is %s.%s", device, handle);
-      val *version = rec_get(m, "policy");
-      if (version && version->k == V_NUM && version->n > 0) policy_pull();
+      // Always, the default too: the rules in force here are only ever the account's, as Onsay signed them.
+      policy_pull();
     }
   } else if (!strcmp(type, "request") && ready)
     request(a, m, text, n);
