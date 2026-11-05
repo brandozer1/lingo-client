@@ -6,7 +6,9 @@
   "x-lingo": {
     "settings": [
       { "name": "token", "title": "Sign in", "about": "This computer's sign in to Onsay, kept by onsay-core <settings> call onsay.sign_in or by the Onsay app.", "secret": true },
-      { "name": "prompt_key", "title": "Prompt key", "about": "What a program sends as Authorization: Bearer <prompt key> to prompt this computer at /onsay. Made on its first start.", "secret": true }
+      { "name": "prompt_key", "title": "Prompt key", "about": "What a program sends as Authorization: Bearer <prompt key> to prompt this computer at /onsay. Made on its first start.", "secret": true },
+      { "name": "headless", "title": "Work in the background", "about": "true: clicks and typing go to apps in the background, nothing on screen moves and no window comes to the front. Off unless set. Set with input.modes." },
+      { "name": "no_follow", "title": "Hide where he clicks", "about": "true: no pointer or ring goes to where he clicks or types, and the chat stays open. On unless set to false. Set with input.modes." }
     ]
   }
 }

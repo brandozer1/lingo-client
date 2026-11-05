@@ -751,7 +751,7 @@ far. The one lingo every install ships beside them is `agent`, from `lingo-libra
   | `commands`  | `run`, `start`, `output`, `running`, `stop`                          |
   | `notify`    | `show`                                                               |
   | `panel`     | `show`, `hide`: a small window of Onsay's own showing a page of HTML |
-  | `input`     | the mouse and keyboard the way a person uses them, through Onsay's own pointer: `cursor`, `click_text`, `click_on`, `type_into`, `type`, `paste`, `shortcut`, `type_lines`, `scroll_to_text`, `wait_for_text`, `copy_all`, `point_text`, `point_on`, `point_at`, `stop_pointing`, `click_in`, `move_in`, `drag_in`, `scroll_in`, `position_in` |
+  | `input`     | the mouse and keyboard the way a person uses them, through Onsay's own pointer: `cursor`, `modes`, `click_text`, `click_on`, `type_into`, `type`, `paste`, `shortcut`, `type_lines`, `scroll_to_text`, `wait_for_text`, `copy_all`, `point_text`, `point_on`, `point_at`, `stop_pointing`, `click_in`, `move_in`, `drag_in`, `scroll_in`, `position_in` |
   | `look`      | the screen read: `screenshot`, `elements`, `overview`, `focused`, `page`, `lines`, `buttons`, `fields`, `near`, `find_text`, `open_windows` |
   | `chat`      | the person's Onsay chat on this computer, for any lingo running for them: `ask`, `say`, `step` |
 
@@ -762,9 +762,20 @@ Conventions that matter in practice:
 - **Paths:** write them with `/`, as in `"~/notes/today.txt"`, so text never needs escapes. A path may start with `~`
   (home) or `downloads`, `desktop` or `documents`, which on Windows are found even when they've been moved. Any
   other path that doesn't start at a drive starts at the person's home.
-- **Onsay's pointer:** every phrase that clicks, moves, drags, scrolls, presses, types, pastes or fills shows it, with
-  no asking: his arrow glides there and a click ripples, and where he types it is a text cursor that ticks while the
-  keys go in. The Windows app draws it from the lines of JSON the base calls write on the lingo client's output.
+- **Onsay's pointer:** with no follow off, every phrase that clicks, moves, drags, scrolls, presses, types, pastes or
+  fills shows it, with no asking: his arrow glides there and a click ripples, and where he types it is a text cursor
+  that ticks while the keys go in. The Windows app draws it from the lines of JSON the base calls write on the lingo
+  client's output.
+- **How input acts:** `input.modes(headless, no_follow)` says it, or changes either, and it is kept until changed again,
+  as two of the onsay lingo's settings. No follow, on at first: no pointer or ring goes to where he acts, so the Windows
+  app shows nothing of it and its chat stays open. Headless, off at first: nothing on screen moves. Clicks and keys go to
+  the app in the background, as UI Automation and window messages, no window comes to the front and the person's mouse
+  and keyboard are never taken, whatever `input.cursor` says. `controls` press, fill, toggle, pick and scroll and
+  `input` click_text, click_on, click_in, scroll_in and scroll_to_text work that way; type_into fills the box the way
+  `controls.fill` does; type, type_lines, paste and a single key in shortcut go to the window last clicked in; copy_all
+  reads the text instead of copying it. What can't be done that way fails saying so and that turning headless off lets
+  it work: a drag, keys held together like ctrl+s, a minimized window, a box that only takes typing in front. Some apps
+  ignore input in the background without saying so, which no call can tell.
 - **The chat:** `chat.ask(questions, seconds=120)` asks the person and waits for their answers, so the work goes on with
   them, the way an AI asks mid-turn: `answers = chat.ask([{question: "Which one?", choices: ["Rome", "Oslo"]}, "When?"])`
   gives `["Rome", "May"]`, each question text, typed, or `{question, choices}`, picked, a text alone one question. It is

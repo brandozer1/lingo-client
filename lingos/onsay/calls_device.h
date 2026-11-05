@@ -28,17 +28,23 @@ CALL("panel", "none", "show(html: html, title: text=\"\", width: number=480, hei
 CALL("panel", "none", "hide(): takes the window away", panel_hide)
 CALL("input", "none", "cursor(how: text=nothing) -> text: says which pointer Onsay clicks with, virtual or real, or switches it. It moves "
      "and clicks nothing. virtual, the default, never touches the user's mouse, and its clicks may be ignored by browsers, games "
-     "and some apps. real moves and clicks the real mouse and works everywhere. Given how, it changes until changed again", mouse_mode)
+     "and some apps. real moves and clicks the real mouse and works everywhere. Given how, it changes until changed again. "
+     "Headless, in input.modes, never uses the real mouse", mouse_mode)
+CALL("input", "none", "modes(headless: bool=nothing, no_follow: bool=nothing) -> {headless: bool, no_follow: bool}: says how Onsay's "
+     "input acts, or changes it, kept until changed again. It moves and clicks nothing. headless, off by default: nothing on screen "
+     "moves, clicks and keys go to the app in the background, no window comes to the front and the user's mouse and keyboard "
+     "are never taken; some apps ignore that, and what can't be done that way fails saying so. no_follow, on by default: no "
+     "pointer or ring goes to where Onsay clicks or types, and the chat stays open while he works", input_modes)
 CALL("input", "screen.act, screen.read", "click_text(words: text, window: window=nothing, nth: whole=0) -> {x: number, y: number, text: text}: rings and clicks those words where "
      "they are on screen, read by OCR. nth picks a later one when they show more than once. Fails when they aren't there", input_click_text)
 CALL("input", "screen.act, screen.read", "click_on(window: window, match: record) -> " CONTROL ": rings and clicks the first control in the window "
      "matching {name,role,value}", input_click_on)
 CALL("input", "screen.act, screen.read", "type_into(window: window, match: record, text: text): clicks the control matching {name,role,value}, clears it and "
      "types text", input_type_into)
-CALL("input", "screen.act", "type(text: text): types it where the cursor is, a new line as enter", input_type)
+CALL("input", "screen.act", "type(text: text): types it where the cursor is, a new line as enter. Headless, into the window last clicked in", input_type)
 CALL("input", "screen.act, screen.read", "paste(text: text): puts text where the cursor is through the clipboard, fast for long text, then "
-     "gives the clipboard back what it had", input_paste)
-CALL("input", "screen.act", "shortcut(combo: combo, times: whole=1, gap: number=0.1): presses a combo like \"ctrl+s\", times over, gap seconds apart", input_shortcut)
+     "gives the clipboard back what it had. Headless, into the window last clicked in", input_paste)
+CALL("input", "screen.act", "shortcut(combo: combo, times: whole=1, gap: number=0.1): presses a combo like \"ctrl+s\", times over, gap seconds apart. Headless, only one key alone, like \"enter\"", input_shortcut)
 CALL("input", "screen.act", "type_lines(lines: [text]): types each line of a list, pressing enter after each", input_type_lines)
 CALL("input", "screen.act, screen.read", "scroll_to_text(words: text, window: window=nothing, tries: whole=10) -> {x: number, y: number, text: text}?: scrolls down until those "
      "words are on screen and gives where they are, or nothing", input_scroll_to_text)
@@ -46,7 +52,7 @@ CALL("input", "screen.read", "wait_for_text(words: text, window: window=nothing,
      "and gives where they are, or nothing when time runs out. Only for waiting on something to appear: it does nothing itself",
      input_wait_for_text)
 CALL("input", "screen.act, screen.read", "copy_all(window: window) -> text: brings the window to the front, selects everything in it and copies "
-     "it, and gives the text", input_copy_all)
+     "it, and gives the text. Headless, it reads the text instead and leaves the clipboard as it was", input_copy_all)
 CALL("input", "screen.read", "point_text(words: text, say: text=\"\", window: window=nothing, seconds: number=10) -> {x: number, y: number, w: number, h: number, text: text}: rings those words on screen "
      "and has Onsay beside them say say, to show the user something. Clicks nothing", input_point_text)
 CALL("input", "screen.read", "point_on(window: window, match: record, say: text=\"\", seconds: number=10) -> " CONTROL ": rings the control matching "
@@ -56,7 +62,7 @@ CALL("input", "none", "point_at(x: number, y: number, w: number, h: number, say:
 CALL("input", "none", "stop_pointing(): takes the ring away", show_clear)
 CALL("input", "screen.act, screen.read", "click_in(window: window, x: number, y: number, how: text=\"left\") -> {x: number, y: number}: clicks a place in a window, wherever the window "
      "is now: x, y from its top left in pixels, or between -1 and 1 a share of its size, 0.5 the middle, and below 0 back from its "
-     "right or bottom. how is left, double or right. window may be a match like {app}, brought to the front first", input_click_in)
+     "right or bottom. how is left, double or right. window may be a match like {app}, brought to the front first unless headless", input_click_in)
 CALL("input", "screen.act, screen.read", "move_in(window: window=nothing, x: number=0.5, y: number=0.5, seconds: number=0) -> {x: number, y: number}: moves the mouse pointer, gliding "
      "it to a place in a window, or on the screen with no window, the middle unless given. x, y the same way as click_in, at a "
      "hand's pace or over seconds", input_move_in)
@@ -64,7 +70,7 @@ CALL("input", "screen.act, screen.read", "move_along(points: [[number]], window:
      "places in turn, tracing a path or shape like a circle, each [x, y] the same way as click_in. At a hand's pace, or over seconds in all. "
      "Clicks nothing", input_move_along)
 CALL("input", "screen.act, screen.read", "drag_in(window: window, x1: number, y1: number, x2: number, y2: number): drags from one place in a window to another, the same way as "
-     "click_in", input_drag_in)
+     "click_in. Never headless", input_drag_in)
 CALL("input", "screen.act, screen.read", "scroll_in(window: window, amount: number, x: number=0.5, y: number=0.5) -> {x: number, y: number}: scrolls at a place in a window, the middle "
      "unless given, positive up", input_scroll_in)
 CALL("input", "screen.read", "position_in(window: window, x: number, y: number) -> {x: number, y: number}: the place on screen of a place in a window, without touching "

@@ -7,7 +7,8 @@
 // 2. window                   list, current, open, wait_for, focus, close, resize, move
 // 3. controls                 find, list, read, press, fill, toggle, pick, scroll, wait_for
 // 4. screen                   a picture of it, and its words by OCR
-// 5. pointer and keys         Onsay's pointer (virtual or real), clicks, drags, the wheel, rings, his panel, and typing
+// 5. pointer and keys         Onsay's pointer (virtual or real), how input acts (headless, no follow), clicks, drags, the
+//                             wheel, rings, his panel, and typing
 // 6. files                    exists, list, find, copy, move, delete: what is Windows' own about them
 // 7. clipboard, commands, notifications
 // 8. input                    the mouse and keyboard the way a person uses them: words on screen, controls by name, places in a window
@@ -675,9 +676,13 @@ static void *pattern(IUIAutomationElement *e, PATTERNID id, REFIID iid) {
   return p;
 }
 
-static void click(run *r, int x, int y, int right, int times);
+// The end of every failure of something that can't be done headless, see how input acts in section 5.
+#define TURN_OFF " Turning headless off with input.modes lets it work"
+
+static int headless(run *r);
+static void click(run *r, HWND top, int x, int y, int right, int times);
 static void glide(run *r, int x, int y, double seconds, int text);
-static void show_press(int right, int times);
+static void show_press(run *r, int right, int times);
 static void typing(run *r, IUIAutomationElement *e);
 static void type_text(run *r, const char *text);
 static void press_keys(run *r, const char *combo);
@@ -738,8 +743,8 @@ static val *ui_text(run *r, val **a) {
   return out;
 }
 
-// The control's own action (invoke, toggle, select, expand, or focus for a text box). 0 when it has none.
-static int act(IUIAutomationElement *e) {
+// The control's own action (invoke, toggle, select, expand, or with focus, focus for a text box). 0 when it has none.
+static int act(IUIAutomationElement *e, int focus) {
   IUIAutomationInvokePattern *inv = pattern(e, UIA_InvokePatternId, &IID_IUIAutomationInvokePattern);
   if (inv) {
     IUIAutomationInvokePattern_Invoke(inv);
@@ -768,7 +773,7 @@ static int act(IUIAutomationElement *e) {
   }
   CONTROLTYPEID type = 0;
   IUIAutomationElement_get_CurrentControlType(e, &type);
-  if (type == UIA_EditControlTypeId || type == UIA_DocumentControlTypeId || type == UIA_ComboBoxControlTypeId)
+  if (focus && (type == UIA_EditControlTypeId || type == UIA_DocumentControlTypeId || type == UIA_ComboBoxControlTypeId))
     return SUCCEEDED(IUIAutomationElement_SetFocus(e));
   return 0;
 }
@@ -781,15 +786,36 @@ static int middle(IUIAutomationElement *e, POINT *p) {
   return rc.right > rc.left && rc.bottom > rc.top;
 }
 
-// The hand goes to it and presses it: its own action where it has one, a click in its middle where it doesn't.
+/* The hand goes to it and presses it: its own action where it has one, a click in its middle where it doesn't. Headless,
+   the click goes to the window the control is in, found up its tree, wherever that window is. */
 static void press_element(run *r, IUIAutomationElement *e) {
   POINT p;
+  int quiet = headless(r);
   middle(e, &p);
   glide(r, p.x, p.y, 0, 0);
-  if (act(e))
-    show_press(0, 1);
-  else
-    click(r, p.x, p.y, 0, 1);
+  if (act(e, !quiet)) {
+    show_press(r, 0, 1);
+    return;
+  }
+  UIA_HWND own = NULL;
+  if (quiet) {
+    IUIAutomationTreeWalker *walk = NULL;
+    IUIAutomationElement *at = e;
+    IUIAutomationElement *up = NULL;
+    IUIAutomationElement_AddRef(at);
+    IUIAutomation_get_ControlViewWalker(uia, &walk);
+    while (at && !own) {
+      IUIAutomationElement_get_CurrentNativeWindowHandle(at, &own);
+      if (own || !walk || FAILED(IUIAutomationTreeWalker_GetParentElement(walk, at, &up))) break;
+      IUIAutomationElement_Release(at);
+      at = up;
+      up = NULL;
+    }
+    if (at) IUIAutomationElement_Release(at);
+    if (walk) IUIAutomationTreeWalker_Release(walk);
+    if (!own) fail(r, "phrase", "This control can't be pressed in the background." TURN_OFF);
+  }
+  click(r, own ? GetAncestor((HWND)own, GA_ROOT) : NULL, p.x, p.y, 0, 1);
 }
 
 static val *ui_press(run *r, val **a) {
@@ -814,6 +840,20 @@ static val *ui_fill(run *r, val **a) {
     if (SUCCEEDED(done)) return NOTHING;
   } else if (v)
     IUIAutomationValuePattern_Release(v);
+  // Headless, a box of its own window, as older apps have, is given its text as a message. Others can't be.
+  if (headless(r)) {
+    UIA_HWND own = NULL;
+    CONTROLTYPEID type = 0;
+    DWORD_PTR done = 0;
+    IUIAutomationElement_get_CurrentNativeWindowHandle(e, &own);
+    IUIAutomationElement_get_CurrentControlType(e, &type);
+    wchar_t *w = win_wide(text);
+    if (own && type == UIA_EditControlTypeId)
+      SendMessageTimeoutW((HWND)own, WM_SETTEXT, 0, (LPARAM)w, SMTO_ABORTIFHUNG, 2000, &done);
+    free(w);
+    if (!done) fail(r, "phrase", "This app doesn't take typing in this box in the background." TURN_OFF);
+    return NOTHING;
+  }
   IUIAutomationElement_SetFocus(e);
   press_keys(r, "ctrl+a");
   type_text(r, text);
@@ -826,7 +866,7 @@ static val *ui_toggle(run *r, val **a) {
   if (!t) fail(r, "phrase", "that control can't toggle");
   POINT p;
   if (middle(e, &p)) glide(r, p.x, p.y, 0, 0);
-  show_press(0, 1);
+  show_press(r, 0, 1);
   IUIAutomationTogglePattern_Toggle(t);
   IUIAutomationTogglePattern_Release(t);
   return NOTHING;
@@ -1089,7 +1129,13 @@ static void mouse(DWORD flags, DWORD data) {
   send_input(&in, 1);
 }
 
-static void key(WORD vk, int up) {
+// A key down or up, as input to whatever has the keyboard, or given to, as a message to that window in the background.
+static void key(HWND to, WORD vk, int up) {
+  if (to) {
+    LPARAM bits = 1 | (LPARAM)MapVirtualKeyW(vk, MAPVK_VK_TO_VSC) << 16;
+    PostMessageW(to, up ? WM_KEYUP : WM_KEYDOWN, vk, up ? bits | 0xC0000000 : bits);
+    return;
+  }
   INPUT in = { .type = INPUT_KEYBOARD };
   in.ki.wVk = vk;
   in.ki.dwFlags = up ? KEYEVENTF_KEYUP : 0;
@@ -1098,9 +1144,38 @@ static void key(WORD vk, int up) {
 
 /* The hand: Onsay's arrow, drawn by the app, glides along an eased curve to every place he acts. real_mode:
      0  virtual, the default: the user's mouse is never touched. UI Automation, else click messages (some apps ignore them)
-     1  real: the real mouse rides the same curve and clicks for real */
+     1  real: the real mouse rides the same curve and clicks for real
+   How input acts, set with input.modes and kept as two of the onsay lingo's settings, in home/settings/onsay.json:
+     headless   true: nothing on screen moves. Clicks and keys go to the app's controls in the background, as UI Automation
+                and window messages, no window comes to the front, and the real mouse is never used, whatever real_mode
+                says. What can't be done that way fails saying so (TURN_OFF). false, the default
+     no_follow  true, the default: no hand, ring or ripple goes to where he acts, so the app shows nothing of it, he stays
+                where he is and the chat stays open. false: the hand glides to every click and the app follows it */
 static int real_mode;
 static int hand_x, hand_y, hand_known;
+static HWND worked;   // the window headless input last went to, where headless keys go
+
+static int headless(run *r) {
+  val *v = lingo_setting(r->a, "onsay", "headless");
+  return v && v->k == V_BOOL && truthy(v);
+}
+
+static int following(run *r) {
+  val *v = lingo_setting(r->a, "onsay", "no_follow");
+  return v && v->k == V_BOOL && !truthy(v);
+}
+
+// Where headless keys go: the control with the keyboard in the window headless input last went to, never taking it.
+static HWND keys_to(run *r) {
+  GUITHREADINFO g = { .cbSize = sizeof g };
+  if (!worked || !IsWindow(worked))
+    fail(r, "phrase", "In the background, keys go to the window last clicked in, and there isn't one yet. Click in it "
+                      "first, or use input.type_into");
+  if (GetGUIThreadInfo(GetWindowThreadProcessId(worked, NULL), &g) && g.hwndFocus &&
+      GetAncestor(g.hwndFocus, GA_ROOT) == worked)
+    return g.hwndFocus;
+  return worked;
+}
 
 // One JSON line on stdout for the app that draws the hand and rings.
 static void show(buf *b) {
@@ -1110,14 +1185,16 @@ static void show(buf *b) {
   buf_free(b);
 }
 
-static void show_press(int right, int times) {
+static void show_press(run *r, int right, int times) {
+  if (!following(r)) return;
   buf b = { 0 };
   buf_fmt(&b, "{\"show\":\"press\",\"button\":\"%s\",\"times\":%d}", right ? "right" : "left", times);
   show(&b);
 }
 
 // Typing now, for the text cursor to tick. Sent again every moment it goes on.
-static void show_type(void) {
+static void show_type(run *r) {
+  if (!following(r)) return;
   buf b = { 0 };
   buf_str(&b, "{\"show\":\"type\"}");
   show(&b);
@@ -1130,8 +1207,11 @@ static void wait_ms(run *r, double ms) {
 
 // To x, y over seconds, or at a hand's pace (90 ms + 0.18 ms a pixel) when 0, as a text cursor when text. A random bend
 // makes a curve the app draws from the same numbers. Starts at the real mouse the first time, and always in real mode.
+// With no follow nothing is drawn and the hand is there at once, the real mouse too in real mode.
 static void glide(run *r, int x, int y, double seconds, int text) {
-  if (real_mode || !hand_known) {
+  int real = real_mode && !headless(r);
+  int follow = following(r);
+  if (real || !hand_known) {
     POINT p;
     GetCursorPos(&p);
     hand_x = p.x;
@@ -1143,17 +1223,19 @@ static void glide(run *r, int x, int y, double seconds, int text) {
   double dx = x - fx;
   double dy = y - fy;
   double span = sqrt(dx * dx + dy * dy);
-  double ms = span < 1 ? 0 : 90 + 0.18 * span;
-  if (seconds > 0) ms = seconds * 1000;
+  double ms = span < 1 || !follow ? 0 : 90 + 0.18 * span;
+  if (seconds > 0 && follow) ms = seconds * 1000;
   if (ms > 60000) ms = 60000;
   double bend = span < 1 ? 0 : (rand() / (double)RAND_MAX * 2 - 1) * 0.1 * span;
   double one = span > 1 ? span : 1;
   double cx = fx + dx / 2 - dy / one * bend;
   double cy = fy + dy / 2 + dx / one * bend;
-  buf b = { 0 };
-  buf_fmt(&b, "{\"show\":\"glide\",\"from\":[%d,%d],\"to\":[%d,%d],\"ms\":%d,\"bend\":%.2f,\"real\":%s,\"text\":%s}",
-      fx, fy, x, y, (int)ms, bend, real_mode ? "true" : "false", text ? "true" : "false");
-  show(&b);
+  if (follow) {
+    buf b = { 0 };
+    buf_fmt(&b, "{\"show\":\"glide\",\"from\":[%d,%d],\"to\":[%d,%d],\"ms\":%d,\"bend\":%.2f,\"real\":%s,\"text\":%s}",
+        fx, fy, x, y, (int)ms, bend, real ? "true" : "false", text ? "true" : "false");
+    show(&b);
+  }
   hand_x = x;
   hand_y = y;
   // Steps follow the clock, not the sleeps, so the real mouse stays in step with the drawn arrow.
@@ -1161,23 +1243,39 @@ static void glide(run *r, int x, int y, double seconds, int text) {
   for (double k = 0; k < 1;) {
     k = ms > 0 ? (pl_now() - start) * 1000 / ms : 1;
     if (k > 1) k = 1;
-    if (real_mode) {
+    if (real) {
       double t = (1 - cos(3.14159265358979 * k)) / 2;
       double u = 1 - t;
       SetCursorPos(
           (int)lround(u * u * fx + 2 * u * t * cx + t * t * x), (int)lround(u * u * fy + 2 * u * t * cy + t * t * y));
     }
-    if (k < 1) wait_ms(r, real_mode ? 4 : 15);
+    if (k < 1) wait_ms(r, real ? 4 : 15);
   }
 }
 
-// The window at a point and the point in its client terms, brought to the front so typing goes to it.
-static HWND window_at(run *r, int x, int y, LPARAM *inside) {
+/* The window at a point and the point in its client terms. top is the window meant, or NULL for whatever shows there.
+   It is brought to the front so typing goes to it. Headless it is left where it is, even under others, the deepest of
+   top's own windows at the point gets it, and headless keys go there next (worked). */
+static HWND window_at(run *r, HWND top, int x, int y, LPARAM *inside) {
   POINT p = { x, y };
+  int quiet = headless(r);
   HWND h = WindowFromPoint(p);
-  HWND top = h ? GetAncestor(h, GA_ROOT) : NULL;
+  if (quiet && top) {
+    h = top;
+    for (;;) {
+      POINT c = p;
+      ScreenToClient(h, &c);
+      HWND in = ChildWindowFromPointEx(h, c, CWP_SKIPINVISIBLE | CWP_SKIPTRANSPARENT);
+      if (!in || in == h) break;
+      h = in;
+    }
+  }
   if (!h) fail(r, "phrase", "there is no window at %d, %d", x, y);
-  if (top && top != GetForegroundWindow()) {
+  top = GetAncestor(h, GA_ROOT);
+  if (quiet) {
+    if (IsIconic(top)) fail(r, "phrase", "That window is minimized, so it can't be used in the background." TURN_OFF);
+    worked = top;
+  } else if (top && top != GetForegroundWindow()) {
     keybd_event(VK_MENU, 0, 0, 0);
     keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0);
     SetForegroundWindow(top);
@@ -1187,21 +1285,24 @@ static HWND window_at(run *r, int x, int y, LPARAM *inside) {
   return h;
 }
 
-// A click without the real mouse: UI Automation on the element or its two parents, else click messages to the window.
-static void virtual_click(run *r, int x, int y, int right, int times) {
+/* A click without the real mouse: UI Automation on the element or its two parents, else click messages to the window.
+   UI Automation finds what shows at a point, so headless it is asked only when the window meant is what shows there. */
+static void virtual_click(run *r, HWND top, int x, int y, int right, int times) {
   LPARAM inside;
-  HWND h = window_at(r, x, y, &inside);
-  if (!right && times == 1) {
+  POINT p = { x, y };
+  int quiet = headless(r);
+  HWND h = window_at(r, top, x, y, &inside);
+  int shows = !quiet || GetAncestor(WindowFromPoint(p), GA_ROOT) == GetAncestor(h, GA_ROOT);
+  if (!right && times == 1 && shows) {
     uia_start(r);
     IUIAutomationElement *e = NULL;
     IUIAutomationElement *up = NULL;
     IUIAutomationTreeWalker *walk = NULL;
-    POINT p = { x, y };
     IUIAutomation_ElementFromPoint(uia, p, &e);
     IUIAutomation_get_ControlViewWalker(uia, &walk);
     int done = 0;
     for (int level = 0; e && walk && level < 3 && !done; level++) {
-      done = act(e);
+      done = act(e, !quiet);
       if (!done && SUCCEEDED(IUIAutomationTreeWalker_GetParentElement(walk, e, &up))) {
         IUIAutomationElement_Release(e);
         e = up;
@@ -1224,11 +1325,12 @@ static void virtual_click(run *r, int x, int y, int right, int times) {
   }
 }
 
-static void click(run *r, int x, int y, int right, int times) {
+// top as window_at has it.
+static void click(run *r, HWND top, int x, int y, int right, int times) {
   glide(r, x, y, 0, 0);
-  show_press(right, times);
-  if (!real_mode) {
-    virtual_click(r, x, y, right, times);
+  show_press(r, right, times);
+  if (!real_mode || headless(r)) {
+    virtual_click(r, top, x, y, right, times);
     return;
   }
   wait_ms(r, 30);
@@ -1242,9 +1344,10 @@ static void click(run *r, int x, int y, int right, int times) {
 static int at(run *r, val *v) { return (int)num_of(r, v, NULL); }
 
 // Held down at the start, carried to the end and let go. Virtually, the window under the start gets it all as messages.
+// Never headless: input.drag_in fails first.
 static void drag(run *r, int x1, int y1, int x2, int y2) {
   glide(r, x1, y1, 0, 0);
-  show_press(0, 0);
+  show_press(r, 0, 0);
   if (real_mode) {
     mouse(MOUSEEVENTF_LEFTDOWN, 0);
     glide(r, x2, y2, 0, 0);
@@ -1252,7 +1355,7 @@ static void drag(run *r, int x1, int y1, int x2, int y2) {
     return;
   }
   LPARAM inside;
-  HWND h = window_at(r, x1, y1, &inside);
+  HWND h = window_at(r, NULL, x1, y1, &inside);
   PostMessageW(h, WM_LBUTTONDOWN, MK_LBUTTON, inside);
   glide(r, x2, y2, 0, 0);
   for (int i = 1; i <= 10; i++) {
@@ -1265,14 +1368,15 @@ static void drag(run *r, int x1, int y1, int x2, int y2) {
   PostMessageW(h, WM_LBUTTONUP, 0, MAKELPARAM(end.x, end.y));
 }
 
-static void wheel(run *r, int x, int y, int amount) {
+// top as window_at has it.
+static void wheel(run *r, HWND top, int x, int y, int amount) {
   glide(r, x, y, 0, 0);
-  if (real_mode) {
+  if (real_mode && !headless(r)) {
     mouse(MOUSEEVENTF_WHEEL, (DWORD)(amount * WHEEL_DELTA));
     return;
   }
   LPARAM inside;
-  HWND h = window_at(r, x, y, &inside);
+  HWND h = window_at(r, top, x, y, &inside);
   PostMessageW(h, WM_MOUSEWHEEL, MAKEWPARAM(0, (short)(amount * WHEEL_DELTA)),
       MAKELPARAM(x, y));   // a wheel's point is on the screen
 }
@@ -1284,6 +1388,20 @@ static val *mouse_mode(run *r, val **a) {
     real_mode = !strcmp(how, "real");
   }
   return v_cstr(r->a, real_mode ? "real" : "virtual");
+}
+
+// Each mode given is kept until changed again, and both are given back as they are now.
+static val *input_modes(run *r, val **a) {
+  const char *names[] = { "headless", "no_follow" };
+  for (int i = 0; i < 2; i++) {
+    if (a[i]->k == V_NOTHING) continue;
+    if (a[i]->k != V_BOOL) fail(r, "phrase", "%s is true or false", names[i]);
+    if (!lingo_set("onsay", names[i], a[i])) fail(r, "phrase", "this computer couldn't save how input acts");
+  }
+  val *out = v_rec(r->a);
+  put(r, out, "headless", VBOOL(headless(r)));
+  put(r, out, "no_follow", VBOOL(!following(r)));
+  return out;
 }
 
 // A ring around a box with Onsay beside it saying say, until seconds pass, another ring is drawn, or clear.
@@ -1331,12 +1449,15 @@ static val *panel_hide(run *r, val **a) {
 }
 
 // The pointer turns into a text cursor where the keys go: the middle of e when given, else Windows' caret in the front
-// window, else the middle of the control with the keyboard, else where it is. Typing keeps it ticking (show_type).
+// window, headless the window keys go to, else the middle of the control with the keyboard, else where it is. Typing
+// keeps it ticking (show_type). Nothing with no follow.
 static void typing(run *r, IUIAutomationElement *e) {
+  if (!following(r)) return;
   POINT p;
   GUITHREADINFO g = { .cbSize = sizeof g };
+  HWND into = headless(r) && worked ? worked : GetForegroundWindow();
   int found = e && middle(e, &p);
-  if (!found && GetGUIThreadInfo(GetWindowThreadProcessId(GetForegroundWindow(), NULL), &g) && g.hwndCaret) {
+  if (!found && GetGUIThreadInfo(GetWindowThreadProcessId(into, NULL), &g) && g.hwndCaret) {
     p = (POINT){ g.rcCaret.left, (g.rcCaret.top + g.rcCaret.bottom) / 2 };
     found = ClientToScreen(g.hwndCaret, &p);
   }
@@ -1351,32 +1472,36 @@ static void typing(run *r, IUIAutomationElement *e) {
   else if (!found)
     GetCursorPos(&p);
   glide(r, p.x, p.y, 0, 1);
-  show_type();
+  show_type(r);
 }
 
 /* Each character as Unicode input. A new line is Enter, because apps listen for the key, not the character. Paced at
    about 60 a second, since apps like Windows 11's Notepad drop or reorder characters that come faster. It stops when
-   another window comes to the front, so what is left is never typed into the wrong app. */
+   another window comes to the front, so what is left is never typed into the wrong app. Headless, each goes as a
+   character message to where headless keys go (keys_to), whatever is in front. */
 static void type_text(run *r, const char *text) {
   typing(r, NULL);
+  HWND to = headless(r) ? keys_to(r) : NULL;
   wchar_t *w = win_wide(text);
   HWND front = GetForegroundWindow();
   double ticked = pl_now();
   for (wchar_t *c = w; *c; c++) {
-    if (GetForegroundWindow() != front) {
+    if (!to && GetForegroundWindow() != front) {
       size_t typed = (size_t)(c - w);
       free(w);
       fail(r, "phrase", "Another window came to the front while typing, so it stopped after %zu characters", typed);
     }
     if (pl_now() - ticked > 0.3) {
-      show_type();
+      show_type(r);
       ticked = pl_now();
     }
     if (*c == L'\r') continue;
     if (*c == L'\n') {
-      key(VK_RETURN, 0);
-      key(VK_RETURN, 1);
-    } else {
+      key(to, VK_RETURN, 0);
+      key(to, VK_RETURN, 1);
+    } else if (to)
+      PostMessageW(to, WM_CHAR, *c, 1);
+    else {
       INPUT in[2] = { { .type = INPUT_KEYBOARD }, { .type = INPUT_KEYBOARD } };
       in[0].ki.wScan = in[1].ki.wScan = *c;
       in[0].ki.dwFlags = KEYEVENTF_UNICODE;
@@ -1421,7 +1546,7 @@ static const struct {
   { "insert", VK_INSERT },
 };
 
-// Like ctrl+s: every key down in order, then up in reverse.
+// Like ctrl+s: every key down in order, then up in reverse. Headless, one key alone, as messages (keys_to).
 static void press_keys(run *r, const char *combo) {
   WORD keys[8];
   int n = 0;
@@ -1444,8 +1569,13 @@ static void press_keys(run *r, const char *combo) {
     keys[n++] = vk;
     p = e;
   }
-  for (int i = 0; i < n; i++) key(keys[i], 0);
-  for (int i = n; i-- > 0;) key(keys[i], 1);
+  HWND to = NULL;
+  if (headless(r) && n > 1)
+    fail(r, "phrase", "Keys held together, like %s, can't be pressed in the background, since Windows lets only the app "
+                      "in front see ctrl, shift, alt and win held down." TURN_OFF, combo);
+  if (headless(r)) to = keys_to(r);
+  for (int i = 0; i < n; i++) key(to, keys[i], 0);
+  for (int i = n; i-- > 0;) key(to, keys[i], 1);
 }
 
 ////////// 6. FILES //////////
@@ -1691,7 +1821,7 @@ static val *note_toast(run *r, val **a) {
 ////////// 8. INPUT //////////
 
 // window is one from window.list or window.wait_for, or nothing for the whole screen. Onsay's own pointer does the clicking,
-// and input.cursor says whether the real mouse is used.
+// input.cursor says whether the real mouse is used, and input.modes whether it is all done in the background and shown.
 
 // The window given, or the front one that isn't Onsay's own chat.
 static val *front(run *r, val *window) {
@@ -1743,25 +1873,32 @@ static val *control(run *r, val *window, val *match) {
   fail(r, "phrase", "no control in that window matches %s", said);
 }
 
-static void ring_click(run *r, box b) {
-  ring(r, b, NOTHING, 2);
-  click(r, mid(b.x, b.w), mid(b.y, b.h), 0, 1);
+// top as window_at has it.
+static void ring_click(run *r, HWND top, box b) {
+  if (following(r)) ring(r, b, NOTHING, 2);
+  click(r, top, mid(b.x, b.w), mid(b.y, b.h), 0, 1);
 }
 
 static val *input_click_text(run *r, val **a) {
   box b;
   spot(r, a[0], a[1], num_of(r, a[2], "nth"), 1, &b);
-  ring_click(r, b);
+  ring_click(r, a[1]->k == V_NOTHING ? NULL : hwnd_of(r, a[1], "window"), b);
   return box_val(r, b, 0);
 }
 
+// Headless, the control is pressed the way controls.press does it, wherever its window is.
 static val *input_click_on(run *r, val **a) {
   val *c = control(r, a[0], a[1]);
-  ring_click(r, box_of(r, c));
+  if (headless(r))
+    press_element(r, element(r, c));
+  else
+    ring_click(r, NULL, box_of(r, c));
   return c;
 }
 
+// Headless, the control is filled the way controls.fill does it.
 static val *input_type_into(run *r, val **a) {
+  if (headless(r)) return ui_fill(r, (val *[]){ control(r, a[0], a[1]), a[2] });
   input_click_on(r, a);
   press_keys(r, "ctrl+a");
   type_text(r, str(r, a[2]));
@@ -1769,11 +1906,16 @@ static val *input_type_into(run *r, val **a) {
 }
 
 // Through the clipboard, which is given back what it had.
+// Headless, the paste is a message to where headless keys go (keys_to).
 static val *input_paste(run *r, val **a) {
+  HWND to = headless(r) ? keys_to(r) : NULL;
   val *was = clip_get(r, a);
   clip_set(r, a);
   typing(r, NULL);
-  press_keys(r, "ctrl+v");
+  if (to)
+    SendMessageTimeoutW(to, WM_PASTE, 0, 0, SMTO_ABORTIFHUNG, 2000, NULL);
+  else
+    press_keys(r, "ctrl+v");
   nap(r, 0.2);
   clip_set(r, &was);
   return NOTHING;
@@ -1806,8 +1948,9 @@ static val *input_scroll_to_text(run *r, val **a) {
   box b;
   for (int i = 1, tries = (int)num_of(r, a[2], "tries"); i <= tries; i++) {
     if (spot(r, a[0], a[1], 0, 0, &b)) return box_val(r, b, 0);
-    box w = box_of(r, front(r, a[1]));
-    wheel(r, mid(w.x, w.w), mid(w.y, w.h), -3);
+    val *win = front(r, a[1]);
+    box w = box_of(r, win);
+    wheel(r, hwnd_of(r, win, "window"), mid(w.x, w.w), mid(w.y, w.h), -3);
     nap(r, 0.4);
   }
   return spot(r, a[0], a[1], 0, 0, &b) ? box_val(r, b, 0) : NOTHING;
@@ -1821,7 +1964,9 @@ static val *input_wait_for_text(run *r, val **a) {
   }
 }
 
+// Headless, its words are read the way controls.read does it, and the clipboard is left as it is.
 static val *input_copy_all(run *r, val **a) {
+  if (headless(r)) return ui_text(r, a);
   win_focus(r, a);
   nap(r, 0.2);
   press_keys(r, "ctrl+a");
@@ -1859,10 +2004,10 @@ static val *now(run *r, val *window) {
   return window_rec(r, hwnd_of(r, window, "window"));
 }
 
-// The window as it is now, restored and in front, ready to be pressed. The screen as it is.
+// The window as it is now, restored and in front, ready to be pressed. Headless, and the screen, as it is.
 static val *ready(run *r, val *window) {
   val *w = now(r, window);
-  if (window->k == V_NOTHING) return w;
+  if (window->k == V_NOTHING || headless(r)) return w;
   HWND h = hwnd_of(r, w, "window");
   if (IsIconic(h)) {
     ShowWindow(h, SW_RESTORE);
@@ -1903,8 +2048,9 @@ static val *input_click_in(run *r, val **a) {
   int right = !strcmp(how, "right");
   int times = !strcmp(how, "double") ? 2 : 1;
   if (!right && times == 1 && strcmp(how, "left")) fail(r, "phrase", "how is left, double or right, not %s", how);
-  POINT p = place(r, ready(r, a[0]), a[1], a[2]);
-  click(r, p.x, p.y, right, times);
+  val *w = ready(r, a[0]);
+  POINT p = place(r, w, a[1], a[2]);
+  click(r, a[0]->k == V_NOTHING ? NULL : hwnd_of(r, w, "window"), p.x, p.y, right, times);
   return point_val(r, p);
 }
 
@@ -1932,6 +2078,9 @@ static val *input_move_along(run *r, val **a) {
 }
 
 static val *input_drag_in(run *r, val **a) {
+  if (headless(r))
+    fail(r, "phrase", "Dragging can't be done in the background, since it needs the window in front to follow the "
+                      "mouse." TURN_OFF);
   val *w = ready(r, a[0]);
   POINT from = place(r, w, a[1], a[2]);
   POINT to = place(r, w, a[3], a[4]);
@@ -1940,8 +2089,9 @@ static val *input_drag_in(run *r, val **a) {
 }
 
 static val *input_scroll_in(run *r, val **a) {
-  POINT p = place(r, ready(r, a[0]), a[2], a[3]);
-  wheel(r, p.x, p.y, at(r, a[1]));
+  val *w = ready(r, a[0]);
+  POINT p = place(r, w, a[2], a[3]);
+  wheel(r, a[0]->k == V_NOTHING ? NULL : hwnd_of(r, w, "window"), p.x, p.y, at(r, a[1]));
   return point_val(r, p);
 }
 
