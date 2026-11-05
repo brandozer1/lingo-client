@@ -1,0 +1,18 @@
+{
+  "x-lingo": {
+    "types": {
+      "open": { "url": "url", "tab": "whole|text", "->": "{tab: whole, title: text, url: url}" },
+      "read": { "tab": "whole", "->": "{title: text, url: url, text: text, links: [{text: text, url: url}], fields: [{label: text, type: text, value: any}]}" },
+      "click": { "words": "text", "tab": "whole", "->": "{clicked: text, title: text, url: url}" },
+      "type": { "text": "text", "into": "text", "tab": "whole", "->": "{field: text, title: text, url: url}" },
+      "run": { "script": "text", "tab": "whole", "->": "any" },
+      "screenshot": { "tab": "whole", "->": "{path: path}" },
+      "tabs": { "->": "[{tab: whole, title: text, url: url}]" },
+      "close": { "tab": "whole", "->": "nothing" }
+    },
+    "settings": [
+      { "name": "show", "title": "Show the browser", "about": "On to see the browser's window while it works. Off, it works out of sight. Takes effect the next time the browser starts.", "default": false },
+      { "name": "folder", "title": "Folder", "about": "Where LibreWolf and its own profile are kept. Else a folder of its own, lingo-browser, in AppData\\Local on Windows and ~/.local/share on Linux." }
+    ]
+  }
+}

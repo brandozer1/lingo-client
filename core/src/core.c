@@ -1,8 +1,8 @@
 // core.c - the lingo client's engine: its settings, the lingos it loads, who may call what, and every request it answers.
 //
 // 1. Settings        the settings file, read once, and JSON files in its home
-// 2. Floor           the compute, store, http and settings phrases every core has, and lingo(...) and use(...), asked of
-//                    the native lingo that answers them, or of the settings' ask
+// 2. Floor           the compute, store, http, socket and settings phrases every core has, and lingo(...) and use(...),
+//                    asked of the native lingo that answers them, or of the settings' ask
 // 3. Lingos          .lingo files and folders: read, loaded, their OpenAPI manifests, running or stopped, the catalog,
 //                    and the hooks of native lingos that run
 // 4. Policy          policy.json and the account's: callers, signatures and rules, the ceiling, the root, asks and the log
@@ -16,8 +16,8 @@
 // 10. Requests       web requests, from this computer's port or handed in by a native lingo, each answered by the lingo
 //                    at its route when the caller may reach it
 // 11. Beginning, and packing a lingo
-// It never starts a thread or holds a connection (see core.h), but core_stop may run on another thread, so the running
-// request's stop is kept behind one gate.
+// It starts no thread and holds no connection but each http.send's and each socket's (see core.h), and core_stop may run
+// on another thread, so those and the running request's stop are kept behind one gate.
 #include "core.h"
 #include "platform.h"
 #include "tlds.h"   // TLDS, the web's top level domains as one text, " aaa aarp ... ", made by build.ps1 from tlds.txt
@@ -478,6 +478,151 @@ static val *send_(run *r, val **a) {
   return got;
 }
 
+/* socket: WebSockets a run opens, each opened and read on a thread of its own (talk), every message that comes kept in
+   waiting until socket.receive takes it. Every socket a run opened is closed as that run ends (core_call). talk frees a
+   socket its run let go of once talk ends, else the run frees it, the way a trip is freed. */
+typedef struct sock {
+  struct sock *next;
+  long id;
+  char *url, *headers;   // headers whole lines, or NULL
+  pl_link *l;            // set once, as it opens, and freed with it
+  buf waiting;           // each message come and not yet taken: its length, a size_t, then its text
+  buf why;               // why it didn't open
+  volatile int news;     // set as it opens or ends and as each message comes, for lingo_wait
+  int ended, finished, left;   // ended: closed, or never opened. left: let go by its run
+} sock;
+
+static sock *socks;   // the open ones, newest first, so those a run opened are on top as it ends
+static long socks_made;
+
+static void sock_free(sock *s) {
+  if (s->l) pl_free(s->l);
+  buf_free(&s->waiting);
+  buf_free(&s->why);
+  free(s->url);
+  free(s->headers);
+  free(s);
+}
+
+static void talk(void *arg) {
+  sock *s = arg;
+  buf in = { 0 };
+  pl_link *l = pl_connect(s->url, s->headers, &s->why);
+  pl_enter(gate);
+  s->l = l;
+  if (l && s->left) pl_close(l);
+  pl_leave(gate);
+  lingo_done(&s->news);
+  while (l && pl_receive(l, &in)) {
+    pl_enter(gate);
+    buf_add(&s->waiting, (const char *)&in.n, sizeof in.n);
+    buf_add(&s->waiting, in.s ? in.s : "", in.n);
+    pl_leave(gate);
+    lingo_done(&s->news);
+    in.n = 0;
+  }
+  buf_free(&in);
+  pl_enter(gate);
+  s->ended = 1;
+  pl_leave(gate);
+  lingo_done(&s->news);
+  pl_enter(gate);
+  s->finished = 1;
+  int left = s->left;
+  pl_leave(gate);
+  if (left) sock_free(s);
+}
+
+// Closed and taken off the open ones, freed now when talk has ended, else by talk as it ends.
+static void let_go(sock *s) {
+  sock **at = &socks;
+  while (*at != s) at = &(*at)->next;
+  *at = s->next;
+  pl_enter(gate);
+  s->left = 1;
+  if (s->l) pl_close(s->l);
+  int finished = s->finished;
+  pl_leave(gate);
+  if (finished) sock_free(s);
+}
+
+static sock *sock_of(run *r, val *id) {
+  sock *s = socks;
+  while (s && !(id->k == V_NUM && s->id == id->n)) s = s->next;
+  if (!s) fail(r, "phrase", "no socket %s is open in this run", text_of(r, id)->t.s);
+  return s;
+}
+
+// socket.open: its address ws:// or wss://, and each header one whole line, as for http.send.
+static val *socket_open(run *r, val **a) {
+  val *url = text_of(r, a[0]);
+  buf lines = { 0 };
+  if (strncmp(url->t.s, "ws://", 5) && strncmp(url->t.s, "wss://", 6))
+    fail(r, "phrase", "a WebSocket's address starts with ws:// or wss://");
+  for (size_t i = 0; a[1]->k == V_REC && i < a[1]->r.n; i++) {
+    val *value = text_of(r, a[1]->r.v[i]);
+    if (strpbrk(a[1]->r.key[i], "\r\n:") || strpbrk(value->t.s, "\r\n")) {
+      buf_free(&lines);
+      fail(r, "phrase", "the header %s has a line break or a colon in it", a[1]->r.key[i]);
+    }
+    buf_fmt(&lines, "%s: %s\r\n", a[1]->r.key[i], value->t.s);
+  }
+  sock *s = calloc(1, sizeof *s);
+  s->id = ++socks_made;
+  s->url = strdup(url->t.s);
+  s->headers = lines.s;
+  s->next = socks;
+  socks = s;
+  pl_thread(talk, s);
+  while (!s->news && !*r->stop) lingo_wait(&s->news, r->stop, 1);
+  pl_enter(gate);
+  int open = s->l != NULL;
+  pl_leave(gate);
+  if (open) return v_num(r->a, (double)s->id);
+  val *why = v_text(r->a, s->why.s ? s->why.s : "", s->why.n);
+  let_go(s);
+  if (*r->stop) fail(r, "stopped", "Stopped by the person");
+  fail(r, "phrase", "%s", why->t.s);
+}
+
+static val *socket_send(run *r, val **a) {
+  sock *s = sock_of(r, a[0]);
+  val *text = text_of(r, a[1]);
+  if (!pl_send(s->l, text->t.s, text->t.len)) fail(r, "phrase", "the socket was closed");
+  return NOTHING;
+}
+
+// socket.receive: the oldest message waiting, else the next to come within seconds, else nothing.
+static val *socket_receive(run *r, val **a) {
+  sock *s = sock_of(r, a[0]);
+  double seconds = a[1]->k == V_NUM && a[1]->n >= 0 && a[1]->n < 3600 ? a[1]->n : 30;
+  double until = pl_now() + seconds;
+  for (;;) {
+    val *got = NULL;
+    pl_enter(gate);
+    if (s->waiting.n) {
+      size_t n;
+      memcpy(&n, s->waiting.s, sizeof n);
+      got = v_text(r->a, s->waiting.s + sizeof n, n);
+      s->waiting.n -= sizeof n + n;
+      memmove(s->waiting.s, s->waiting.s + sizeof n + n, s->waiting.n);
+    }
+    int ended = s->ended;
+    if (!got && !ended) s->news = 0;
+    pl_leave(gate);
+    if (got) return got;
+    if (*r->stop) fail(r, "stopped", "Stopped by the person");
+    if (ended) fail(r, "phrase", "the socket was closed");
+    if (pl_now() >= until) return NOTHING;
+    lingo_wait(&s->news, r->stop, until - pl_now());
+  }
+}
+
+static val *socket_close(run *r, val **a) {
+  let_go(sock_of(r, a[0]));
+  return NOTHING;
+}
+
 /* lingo(...) and use(...) as a program reaches them, in, with for, the request it runs for: asked of the running native
    lingo that answers them, which waits, else POSTed to the settings' ask, a web address that answers the same way. */
 static val *asked(run *r, buf *in) {
@@ -579,6 +724,15 @@ static void floor_phrases(void) {
       "send(method: text, url: url, headers: record=nothing, body: text=nothing, timeout: number=30) -> {status: whole, headers: record, text: text}: one request, "
       "headers a record, body text, redirects followed, at most 4 MB back",
       send_);
+  phrase_add("socket", "net",
+      "open(url: url, headers: record=nothing) -> whole: a WebSocket to a ws:// or wss:// address, its number for the other "
+      "socket phrases. Closed when the run ends, if not before",
+      socket_open);
+  phrase_add("socket", "net", "send(socket: whole, text: text): one message", socket_send);
+  phrase_add("socket", "net",
+      "receive(socket: whole, seconds: number=30) -> text?: the next message, or nothing when none came in seconds",
+      socket_receive);
+  phrase_add("socket", "net", "close(socket: whole)", socket_close);
   phrase_add("settings", "none",
       "get(lingo: text) -> [record]: every setting of a lingo, as its openapi.json and its code say, each "
       "with its value now",
@@ -1644,7 +1798,10 @@ static val *core_call(
     snprintf(name, sizeof name, "a%zu", i);
     rec_set(a, input, name, values->l.v[i]);
   }
-  return run_program(a, program, input, (limits){ set.steps, set.ms, stop }, code, message);
+  long before = socks_made;
+  val *got = run_program(a, program, input, (limits){ set.steps, set.ms, stop }, code, message);
+  while (socks && socks->id > before) let_go(socks);
+  return got;
 }
 
 ////////// 7. LINGO SETTINGS //////////

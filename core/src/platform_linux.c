@@ -354,7 +354,7 @@ static int send_frame(pl_link *l, int op, const char *s, size_t n) {
   return ok;
 }
 
-pl_link *pl_connect(const char *url, buf *error) {
+pl_link *pl_connect(const char *url, const char *headers, buf *error) {
   pthread_once(&curl_once, curl_load);
   if (!curl.ok) {
     buf_str(error, NO_CURL);
@@ -386,8 +386,8 @@ pl_link *pl_connect(const char *url, buf *error) {
   base64(&expect, digest, sizeof digest);
   buf_fmt(&ask,
       "GET %s HTTP/1.1\r\nHost: %.*s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: %s\r\n"
-      "Sec-WebSocket-Version: 13\r\nUser-Agent: onsay-core\r\n\r\n",
-      *path ? path : "/", (int)(path - host), host, key.s);
+      "Sec-WebSocket-Version: 13\r\nUser-Agent: onsay-core\r\n%s\r\n",
+      *path ? path : "/", (int)(path - host), host, key.s, headers ? headers : "");
 
   pl_link *l = calloc(1, sizeof *l);
   pthread_mutex_init(&l->io, NULL);
@@ -858,11 +858,15 @@ struct pl_link {
   double id;   // the app's number for it
 };
 
-pl_link *pl_connect(const char *url, buf *error) {
+pl_link *pl_connect(const char *url, const char *headers, buf *error) {
   arena *a = arena_new();
   buf ask = { 0 };
   buf_str(&ask, "{\"url\":");
   buf_json_str(&ask, url, strlen(url));
+  if (headers) {
+    buf_str(&ask, ",\"headers\":");
+    buf_json(&ask, header_lines(a, headers));
+  }
   buf_chr(&ask, '}');
   val *got = ask_app(a, "link.open", &ask, error);
   val *id = got ? rec_get(got, "id") : NULL;

@@ -166,7 +166,7 @@ static DWORD open_url(
   return *connection ? 0 : GetLastError();
 }
 
-pl_link *pl_connect(const char *url, buf *error) {
+pl_link *pl_connect(const char *url, const char *headers, buf *error) {
   // WinHTTP reads the address as http or https, then upgrades the connection to a WebSocket.
   buf http = { 0 };
   if (!strncmp(url, "wss://", 6)) {
@@ -178,6 +178,7 @@ pl_link *pl_connect(const char *url, buf *error) {
   } else
     buf_str(&http, url);
   wchar_t *w = win_wide(http.s);
+  wchar_t *extra = headers && *headers ? win_wide(headers) : NULL;
   buf_free(&http);
 
   pl_link *l = calloc(1, sizeof *l);
@@ -192,7 +193,8 @@ pl_link *pl_connect(const char *url, buf *error) {
       WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
       parts.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0);
   if (!request || !WinHttpSetOption(request, WINHTTP_OPTION_UPGRADE_TO_WEB_SOCKET, NULL, 0) ||
-      !WinHttpSendRequest(request, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
+      !WinHttpSendRequest(request, extra ? extra : WINHTTP_NO_ADDITIONAL_HEADERS, extra ? (DWORD)-1L : 0,
+          WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
       !WinHttpReceiveResponse(request, NULL)) {
     failed = GetLastError();
     goto done;
@@ -220,6 +222,7 @@ done:
   if (failed) why(error, step, failed);
   if (request) WinHttpCloseHandle(request);
   free(w);
+  free(extra);
   if (!l->socket) {
     pl_free(l);
     return NULL;

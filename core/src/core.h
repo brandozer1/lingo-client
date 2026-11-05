@@ -1,4 +1,5 @@
-// core.h - the core as an engine a host drives: core.c never starts a thread or holds a connection itself.
+// core.h - the core as an engine a host drives: core.c starts no thread and holds no connection itself but those of a
+// run's http.send and socket phrases, each ended with its run.
 //
 // 1. core_read(text, n)                   -> the settings file, read once. NULL when it isn't a JSON record
 // 2. core_begin(serving)                  -> every lingo read and loaded. 0 when it can't start. serving: it answers

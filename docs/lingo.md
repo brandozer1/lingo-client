@@ -691,6 +691,7 @@ can write in a few lines is a standard function instead, written in Lingo on thi
 | `store.get`, `put`, `keys`, `delete` | Onsay's own storage on the computer, its files, needing `store` |
 | `settings.get(lingo)`, `settings.set(lingo, key, value)` | A lingo's settings, kept on the computer wherever that lingo keeps them, for a form of them and to change one (section 11) |
 | `http.send(method, url, headers=nothing, body=nothing, timeout=30)` | The computer's own web request, needing `net`. `request` and `use(...)` stand on it |
+| `socket.open(url, headers=nothing)`, `send(socket, text)`, `receive(socket, seconds=30)`, `close(socket)` | A WebSocket, needing `net`, for a service that talks both ways, like a browser driven over WebDriver BiDi. A request can't wait for a message the way a socket does |
 | `lingo.list()` | Every lingo running on the computer but those built in, `{name, about, functions: [{name, does}]}`, so an agent knows what is here |
 | `lingo.code(name)` | A lingo's code, `{code, openapi}`, its openapi.json as its maker writes it, to change it or learn from it |
 | `lingo.save(name, code, openapi=nothing)` | A lingo written or changed as a folder in the lingos folder, started and read again at once, needing `lingos`: its functions, or why it can't run, like its code's first mistake. How agents keep what they work out |
@@ -699,6 +700,12 @@ can write in a few lines is a standard function instead, written in Lingo on thi
 back, and fails when it takes longer than its timeout. Windows makes it with WinHTTP and Linux with libcurl, so proxies
 and certificates work as they do for every other program. Most lingos use `request` (`lingos/standard/request.ls`),
 built on it, or `use(...)` for one plain request.
+
+`socket.open` takes a `ws://` or `wss://` address, `ws://127.0.0.1:9222/session` on this computer too, with headers like
+`http.send`'s, and gives the socket's number for the other three. `send` sends one text message, and `receive` gives
+the oldest message come and not yet taken, else waits up to its seconds for the next, and gives `nothing` when none came.
+Both fail once the other side has closed it. Every socket a run opens is closed as that run ends, so a lingo opens its
+socket again on each call, and keeps what it needs to find it again, like an address, with `store.put`.
 
 **Onsay names work wherever web addresses do.** A web address given to `http.send`, so to `request`, may name a host on
 the web or an Onsay name, told apart by one rule every Onsay program keeps: a host is on the web when it is an IP,
@@ -774,5 +781,5 @@ Conventions that matter in practice:
 - **New windows:** a window builds its controls a moment after it appears, so wait for one with `controls.wait_for`
   before pressing anything.
 - **Same names:** `get`, `keys`, `list`, `read`, `write`, `find`, `delete`, `move`, `press`, `scroll`, `wait_for`,
-  `show` and `hide` are in more than one group, so they are written with theirs, like `window.wait_for` or
-  `files.read`.
+  `show`, `hide`, `open`, `close` and `send` are in more than one group, so they are written with theirs, like
+  `window.wait_for` or `files.read`.

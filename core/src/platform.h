@@ -2,12 +2,12 @@
 //
 // 1. Time      the clock and sleeping
 // 2. Threads   starting one, and a gate: a lock that can also wait to be woken
-// 3. Links     a WebSocket out, like the onsay lingo's to Onsay
+// 3. Links     a WebSocket out, like the onsay lingo's to Onsay, or one a lingo opens with socket.open
 // 4. Files     read, write, add to, delete and list, for the core's own storage and its log, and secrets sealed
 // 5. Device    what is around it, chance, a native lingo's library, and web requests going out
 // 6. Port      web requests coming in: a port to listen on, and each connection to it
-// The engine (core.c) only uses time, the gate, files and the device. Threads and the port are for host.c, and links for
-// native lingos, which may use all of it.
+// The engine (core.c) uses time, the gate, files and the device, and a thread for each http.send and each socket with its
+// link. The port is for host.c, and native lingos may use all of it.
 #ifndef PLATFORM_H
 #define PLATFORM_H
 
@@ -43,7 +43,8 @@ void pl_fault_over(void);   // once off the stack that crashed, so the stack can
 
 // Any thread may send, and any thread may close, which ends a receive waiting on another thread. Only free is final.
 typedef struct pl_link pl_link;
-pl_link *pl_connect(const char *url, buf *error);   // ws:// or wss://
+pl_link *pl_connect(const char *url, const char *headers, buf *error);   // ws:// or wss://, headers NULL or whole
+                                                                       // lines, each "Name: value\r\n"
 int pl_send(pl_link *l, const char *text, size_t n);
 int pl_receive(pl_link *l, buf *out);               // one whole message into out; 0 once the link is closed
 void pl_close(pl_link *l);

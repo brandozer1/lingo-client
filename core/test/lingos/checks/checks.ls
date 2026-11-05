@@ -237,6 +237,29 @@ fn http_nowhere(address="http://127.0.0.1:1/") {
   try {http.send("GET", address)} catch e {return e}
 }
 
+// socket: one opened with a header, a message sent and its echo back, nothing when none comes in time, and closed, after
+// which it is gone.
+fn socket_echo(base) {
+  s = socket.open(base + "/echo", {"X-Name": "Ada"})
+  hi = socket.receive(s)
+  socket.send(s, "héllo")
+  back = socket.receive(s, 5)
+  none = socket.receive(s, 1)
+  socket.close(s)
+  try {socket.send(s, "again")} catch e {return [hi, back, none, e]}
+}
+
+// socket: one left open, which the end of the run closes.
+fn socket_left(base) {return socket.open(base + "/echo") > 0}
+
+// socket.open where nothing answers, and to an address that isn't a WebSocket's.
+fn socket_nowhere() {
+  out = []
+  try {socket.open("ws://127.0.0.1:1/")} catch e {out += [e]}
+  try {socket.open("http://127.0.0.1:1/")} catch e {out += [e]}
+  return out
+}
+
 // request tries again after a 503.
 fn request_busy(base) {
   r = request.get(base + "/busy", {query: {id: "r1", n: 2}, retries: 2})

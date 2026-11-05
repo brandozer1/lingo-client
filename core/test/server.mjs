@@ -297,6 +297,8 @@ const CASES = [
   { name: 'http: a redirect is followed', path: '/checks/http_moved', values: { base: HTTP }, check: gives('hello ') },
   { name: 'http: a timeout', path: '/checks/http_slow', values: { base: HTTP }, check: fails(500, /http\.send: /) },
   { name: 'http: nothing at that address', path: '/checks/http_nowhere', check: (r) => r.status === 200 && /^http\.send: /.test(r.json) },
+  { name: 'socket: opened with a header, a message echoed, nothing when none comes in time, then closed', path: '/checks/socket_echo', values: { base: `ws://127.0.0.1:${PORT}` }, check: (r) => r.status === 200 && same(r.json.slice(0, 3), ['hi Ada', 'héllo', null]) && /^socket\.send: no socket \d+ is open in this run$/.test(r.json[3]) },
+  { name: 'socket: nothing at that address, and an address that is not a WebSocket', path: '/checks/socket_nowhere', check: (r) => r.status === 200 && /^socket\.open: /.test(r.json[0]) && r.json[1] === "socket.open: a WebSocket's address starts with ws:// or wss://" },
   { name: 'request: a GET with a query, tried again after a 503', path: '/checks/request_busy', values: { base: HTTP }, check: gives([200, true, { tries: 3 }]) },
   { name: 'names: an Onsay name, with https:// or without, is sent where Onsay resolves it, what followed it after', path: '/checks/http_get', values: { base: 'https://pages.tester' }, check: gives([200, 'yes', 'hello ?x=1']) },
   { name: 'names: a POST to an Onsay name', path: '/checks/http_post', values: { base: 'Pages.tester' }, check: gives([201, { method: 'POST', name: 'Ada', type: 'text/plain', body: 'héllo' }]) },
@@ -930,6 +932,10 @@ const WEB_CASES = [
     return stranger.status === 404 && wrong.status === 401 && onsay.status === 200 && onsay.json.text === 'Onsay heard: from afar' &&
       (await control('policy')).json.rules.some((r) => r.who === 'onsay' && same(r.routes, ['/onsay']))
   }],
+  ['socket: a socket its run leaves open is closed as the run ends', async (send) => {
+    const r = await send('/checks/socket_left', { base: `ws://127.0.0.1:${PORT}` })
+    return r.status === 200 && r.json === true && await soon(() => echoing === 0)
+  }],
   ['calls: every http.send reaches Onsay in chunks, with its status, and a key in a header or the address never does', async () => {
     const deadline = Date.now() + 30_000
     while (Date.now() < deadline && !called.some((c) => c.request.url.includes('/http/missing'))) await new Promise((r) => setTimeout(r, 250))
@@ -1150,8 +1156,9 @@ const API = {
   },
 }
 
-// Pages for http.send and request, by their path under /http.
+// Pages for http.send and request, by their path under /http, and how many sockets are open at /echo, below.
 const tries = {}
+let echoing = 0
 const PAGES = {
   '/hello': (q, s) => s.writeHead(200, { 'x-test': 'yes' }).end(`hello ${new URL(q.url, HTTP).search}`),
   '/echo': (q, s, body) => s.writeHead(201, { 'content-type': 'application/json' }).end(JSON.stringify({ method: q.method, name: q.headers['x-name'], type: q.headers['content-type'], body })),
@@ -1315,6 +1322,12 @@ const server = http.createServer((q, s) => {
 server.on('upgrade', (req, socket) => {
   const accept = crypto.createHash('sha1').update(req.headers['sec-websocket-key'] + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64')
   socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`)
+  // For socket.open: hi to the X-Name header, then every message back as it came.
+  if (req.url === '/echo') {
+    echoing++
+    socketOf(socket, (t) => socket.write(frame(1, t)), () => echoing--)
+    return socket.write(frame(1, `hi ${req.headers['x-name']}`))
+  }
   const link = socketOf(socket, (t) => on(t), () => {})
   const on = session(link)
 })

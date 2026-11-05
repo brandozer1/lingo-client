@@ -405,7 +405,7 @@ static void connection(void *arg) {
     }
     buf live = { 0 };
     buf_fmt(&live, "ws%s/live", &ONSAY[strlen("http")]);   // https://x is wss://x/live, http://x ws://x/live
-    pl_link *l = pl_connect(live.s, &error);
+    pl_link *l = pl_connect(live.s, NULL, &error);
     buf_free(&live);
     if (!l) say("%s. Trying again in %.0f seconds", error.s ? error.s : "It couldn't connect to Onsay", wait_);
     buf_free(&error);
