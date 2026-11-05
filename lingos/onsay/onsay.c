@@ -211,7 +211,7 @@ static turn *turns_;
 static struct {
   long id;
   char session[72], title[128];
-  buf picture;
+  buf drawn;   // its instructions since its last clear, as JSON joined by commas
   char at[128];   // a far one's: the computer that draws it, like desk.brandon, and its number there
   long far;
 } screens[MOST_SCREENS];
@@ -1125,7 +1125,7 @@ static val *called(run *r, turn *t, const char *address, val *inputs, const char
      GET /onsay/sessions/<id>/live     {running, steps, questions}: while a prompt of it runs, its newest steps, each
                                        {text, depth}, and the questions it waits on the person for, or nothing
      POST /onsay/sessions/<id>/answers {answers}   the person's answers to those questions, in order
-     GET /onsay/screens                {screens}: every screen open, each {screen, session, title, picture}, and as a
+     GET /onsay/screens                {screens}: every screen open, each {screen, session, title, draw, fresh}, and as a
                                        WebSocket, each change after (section 6). Another computer of the account
                                        watches it as me, through Onsay, with no prompt key
      DELETE /onsay/screens/<screen>    the person closed it
@@ -1590,34 +1590,57 @@ static val *serve(run *r, val **v) {
 ////////// 6. SCREENS //////////
 
 /* The screens lingos draw on, the newest MOST_SCREENS: each with the session of the to-do whose work opened it, found
-   from the request it runs in (calling), its title, and its picture, a PNG or JPEG as base64. Anything watching
-   /onsay/screens on the port as a WebSocket is given every screen, {screens}, then each change, {screens: [one]}, a
-   closed one as {screen, closed: true} (lingo_push). */
-// One screen, or every screen when k is -1, as the stream says them. Under lock.
+   from the request it runs in (calling), its title, and what was drawn on it since its last clear, instructions of
+   Canvas 2D as JSON (DRAWS). Anything watching /onsay/screens on the port as a WebSocket is given every screen,
+   {screens}, each {screen, session, title, draw, fresh: true}, then each batch as it is drawn, {screens: [one]}, fresh
+   when it starts with a clear, and a closed one as {screen, closed: true} (lingo_push). Each device draws it itself. */
+#define MOST_DRAWN (16 << 20)   // the most kept for a screen since its last clear, as JSON
+
+// Each instruction is a record with one of these keys: its values a list, or a value for the ones that set how to draw.
+static const char *DRAWS = " clear save restore translate scale rotate beginPath closePath moveTo lineTo bezierCurveTo "
+                           "quadraticCurveTo arc rect roundRect fill stroke clip fillRect strokeRect clearRect fillText "
+                           "strokeText drawImage fillStyle strokeStyle lineWidth font textAlign textBaseline globalAlpha ";
+
+// One screen as the stream says it: what is drawn, items JSON joined by commas, fresh when it starts over. Under lock.
+static void screen_json(buf *b, int k, const char *items, size_t n, int fresh) {
+  buf_fmt(b, "{\"screen\":%ld,\"session\":", screens[k].id);
+  buf_json_str(b, screens[k].session, strlen(screens[k].session));
+  buf_str(b, ",\"title\":");
+  buf_json_str(b, screens[k].title, strlen(screens[k].title));
+  buf_str(b, ",\"draw\":[");
+  buf_add(b, items, n);
+  buf_fmt(b, "],\"fresh\":%s}", fresh ? "true" : "false");
+}
+
+// One screen whole, or every screen when k is -1, as the stream begins. Under lock.
 static void screens_json(buf *b, int k) {
   buf_str(b, "{\"screens\":[");
   for (int i = k < 0 ? 0 : k, first = 1; i < (k < 0 ? MOST_SCREENS : k + 1); i++) {
     if (!screens[i].id) continue;
     if (!first) buf_chr(b, ',');
     first = 0;
-    buf_fmt(b, "{\"screen\":%ld,\"session\":", screens[i].id);
-    buf_json_str(b, screens[i].session, strlen(screens[i].session));
-    buf_str(b, ",\"title\":");
-    buf_json_str(b, screens[i].title, strlen(screens[i].title));
-    buf_str(b, ",\"picture\":");
-    if (screens[i].picture.n)
-      buf_json_str(b, screens[i].picture.s, screens[i].picture.n);
-    else
-      buf_str(b, "null");
-    buf_chr(b, '}');
+    screen_json(b, i, screens[i].drawn.s ? screens[i].drawn.s : "", screens[i].drawn.n, 1);
   }
   buf_str(b, "]}");
+}
+
+/* A batch drawn on a screen, items JSON joined by commas: in place of what was there when fresh, else after it, and a
+   line telling everything watching, into said. 0 when it would keep more than MOST_DRAWN. Under lock. */
+static int screen_took(int k, const char *items, size_t n, int fresh, buf *said) {
+  if ((fresh ? 0 : screens[k].drawn.n) + n > MOST_DRAWN) return 0;
+  if (fresh) screens[k].drawn.n = 0;
+  if (screens[k].drawn.n && n) buf_chr(&screens[k].drawn, ',');
+  buf_add(&screens[k].drawn, items, n);
+  buf_str(said, "{\"screens\":[");
+  screen_json(said, k, items, n, fresh);
+  buf_str(said, "]}\n");
+  return 1;
 }
 
 // A screen taken away, by its place, told to everything watching. Under lock; pushed once it is let go, into said.
 static void screen_gone(int k, buf *said) {
   buf_fmt(said, "{\"screens\":[{\"screen\":%ld,\"closed\":true}]}\n", screens[k].id);
-  buf_free(&screens[k].picture);
+  buf_free(&screens[k].drawn);
   memset(&screens[k], 0, sizeof screens[k]);
 }
 
@@ -1644,6 +1667,46 @@ static void lines_sent(buf *b) {
     if (end > at) send_(b->s + at, end - at);
   }
   buf_free(b);
+}
+
+/* A list of instructions as JSON joined by commas, from its last clear, which makes it fresh, into items. Fails saying
+   which isn't one: a record with one key of DRAWS, and a drawImage only of a picture inside it, a data: address. */
+static int drawing(run *r, val *list, buf *items) {
+  size_t from = 0;
+  if (list->k != V_LIST) fail(r, "phrase", "Draw a list of instructions, like [{\"fillRect\": [0, 0, 10, 10]}]");
+  for (size_t i = 0; i < list->l.n; i++) {
+    val *x = list->l.v[i];
+    char key[40];
+    snprintf(key, sizeof key, " %s ", x->k == V_REC && x->r.n == 1 ? x->r.key[0] : "");
+    if (x->k != V_REC || x->r.n != 1 || strlen(key) < 3 || !strstr(DRAWS, key))
+      fail(r, "phrase", "Instruction %zu isn't one: each is a record with one key, like {\"fillRect\": [0, 0, 10, 10]}, the "
+           "key one of%s", i + 1, DRAWS);
+    val *src = x->r.v[0]->k == V_LIST && x->r.v[0]->l.n ? x->r.v[0]->l.v[0] : NULL;
+    if (!strcmp(key, " drawImage ") && (!src || src->k != V_TEXT || strncmp(src->t.s, "data:image/", 11)))
+      fail(r, "phrase", "drawImage takes a picture inside it, a data:image/ address, never one on the web");
+    if (!strcmp(key, " clear ")) from = i;
+  }
+  for (size_t i = from; i < list->l.n; i++) {
+    if (i > from) buf_chr(items, ',');
+    buf_json(items, list->l.v[i]);
+  }
+  return list->l.n && from < list->l.n && list->l.v[from]->k == V_REC && !strcmp(list->l.v[from]->r.key[0], "clear");
+}
+
+// A batch drawn on the screen numbered id, for screen.draw and screen.show. Fails when it isn't drawn here.
+static void drawn_on(run *r, double id, buf *items, int fresh) {
+  buf said = { 0 };
+  char far[128] = "";
+  pl_enter(lock);
+  int k = screen_at(id);
+  int took = k >= 0 && !screens[k].at[0] && screen_took(k, items->s ? items->s : "", items->n, fresh, &said);
+  if (k >= 0) snprintf(far, sizeof far, "%s", screens[k].at);
+  pl_leave(lock);
+  buf_free(items);
+  if (k < 0) fail(r, "phrase", "There's no screen %.0f open: it was closed, or never opened", id);
+  if (*far) fail(r, "phrase", "Screen %.0f is drawn on %s, so it can only be drawn on there", id, far);
+  if (!took) fail(r, "phrase", "That is more than 16 MB drawn since the screen's last clear. Start again with a clear");
+  screen_push(&said);
 }
 
 /* screen.open(title): the session is the one of the turn whose call this request is, none for anything else. One of
@@ -1683,21 +1746,70 @@ static val *screen_open(run *r, val **a) {
     buf_json_str(&told, title, strlen(title));
     buf_str(&told, "}}");
   }
+  screens_json(&said, k);
   pl_leave(lock);
   screen_push(&said);
   if (told.n) send_(told.s, told.n);
   buf_free(&told);
+  return v_num(r->a, (double)id);
+}
+
+// screen.draw(screen, instructions)
+static val *screen_draw(run *r, val **a) {
+  buf items = { 0 };
+  int fresh = drawing(r, a[1], &items);
+  drawn_on(r, a[0]->n, &items, fresh);
+  return NOTHING;
+}
+
+/* screen.show(screen, picture): a clear the picture's size and the picture drawn whole, its size read from its own
+   first bytes, a PNG's header or a JPEG's frame. A data: address is taken as it is. */
+static val *screen_show(run *r, val **a) {
+  const char *p = text_of(r, a[1])->t.s;
+  const char *comma = strchr(p, ',');
+  buf bytes = { 0 };
+  buf items = { 0 };
+  long w = 0;
+  long h = 0;
+  if (!strncmp(p, "data:", 5) && comma) p = comma + 1;
+  int png = !strncmp(p, "iVBORw0KGgo", 11);
+  if (strlen(p) > (12 << 20)) fail(r, "phrase", "That picture is more than 12 MB as base64, too big for a screen");
+  if ((png || !strncmp(p, "/9j/", 4)) && unbase64(p, strlen(p), &bytes)) {
+    const unsigned char *b = (const unsigned char *)bytes.s;
+    if (png && bytes.n > 24) {
+      w = (long)b[16] << 24 | (long)b[17] << 16 | (long)b[18] << 8 | b[19];
+      h = (long)b[20] << 24 | (long)b[21] << 16 | (long)b[22] << 8 | b[23];
+    }
+    for (size_t i = 2; !png && i + 9 < bytes.n && b[i] == 0xFF; i += 2 + (size_t)(b[i + 2] << 8 | b[i + 3]))
+      if (b[i + 1] >= 0xC0 && b[i + 1] <= 0xCF && b[i + 1] != 0xC4 && b[i + 1] != 0xC8 && b[i + 1] != 0xCC) {
+        h = b[i + 5] << 8 | b[i + 6];
+        w = b[i + 7] << 8 | b[i + 8];
+        break;
+      }
+  }
+  buf_free(&bytes);
+  if (w <= 0 || h <= 0) fail(r, "phrase", "A screen shows a PNG or JPEG picture, as base64");
+  buf_fmt(&items, "{\"clear\":[%ld,%ld]},{\"drawImage\":[\"data:image/%s;base64,", w, h, png ? "png" : "jpeg");
+  buf_str(&items, p);
+  buf_fmt(&items, "\",0,0,%ld,%ld]}", w, h);
+  drawn_on(r, a[0]->n, &items, 1);
+  return NOTHING;
+}
+
+// screen.close(screen), and the person closing one (serve).
+static val *screen_close(run *r, val **a) {
+  buf said = { 0 };
   pl_enter(lock);
-  k = screen_at((double)id);
-  if (k >= 0) screens_json(&said, k);
+  int k = screen_at(a[0]->n);
+  if (k >= 0) screen_gone(k, &said);
   pl_leave(lock);
   screen_push(&said);
-  return v_num(r->a, (double)id);
+  return NOTHING;
 }
 
 /* A far screen: one another computer drew for a to-do of this one, which said so in a step. It is kept here like any
    other, with where it is drawn, and this computer watches that computer's /onsay/screens through Onsay, one stream a
-   computer, to show each picture as it comes. Under lock: what changes goes into gone and opened, to push, and the
+   computer, to draw each batch as it comes. Under lock: what changes goes into gone and opened, to push, and the
    stream to open into watch, to send. */
 static void far_opened(const char *session, val *shown, buf *gone, buf *opened, buf *watch) {
   const char *at = text_or(shown, "at", "");
@@ -1729,9 +1841,9 @@ static void far_opened(const char *session, val *shown, buf *gone, buf *opened, 
   buf_str(watch, ",\"path\":\"/onsay/screens\"}");
 }
 
-/* A message of a far computer's stream: each screen it names that is shown here takes its title and picture, or goes
-   when it closed. Its first message has every screen it keeps, so one shown here and not in it closed meanwhile. A
-   stream that ended takes every screen it drew with it. */
+/* A message of a far computer's stream: each screen it names that is shown here takes its title and what it drew, or
+   goes when it closed. Its first message has every screen it keeps, so one shown here and not in it closed meanwhile.
+   A stream that ended takes every screen it drew with it. */
 static void far_heard(val *id, const char *text, int closed) {
   arena *a = arena_new();
   val *list = closed ? NULL : rec_get(json_parse(a, text, strlen(text), NULL), "screens");
@@ -1747,18 +1859,20 @@ static void far_heard(val *id, const char *text, int closed) {
       val *n = rec_get(list->l.v[j], "screen");
       if (n && n->k == V_NUM && (long)n->n == screens[i].far) mine = list->l.v[j];
     }
-    val *picture = rec_get(mine, "picture");
+    val *draw = rec_get(mine, "draw");
+    buf items = { 0 };
+    if (draw && draw->k == V_LIST) {
+      buf_json(&items, draw);
+      items.n = items.n >= 2 ? items.n - 1 : 0;   // without its brackets
+    }
     if (closed || (!mine && !watching[w].heard) || (mine && rec_get(mine, "closed")))
       screen_gone(i, &said);
     else if (mine) {
       snprintf(screens[i].title, sizeof screens[i].title, "%s", text_or(mine, "title", screens[i].title));
-      if (picture && picture->k == V_TEXT) {
-        screens[i].picture.n = 0;
-        buf_add(&screens[i].picture, picture->t.s, picture->t.len);
-      }
-      screens_json(&said, i);
-      buf_chr(&said, '\n');
+      if (!screen_took(i, items.n ? items.s + 1 : "", items.n ? items.n - 1 : 0, truthy(rec_get(mine, "fresh") ? rec_get(mine, "fresh") : NOTHING), &said))
+        screen_gone(i, &said);
     }
+    buf_free(&items);
   }
   if (w < 8) watching[w].heard = 1;
   if (w < 8 && closed) memset(&watching[w], 0, sizeof watching[w]);
@@ -1779,43 +1893,6 @@ static void far_check(buf *unwatch) {
     buf_fmt(unwatch, "{\"type\":\"unwatch\",\"id\":%ld}\n", watching[w].id);
     memset(&watching[w], 0, sizeof watching[w]);
   }
-}
-
-// screen.show(screen, picture): a data: address's base64 is taken as it is.
-static val *screen_show(run *r, val **a) {
-  const char *p = text_of(r, a[1])->t.s;
-  const char *comma = strchr(p, ',');
-  if (!strncmp(p, "data:", 5) && comma) p = comma + 1;
-  if (strncmp(p, "iVBORw0KGgo", 11) && strncmp(p, "/9j/", 4))
-    fail(r, "phrase", "A screen shows a PNG or JPEG picture, as base64");
-  if (strlen(p) > (4 << 20)) fail(r, "phrase", "That picture is more than 4 MB as base64, too big for a screen");
-  buf said = { 0 };
-  pl_enter(lock);
-  int k = screen_at(a[0]->n);
-  if (k >= 0 && screens[k].at[0]) {
-    pl_leave(lock);
-    fail(r, "phrase", "Screen %.0f is drawn on %s, so it can only be shown there", a[0]->n, screens[k].at);
-  }
-  if (k >= 0) {
-    screens[k].picture.n = 0;
-    buf_str(&screens[k].picture, p);
-    screens_json(&said, k);
-  }
-  pl_leave(lock);
-  if (k < 0) fail(r, "phrase", "There's no screen %.0f open: it was closed, or never opened", a[0]->n);
-  screen_push(&said);
-  return NOTHING;
-}
-
-// screen.close(screen), and the person closing one (serve).
-static val *screen_close(run *r, val **a) {
-  buf said = { 0 };
-  pl_enter(lock);
-  int k = screen_at(a[0]->n);
-  if (k >= 0) screen_gone(k, &said);
-  pl_leave(lock);
-  screen_push(&said);
-  return NOTHING;
 }
 
 ////////// 7. SIGNING IN //////////
@@ -2073,10 +2150,18 @@ void onsay_lingo(void) {
       "unshare(values: record) -> {version, policy, signed}: stops sharing with who, taking out every rule that names them",
       unshare);
   phrase_add("screen", "none",
-      "open(title: text) -> whole: a new screen, a picture the person can watch beside the to-do this work is for, like "
+      "open(title: text) -> whole: a new screen, a canvas the person can watch beside the to-do this work is for, like "
       "a browser tab working in the background. Onsay decides where it shows. It stays until closed. One of the same title "
       "already open for that to-do is given back",
       screen_open);
+  phrase_add("screen", "none",
+      "draw(screen: whole, instructions: list): draws on a screen with Canvas 2D instructions, each a record with one key, "
+      "like {\"fillStyle\": \"#5865F2\"}, {\"fillRect\": [0, 0, 240, 12]} or {\"fillText\": [\"3 of 5\", 0, 30]}, after what "
+      "it drew before. {\"clear\": [width, height]} starts it over at that size. The keys: clear, save, restore, translate, "
+      "scale, rotate, beginPath, closePath, moveTo, lineTo, bezierCurveTo, quadraticCurveTo, arc, rect, roundRect, fill, "
+      "stroke, clip, fillRect, strokeRect, clearRect, fillText, strokeText, drawImage with a data:image/ address, and "
+      "fillStyle, strokeStyle, lineWidth, font, textAlign, textBaseline and globalAlpha, as in a web page's canvas",
+      screen_draw);
   phrase_add("screen", "none",
       "show(screen: whole, picture: text): puts a picture on a screen, a PNG or JPEG as base64, replacing what it showed",
       screen_show);

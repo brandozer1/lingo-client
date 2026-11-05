@@ -9,7 +9,7 @@ has settings or types, its `openapi.json`. The first lines of its code list its 
 |--------|------------|
 | `ai/` | The person's AI for every lingo: Onsay's own, free for 30 days and metered on the account, or their own key for Claude, ChatGPT, Gemini, Grok, OpenRouter or any service that answers the way OpenAI does. `prompt` gives one answer as text, and `chat` the model's next message for a lingo running its own loop, pictures included. It keeps the one key, so nothing else does |
 | `agent/` | Onsay's agent, on `ai.chat`: talks with the person through the whole conversation, uses the lingos on the computer before doing anything by hand, makes and changes lingos so work done once is never done again, says a step for each tool, and asks one or two short questions when it must. After 7 minutes or 60 turns it says what is done and what is left |
-| `browser/` | A web browser for lingos and agents, shipped with the Onsay app only: opens, reads, clicks, types, runs scripts and takes screenshots in LibreWolf, a fully open source Firefox with no telemetry, which it fetches on first use and drives over WebDriver BiDi with the core's `socket` phrases |
+| `browser/` | A web browser for lingos and agents, shipped with the Onsay app only: opens, reads, clicks, types, runs scripts, takes screenshots and lays out HTML of its own (`render`) in LibreWolf, drawing each page on a screen as instructions, a fully open source Firefox with no telemetry, which it fetches on first use and drives over WebDriver BiDi with the core's `socket` phrases |
 | `coding/` | Coding Agent, not shipped: an AI software engineer for a project folder |
 
 `agent` knows the lingos running on its computer from `lingo.list()`, reads one with `lingo.code(name)` and writes or

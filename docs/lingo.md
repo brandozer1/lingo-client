@@ -800,10 +800,18 @@ Conventions that matter in practice:
   lingo run for someone on another computer, through Onsay, sends its lines there instead, as steps of their call
   (`said` in `core/README.md`, Hooks), and each one tells Onsay the work is still going, so a long job that says a step
   every so often is never stopped as stuck.
-- **Screens:** `screen.open(title)` gives a new screen, a picture the person can watch beside the to-do the work is
-  for, `screen.show(screen, picture)` puts a PNG or JPEG on it as base64, a data: address too, replacing what it
-  showed, and `screen.close(screen)` takes it away. Onsay decides where it shows. It stays open until closed, by the
-  lingo or the person, so a lingo working in the background, like `browser`, shows what it does without being asked.
+- **Screens:** `screen.open(title)` gives a new screen, a canvas the person can watch beside the to-do the work is
+  for. `screen.draw(screen, instructions)` draws on it with Canvas 2D instructions, as in a web page's canvas, each a
+  record with one key: `screen.draw(s, [{clear: [240, 40]}, {fillStyle: "#5865F2"}, {fillRect: [0, 0, 120, 12]},
+  {font: "14px Segoe UI"}, {fillText: ["3 of 5 files", 0, 20]}])`. `clear` starts it over at a size; anything else
+  draws after what was drawn before. The keys are clear, save, restore, translate, scale, rotate, beginPath,
+  closePath, moveTo, lineTo, bezierCurveTo, quadraticCurveTo, arc, rect, roundRect, fill, stroke, clip, fillRect,
+  strokeRect, clearRect, fillText, strokeText and drawImage, and fillStyle, strokeStyle, lineWidth, font, textAlign,
+  textBaseline and globalAlpha. drawImage takes only a picture inside it, a data:image/ address, so a device watching
+  never reaches the web. `screen.show(screen, picture)` puts a whole PNG or JPEG on it, a clear and one drawImage, and
+  `screen.close(screen)` takes it away. Each device watching draws the instructions itself. Onsay decides where a
+  screen shows, and it stays open until closed, by the lingo or the person. `browser` draws each page it works on as
+  instructions, and `browser.render(html)` a page of a lingo's own.
 - **Places:** `input`'s `click_in`, `move_in`, `drag_in`, `scroll_in` and `position_in` take a place in a window,
   wherever it is now, or on the main screen when the window is `nothing`.
 - **New windows:** a window builds its controls a moment after it appears, so wait for one with `controls.wait_for`

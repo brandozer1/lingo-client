@@ -12,6 +12,8 @@
 // 6. screenshot(tab=nothing)              -> {path}: a picture of the page, saved as a PNG file
 // 7. tabs()                               -> [{tab, title, url}]: every tab open
 // 8. close(tab=nothing)                   -> nothing: a tab closed, the open one when none is given
+// 9. render(html, tab=nothing)            -> {tab, title}: a page of HTML and CSS of the lingo's own laid out, in the
+//                                            open tab, the tab given, or a new one for "new"
 // tab is a tab's number, from 1 in the browser's order, as open and tabs give it, and the open one, the last one used,
 // when left out.
 //
@@ -20,7 +22,10 @@
 // own profile, so it never touches the person's own browser. It drives it over WebDriver BiDi, the W3C standard built
 // into Firefox, through the core's socket phrases: each call starts it when it isn't running, opens a socket to it,
 // begins a session, does its work and ends the session, so later calls find the same browser and its tabs. As each call
-// ends, the open tab is drawn on a screen, Browser, beside the to-do it works for, so the person can watch. Its settings,
+// ends, what the open tab shows is drawn on a screen, Browser, beside the to-do it works for, so the person can watch:
+// not as a picture but as instructions every device draws itself, each element's box, background, corners, border and
+// lines of text read from the page as LibreWolf laid it out, and each image, canvas and video cut out of it (drawn). Its
+// settings,
 // in openapi.json beside it: show, to see its window, and folder, where it keeps LibreWolf.
 
 ////////// 1. THE BROWSER //////////
@@ -218,6 +223,24 @@ fn close(tab=nothing) {
   finish(b)
 }
 
+// 9. Lays out a page of HTML and CSS a lingo made, like a report, a table or a card, in the browser, so it shows on the
+// Browser screen beside the to-do and can be read, clicked or typed in like any page. tab is the number of the tab to
+// use, "new" for a new one, else the open one. Gives the tab and the page's title.
+fn render(html, tab=nothing) {
+  b = begin()
+  try {
+    t = tabbed(b, tab)
+    asked(b.socket, "browsingContext.navigate", {context: t.id, url: "about:blank", wait: "complete"})
+    now = page(b, t.id, "document.open(); document.write(" + std.to_json(std.text(html)) + "); document.close();\nreturn JSON.stringify(document.title);")
+    out = {tab: t.number, title: now}
+  } catch e {
+    finish(b)
+    fail e
+  }
+  finish(b)
+  return out
+}
+
 ////////// HELPERS //////////
 
 // For browser's own use: the LibreWolf it fetches, by its version, where each computer's is, and its SHA-256, from
@@ -340,11 +363,87 @@ fn finish(b) {
     tabs = asked(b.socket, "browsingContext.getTree", {maxDepth: 0}).contexts
     n = std.number(store.get("browser/tab") ?? 1) ?? 1
     if n < 1 or n > std.length(tabs) {n = 1}
-    picture = asked(b.socket, "browsingContext.captureScreenshot", {context: tabs[n - 1].context}).data
-    screen.show(screen.open("Browser"), picture)
+    screen.draw(screen.open("Browser"), drawn(b, tabs[n - 1].context))
   } catch e {}
   try {asked(b.socket, "session.end")} catch e {}
   socket.close(b.socket)
+}
+
+// For browser's own use: what a tab shows, as screen instructions, Canvas 2D as JSON (screen.draw): a clear the size of
+// its window, then each element in view in the order the page paints them, its background, rounded or square, its
+// border, and its text a line at a time in its own colour and font, read where LibreWolf laid them out. Each image,
+// canvas, video, picture in its CSS and frame is cut out of the page as a picture, 40 at most, the rest left as their
+// boxes. Shadows, gradients, transforms and effects are left out.
+fn drawn(b, t) {
+  said = page(b, t, text.join([
+    "const W = innerWidth, H = innerHeight, out = [\{clear: [W, H]\}], round = (v) => Math.round(v * 10) / 10;",
+    "const color = (c) => c && c != 'transparent' && !/rgba\\(.*,\\s*0\\)$/.test(c) ? c : null;",
+    "const inView = (r) => r.width > 0 && r.height > 0 && r.bottom > 0 && r.right > 0 && r.top < H && r.left < W;",
+    "const box = (r) => [round(r.left), round(r.top), round(r.width), round(r.height)];",
+    "const html = getComputedStyle(document.documentElement), body = document.body ? getComputedStyle(document.body) : html;",
+    "out.push(\{fillStyle: color(html.backgroundColor) || color(body.backgroundColor) || '#ffffff'\}, \{fillRect: [0, 0, W, H]\});",
+    "let fill = null, font = null;",
+    "const use = (c, f) => \{ if (c != fill) \{ out.push(\{fillStyle: c\}); fill = c; \} if (f && f != font) \{ out.push(\{font: f\}); font = f; \} \};",
+    "const media = ['IMG', 'CANVAS', 'VIDEO', 'svg', 'IFRAME', 'EMBED', 'OBJECT'];",
+    "const words = (node, st) => \{",
+    "  const range = document.createRange(), all = node.data, f = st.fontStyle + ' ' + st.fontWeight + ' ' + st.fontSize + ' ' + st.fontFamily;",
+    "  range.selectNodeContents(node);",
+    "  if (!all.trim() || !inView(range.getBoundingClientRect())) return;",
+    "  const up = st.textTransform == 'uppercase', low = st.textTransform == 'lowercase';",
+    "  let line = null, at = 0;",
+    "  const done = () => \{ if (line && line.top < H && line.top + line.h > 0) \{ use(st.color, f); out.push(\{fillText: [line.text, round(line.left), round(line.top)]\}); \} line = null; \};",
+    "  for (const part of all.split(/(\\s+)/)) \{",
+    "    const start = at; at += part.length;",
+    "    if (!part.trim()) \{ if (line) line.gap = true; continue; \}",
+    "    range.setStart(node, start); range.setEnd(node, at);",
+    "    const r = range.getClientRects()[0]; if (!r) continue;",
+    "    const word = up ? part.toUpperCase() : low ? part.toLowerCase() : part;",
+    "    if (line && Math.abs(r.top - line.top) < 2) \{ line.text += (line.gap ? ' ' : '') + word; line.gap = false; \}",
+    "    else \{ done(); line = \{text: word, left: r.left, top: r.top, h: r.height, gap: false\}; \}",
+    "  \}",
+    "  done();",
+    "\};",
+    "const walk = (el) => \{",
+    "  const st = getComputedStyle(el);",
+    "  if (st.display == 'none' || st.visibility == 'hidden' || st.opacity == '0') return;",
+    "  const r = el.getBoundingClientRect(), shown = inView(r) && el != document.documentElement && el != document.body;",
+    "  if (shown) \{",
+    "    const bg = color(st.backgroundColor), corner = parseFloat(st.borderTopLeftRadius) || 0;",
+    "    if (bg && corner) \{ use(bg); out.push(\{beginPath: []\}, \{roundRect: [...box(r), Math.min(corner, r.width / 2, r.height / 2)]\}, \{fill: []\}); \}",
+    "    else if (bg) \{ use(bg); out.push(\{fillRect: box(r)\}); \}",
+    "    for (const [side, x, y, w, h] of [['Top', r.left, r.top, r.width, 0], ['Bottom', r.left, r.bottom, r.width, 0], ['Left', r.left, r.top, 0, r.height], ['Right', r.right, r.top, 0, r.height]]) \{",
+    "      const width = parseFloat(st['border' + side + 'Width']) || 0, c = color(st['border' + side + 'Color']);",
+    "      if (!width || !c || st['border' + side + 'Style'] == 'none') continue;",
+    "      use(c);",
+    "      out.push(\{fillRect: [round(side == 'Right' ? x - width : x), round(side == 'Bottom' ? y - width : y), round(w || width), round(h || width)]\});",
+    "    \}",
+    "    if (media.includes(el.tagName) || (st.backgroundImage || '').startsWith('url(')) \{",
+    "      const x = Math.max(0, r.left), y = Math.max(0, r.top);",
+    "      out.push(\{capture: [round(x), round(y), round(Math.min(W, r.right) - x), round(Math.min(H, r.bottom) - y)]\});",
+    "    \}",
+    "  \}",
+    "  if (media.includes(el.tagName)) return;",
+    "  for (const n of el.childNodes) \{ if (n.nodeType == 3) words(n, st); else if (n.nodeType == 1) walk(n); \}",
+    "\};",
+    "out.push(\{textBaseline: 'top'\});",
+    "walk(document.documentElement);",
+    "return JSON.stringify(out);"
+  ], "\n"))
+  out = []
+  cuts = 0
+  for x in said {
+    c = x.capture
+    if c == nothing {
+      out += [x]
+    } else if cuts < 40 and c[2] >= 1 and c[3] >= 1 {
+      cuts += 1
+      try {
+        data = asked(b.socket, "browsingContext.captureScreenshot", {context: t, clip: {type: "box", x: c[0], y: c[1], width: c[2], height: c[3]}}).data
+        out += [{drawImage: ["data:image/png;base64," + data, c[0], c[1], c[2], c[3]]}]
+      } catch e {}
+    }
+  }
+  return out
 }
 
 // For browser's own use: one WebDriver BiDi command and its result, or its error as a failure.

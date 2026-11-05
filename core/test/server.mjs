@@ -899,14 +899,20 @@ const WEB_CASES = [
     const json = { ...headers, 'content-type': 'application/json' }
     const shown = await web('/onsay/screen/show', { method: 'POST', body: { screen: id, picture: `data:image/png;base64,${dot}` }, headers: json })
     const bad = await web('/onsay/screen/show', { method: 'POST', body: { screen: id, picture: 'hello' }, headers: json })
+    const bar = [{ fillStyle: '#5865F2' }, { fillRect: [0, 0, 1, 1] }]
+    const drew = await web('/onsay/screen/draw', { method: 'POST', body: { screen: id, instructions: bar }, headers: json })
+    const odd = await web('/onsay/screen/draw', { method: 'POST', body: { screen: id, instructions: [{ explode: [1] }] }, headers: json })
+    const far = await web('/onsay/screen/draw', { method: 'POST', body: { screen: id, instructions: [{ drawImage: ['https://example.com/a.png', 0, 0] }] }, headers: json })
     const listed = await web('/onsay/screens', { headers }), closed = await web(`/onsay/screens/${id}`, { method: 'DELETE', headers })
-    await soon(() => got.length >= 4, 3)
+    await soon(() => got.length >= 5, 3)
     watch.end()
-    const mine = listed.json?.screens?.find((x) => x.screen === id)
+    const mine = listed.json?.screens?.find((x) => x.screen === id), picture = [{ clear: [1, 1] }, { drawImage: [`data:image/png;base64,${dot}`, 0, 0, 1, 1] }]
     return refused.status === 401 && watch.status === 101 && Array.isArray(got[0]?.screens) && id > 0 && shown.status === 200 && bad.status >= 400 &&
-      mine?.session === r.json.session && mine?.title === 'The tab' && mine?.picture === dot && closed.status === 200 &&
-      same(got[1].screens[0], { screen: id, session: r.json.session, title: 'The tab', picture: null }) && got[2].screens[0].picture === dot &&
-      same(got[3].screens[0], { screen: id, closed: true })
+      drew.status === 200 && odd.status >= 400 && /isn't one/.test(odd.text) && far.status >= 400 && /never one on the web/.test(far.text) &&
+      mine?.session === r.json.session && mine?.title === 'The tab' && same(mine?.draw, [...picture, ...bar]) && mine?.fresh === true && closed.status === 200 &&
+      same(got[1].screens[0], { screen: id, session: r.json.session, title: 'The tab', draw: [], fresh: true }) &&
+      same(got[2].screens[0].draw, picture) && got[2].screens[0].fresh === true && same(got[3].screens[0].draw, bar) && got[3].screens[0].fresh === false &&
+      same(got[4].screens[0], { screen: id, closed: true })
   }],
   ['/onsay/screens: Onsay asks for the stream for another computer of the account, as me with no prompt key: every screen, then each change as a frame, until a stop', async (send) => {
     const json = { authorization: `Bearer ${onsayed.key}`, 'content-type': 'application/json' }
@@ -932,14 +938,16 @@ const WEB_CASES = [
     deskOnline = false
     await soon(() => watched.length >= 1, 3)
     const w = watched[0] ?? {}
-    linkNow.send({ type: 'frame', id: w.id, text: JSON.stringify({ screens: [{ screen: 7, session: '', title: 'Desk tab', picture: DOT }, { screen: 9, session: '', title: 'Not ours', picture: null }] }) })
+    const drawn = [{ clear: [2, 2] }, { fillRect: [0, 0, 2, 2] }]
+    linkNow.send({ type: 'frame', id: w.id, text: JSON.stringify({ screens: [{ screen: 7, session: '', title: 'Desk tab', draw: drawn, fresh: true }, { screen: 9, session: '', title: 'Not ours', draw: [], fresh: true }] }) })
+    linkNow.send({ type: 'frame', id: w.id, text: JSON.stringify({ screens: [{ screen: 7, session: '', title: 'Desk tab', draw: [{ fillText: ['hi', 0, 1] }], fresh: false }] }) })
     await pause(300)
     const listed = (await web('/onsay/screens', { headers })).json?.screens ?? []
     const shown = listed.find((x) => x.title === 'Desk tab')
     linkNow.send({ type: 'frame', id: w.id, text: JSON.stringify({ screens: [{ screen: 7, closed: true }] }) })
     await soon(() => watched.length >= 2, 3)
     const after = (await web('/onsay/screens', { headers })).json?.screens ?? []
-    return w.type === 'watch' && w.to === `desk.${HANDLE}` && w.path === '/onsay/screens' && shown?.session === r.json?.session && shown?.picture === DOT &&
+    return w.type === 'watch' && w.to === `desk.${HANDLE}` && w.path === '/onsay/screens' && shown?.session === r.json?.session && same(shown?.draw, [...drawn, { fillText: ['hi', 0, 1] }]) &&
       !listed.some((x) => x.title === 'Not ours') && !after.some((x) => x.title === 'Desk tab') && watched[1]?.type === 'unwatch' && watched[1]?.id === w.id
   }],
   ['/onsay: the agent loop runs the calls Onsay decides on this computer, as me, each joining the log with what it gave, until the reply, and a follow-up carries the whole log', async () => {
