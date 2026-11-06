@@ -1358,13 +1358,27 @@ static val *serve(run *r, val **v) {
   while (running_ && strcmp(running_->session, id)) running_ = running_->next;
   pl_leave(lock);
   if (running_) return answer(r, 409, "That one is still working. Wait for it, or stop it first");
+  // The same prompt again, as one held for a device runs again, goes on in place of the turn a stop left of it.
+  val *cut = turns->l.n ? turns->l.v[turns->l.n - 1] : NULL;
+  val *stopped = rec_get(cut, "stopped");
+  if (stopped && truthy(stopped) && v_same(rec_get(cut, "prompt"), prompt)) turns->l.n--;
   rec_set(a, record, "turns", turns);
   if (from) rec_set(a, record, "from", from);
-  if (!kept) {
-    buf_json(&whole, record);
-    store(r, "store.put", where, v_text(a, whole.s, whole.n));
-    buf_free(&whole);
-  }
+  // Kept with its prompt from the start, so a stop or a crash that ends the lingo client partway never loses what was
+  // asked: until the answer takes its place, the turn says it stopped.
+  val *meanwhile = v_rec(a);
+  val *so_far = v_list(a);
+  val *unfinished = v_rec(a);
+  for (size_t i = 0; i < turns->l.n; i++) list_push(a, so_far, turns->l.v[i]);
+  rec_set(a, unfinished, "prompt", prompt);
+  rec_set(a, unfinished, "text", v_cstr(a, "Stopped before it finished."));
+  rec_set(a, unfinished, "stopped", VBOOL(1));
+  list_push(a, so_far, unfinished);
+  rec_set(a, meanwhile, "turns", so_far);
+  if (from) rec_set(a, meanwhile, "from", from);
+  buf_json(&whole, meanwhile);
+  store(r, "store.put", where, v_text(a, whole.s, whole.n));
+  buf_free(&whole);
   // A prompt held for a device goes on from what it did, unless the person asked something else since.
   buf_fmt(&whole, "onsay/waiting/%s", id);
   val *waiting_at = v_text(a, whole.s, whole.n);
@@ -1553,6 +1567,9 @@ static val *serve(run *r, val **v) {
     rec_set(a, wait_, "messages", added);
     buf_json(&m, wait_);
     store(r, "store.put", waiting_at, v_text(a, m.s, m.n));
+    m.n = 0;
+    buf_json(&m, record);   // waiting, not stopped
+    store(r, "store.put", where, v_text(a, m.s, m.n));
     pl_enter(lock);
     holding = 1;
     pl_leave(lock);
@@ -1817,6 +1834,18 @@ static void far_opened(const char *session, val *shown, buf *gone, buf *opened, 
   int k = 0;
   int w = 0;
   if (!*at || strlen(at) >= sizeof watching[0].at || !far || far->k != V_NUM) return;
+  // Opened on this computer for one of its own to-dos, through Onsay, as a use(...) does: the screen here is that
+  // to-do's, never a copy of it watched back through Onsay.
+  char here[160];
+  snprintf(here, sizeof here, "%s.%s", device, handle);
+  if (!strcmp(at, here)) {
+    int mine = screen_at(far->n);
+    if (mine < 0 || screens[mine].session[0]) return;
+    snprintf(screens[mine].session, sizeof screens[mine].session, "%s", session);
+    screens_json(opened, mine);
+    buf_chr(opened, '\n');
+    return;
+  }
   for (int i = 0; i < MOST_SCREENS; i++)
     if (screens[i].id && !strcmp(screens[i].at, at) && screens[i].far == (long)far->n) return;
   for (int i = 0; i < MOST_SCREENS; i++)
