@@ -197,6 +197,9 @@ fn memory() {
 // A phrase called with a default.
 fn sliced() {return std.slice("abc", 1)}
 
+// use(...) of another computer, from a lingo the loop of a to-do called here.
+fn through() {return use("desk.tester/memo/recall", {k: "milk"})}
+
 // setting(...) of another lingo, and nothing when it is unset.
 fn tokens() {return [setting("token", "github"), setting("nope", "github") ?? "metric"]}
 

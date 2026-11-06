@@ -634,8 +634,23 @@ static int exchange(
   return got;
 }
 
+/* The turn of the to-do a request works for: one a call of its loop handed in here (calling), or NULL. A lingo(...) or
+   use(...) it asks belongs to that to-do, so the steps of what it reaches, and a screen opened for it, come back to it.
+   Inside the lock. */
+static turn *turn_of(const char *job) {
+  const char *session = NULL;
+  for (int i = 0; job && i < 16 && !session; i++)
+    if (calling[i].id[0] && !strcmp(calling[i].id, job)) session = calling[i].session;
+  for (turn *t = turns_; session && t; t = t->next)
+    if (!strcmp(t->session, session)) return t;
+  return NULL;
+}
+
 static int ask(const char *values, size_t n, volatile int *stop, buf *answer) {
-  return exchange("lingo", values, n, stop, 1e12, answer, NULL);
+  pl_enter(lock);
+  turn *t = turn_of(lingo_job());
+  pl_leave(lock);
+  return exchange("lingo", values, n, stop, 1e12, answer, t);
 }
 
 /* A line a request's run says for the person, sent to Onsay as a step of that request when Onsay sent it, so whoever
@@ -1737,8 +1752,8 @@ static val *screen_open(run *r, val **a) {
   buf said = { 0 };
   int k = 0;
   pl_enter(lock);
-  for (int i = 0; job && i < 16; i++)
-    if (!strcmp(calling[i].id, job)) snprintf(session, sizeof session, "%s", calling[i].session);
+  turn *mine = turn_of(job);
+  if (mine) snprintf(session, sizeof session, "%s", mine->session);
   for (int i = 0; i < MOST_SCREENS; i++)
     if (screens[i].id && !strcmp(screens[i].session, session) && !strncmp(screens[i].title, title, sizeof screens[i].title - 1)) {
       long id = screens[i].id;

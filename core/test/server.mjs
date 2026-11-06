@@ -957,6 +957,21 @@ const WEB_CASES = [
     return w.type === 'watch' && w.to === `desk.${HANDLE}` && w.path === '/onsay/screens' && shown?.session === r.json?.session && same(shown?.draw, [...drawn, { fillText: ['hi', 0, 1] }]) &&
       !listed.some((x) => x.title === 'Not ours') && !after.some((x) => x.title === 'Desk tab') && watched[1]?.type === 'unwatch' && watched[1]?.id === w.id
   }],
+  ['/onsay/screens: a screen opened for what a lingo of a to-do asked through use(...) joins that to-do, and so do its steps', async () => {
+    const headers = { authorization: `Bearer ${onsayed.key}` }
+    watched.length = 0
+    deskOnline = true
+    deskScreen = { at: `desk.${HANDLE}`, screen: 8, title: 'Desk through' }
+    const r = await web('/onsay', { method: 'POST', body: { prompt: 'go through a lingo' }, headers })
+    deskScreen = null
+    deskOnline = false
+    await soon(() => watched.length >= 1, 3)
+    const w = watched[0] ?? {}
+    const shown = ((await web('/onsay/screens', { headers })).json?.screens ?? []).find((x) => x.title === 'Desk through')
+    linkNow.send({ type: 'frame', id: w.id, text: JSON.stringify({ screens: [{ screen: 8, closed: true }] }) })
+    await soon(() => watched.length >= 2, 3)
+    return r.status === 200 && r.json?.text === 'through: from the desk' && shown?.session === r.json?.session && r.json.steps?.some((x) => x.text === 'Showing it on a screen')
+  }],
   ['/onsay: the agent loop runs the calls Onsay decides on this computer, as me, each joining the log with what it gave, until the reply, and a follow-up carries the whole log', async () => {
     const headers = { authorization: `Bearer ${onsayed.key}` }, asked = 'remember milk then tell me what you kept'
     const r = await web('/onsay', { method: 'POST', body: { prompt: asked }, headers }), mine = decided.filter((m) => m.messages.findLast((x) => x.role === 'user').content === asked)
@@ -1224,6 +1239,7 @@ const decide = (m, link) => {
   if (!gave.length) link.send({ type: 'step', id: m.id, text: 'Understanding what you asked', depth: 0 })
   link.send({ type: 'decision', id: m.id, ...(/remember milk/.test(asked) ? [here('memo/remember', 'Keeps a thing under a name', { k: 'milk', v: 'oat milk' }), here('memo/recall', 'What was kept under a name', { k: 'milk' }), { reply: `You kept: ${gave[1]}` }][gave.length]
     : /use the desk/.test(asked) ? (gave.length ? { reply: `desk said: ${gave[0]}` } : { call: `desk.${HANDLE}/memo/recall`, does: 'What was kept under a name', where: 'on desk', inputs: { k: 'milk' } })
+    : /through a lingo/.test(asked) ? (gave.length ? { reply: `through: ${gave[0]}` } : here('checks/through', 'Uses the desk through a lingo'))
     : /open a screen/.test(asked) ? (gave.length ? { reply: `opened: ${gave[0]}` } : here('onsay/screen/open', 'Opens a screen', { title: 'The tab' }))
     : /go on and on/.test(asked) ? here('memo/recall', 'What was kept under a name', { k: 'milk' })
     : /spin forever/.test(asked) ? here('checks/forever', 'Spins until it is stopped')
