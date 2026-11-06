@@ -21,12 +21,12 @@
 // (dl.librewolf.net), one version pinned in release() and checked against its SHA-256, into a folder of its own with its
 // own profile, so it never touches the person's own browser. It drives it over WebDriver BiDi, the W3C standard built
 // into Firefox, through the core's socket phrases: each call starts it when it isn't running, opens a socket to it,
-// begins a session, does its work and ends the session, so later calls find the same browser and its tabs. As each call
-// ends, what the open tab shows is drawn on a screen, Browser, beside the to-do it works for, so the person can watch:
-// not as a picture but as instructions every device draws itself, each element's box, background, corners, border and
-// lines of text read from the page as LibreWolf laid it out, and each image, canvas and video cut out of it (drawn). Its
-// settings,
-// in openapi.json beside it: show, to see its window, and folder, where it keeps LibreWolf.
+// begins a session, does its work and ends the session, so later calls find the same browser and its tabs. Out of
+// sight, as each call ends, every tab is drawn on a screen of its own, Browser tab 1 and on, beside the to-do it works
+// for, so the person can watch: not as a picture but as instructions every device draws itself, each element's box,
+// background, corners, border and lines of text read from the page as LibreWolf laid it out, and each image, canvas and
+// video cut out of it (drawn). Its settings, in openapi.json beside it: show, to see its window, and folder, where it
+// keeps LibreWolf. A download that stops partway carries on from there next time.
 
 ////////// 1. THE BROWSER //////////
 
@@ -284,7 +284,8 @@ fn installed() {
       "$ErrorActionPreference='Stop'",
       "New-Item -ItemType Directory -Force " + quoted(dir, true) + ", " + quoted(p.profile, true) + ", " + quoted(folder + "/screenshots", true) + " | Out-Null",
       "$zip=" + quoted(dir + "/librewolf.zip", true),
-      "Invoke-WebRequest -UseBasicParsing -Uri " + quoted(r.from + one.file, true) + " -OutFile $zip",
+      "& (Join-Path $env:SystemRoot 'System32/curl.exe') -fsSL --retry 5 --retry-all-errors -C - -o $zip " + quoted(r.from + one.file, true),
+      "if ($LASTEXITCODE) \{ throw 'The download stopped partway. Try again and it carries on from there' \}",
       "if ((Get-FileHash $zip -Algorithm SHA256).Hash -ne '" + one.sha256 + "') \{ Remove-Item $zip; throw 'The download did not match its checksum' \}",
       "& (Join-Path $env:SystemRoot 'System32/tar.exe') -xf $zip -C " + quoted(dir, true),
       "Remove-Item $zip"
@@ -294,7 +295,7 @@ fn installed() {
       "set -e",
       "mkdir -p " + quoted(dir, false) + " " + quoted(p.profile, false) + " " + quoted(folder + "/screenshots", false),
       "f=" + quoted(dir + "/librewolf.tar.xz", false),
-      "curl -fsSL -o \"$f\" " + quoted(r.from + one.file, false),
+      "curl -fsSL --retry 5 --retry-all-errors -C - -o \"$f\" " + quoted(r.from + one.file, false),
       "if [ \"$(sha256sum \"$f\" | cut -d' ' -f1)\" != '" + one.sha256 + "' ]; then rm -f \"$f\"; echo 'The download did not match its checksum'; exit 1; fi",
       "tar -xJf \"$f\" -C " + quoted(dir, false),
       "rm -f \"$f\""
@@ -311,9 +312,8 @@ fn begin() {
   p = installed()
   s = reached(p)
   if s != nothing {return {socket: s, place: p}}
-  shown = setting("show")
   flags = "--no-remote --remote-debugging-port 0 --profile " + (p.windows ? "\"" + p.profile + "\"" : quoted(p.profile, false))
-  if not (shown == true or text.lower(std.text(shown ?? "")) in ["true", "on", "yes", "1"]) {flags = "--headless " + flags}
+  if hidden() {flags = "--headless " + flags}
   ready = p.profile + "/WebDriverBiDiServer.json"
   if p.windows {
     done = commands.run("Remove-Item -LiteralPath " + quoted(ready, true) + " -ErrorAction SilentlyContinue\n[Console]::Out.Write((Start-Process -FilePath " + quoted(p.exe, true) + " -ArgumentList " + quoted(flags, true) + " -PassThru).Id)")
@@ -356,15 +356,22 @@ fn reached(p) {
   return s
 }
 
-// For browser's own use: the open tab drawn on the Browser screen, then the session ended, so the next call can begin
-// one, and the socket closed. A computer without screens draws nothing.
+// For browser's own use: whether it works out of sight, which it does unless its show setting is on.
+fn hidden() {
+  shown = setting("show")
+  return not (shown == true or text.lower(std.text(shown ?? "")) in ["true", "on", "yes", "1"])
+}
+
+// For browser's own use: out of sight, every tab drawn on a screen of its own, Browser tab 1 and on, then the session
+// ended, so the next call can begin one, and the socket closed. With its window shown there is no screen, and a
+// computer without screens draws nothing.
 fn finish(b) {
-  try {
-    tabs = asked(b.socket, "browsingContext.getTree", {maxDepth: 0}).contexts
-    n = std.number(store.get("browser/tab") ?? 1) ?? 1
-    if n < 1 or n > std.length(tabs) {n = 1}
-    screen.draw(screen.open("Browser"), drawn(b, tabs[n - 1].context))
-  } catch e {}
+  if hidden() {
+    try {
+      tabs = asked(b.socket, "browsingContext.getTree", {maxDepth: 0}).contexts
+      for n in 1..std.length(tabs) {screen.draw(screen.open("Browser tab {n}"), drawn(b, tabs[n - 1].context))}
+    } catch e {}
+  }
   try {asked(b.socket, "session.end")} catch e {}
   socket.close(b.socket)
 }
