@@ -20,3 +20,9 @@ fn color() {
 fn token() {
   return setting("token", "github")
 }
+
+// settings.set of its own, then settings.get.
+fn set_units() {
+  settings.set("prefs", "units", "kelvin")
+  return [units(), settings.get("prefs")]
+}

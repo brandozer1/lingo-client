@@ -16,3 +16,10 @@ fn read(key) {
 fn write(key, value) {
   store.put("vault/" + key, to_json(value))
 }
+
+// Its pin, changed with settings.set, then read every way.
+fn change() {
+  a = pin()
+  settings.set("vault", "pin", "1234")
+  return [a, pin(), store.get("vault/pin"), settings.get("vault")[0].value]
+}

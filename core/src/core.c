@@ -150,9 +150,18 @@ static val *log_(run *r, val **a) {
 // store: Onsay's own storage, one file per key in home/store. A key's name is written so any key is a safe file name on
 // any system: only a to z, 0 to 9, _ and - stay, everything else becomes %XX, so case and dots can never clash.
 
+// Each lingo's keys start with its name and a slash, like memo/today, so no lingo reads or changes another's. The person,
+// at the command line or through /onsay, reaches any.
+static void mine(run *r, val *key) {
+  size_t n = r->lingo ? strlen(r->lingo) : 0;
+  if (n && (key->t.len <= n || memcmp(key->t.s, r->lingo, n) || key->t.s[n] != '/'))
+    fail(r, "phrase", "%s's keys start with %s/, like %s/notes", r->lingo, r->lingo, r->lingo);
+}
+
 static void file_of(run *r, val *key, buf *path) {
   if (key->k != V_TEXT || !key->t.len) fail(r, "phrase", "a key is text, like notes/today");
   if (key->t.len > 100) fail(r, "phrase", "a key is at most 100 characters");
+  mine(r, key);
   buf_fmt(path, "%s/store/k", set.home);
   for (size_t i = 0; i < key->t.len; i++) {
     unsigned char c = (unsigned char)key->t.s[i];
@@ -234,6 +243,8 @@ static void each_key(const char *name, int folder, double size, double changed, 
 
 static val *keys(run *r, val **a) {
   val *prefix = a[0]->k == V_TEXT ? a[0] : v_cstr(r->a, "");
+  if (r->lingo && !prefix->t.len) prefix = v_cstr(r->a, arena_fmt(r->a, "%s/", r->lingo));   // every key of its own
+  mine(r, prefix);
   listing l = { r, prefix, v_list(r->a) };
   buf folder = { 0 };
   buf_fmt(&folder, "%s/store", set.home);
@@ -879,6 +890,8 @@ static const builtin *builtin_of(const char *name) {
 // the table from then on: a changed one is used after a restart.
 static const char *natives[64] = { "core" };
 static size_t native_total = 1;
+
+const char *native_name(size_t lingo) { return lingo < native_total ? natives[lingo] : "core"; }
 
 static unsigned long long fnv(unsigned long long h, const void *data, size_t n) {
   const unsigned char *p = data;
@@ -1952,43 +1965,60 @@ static val *kept(run *r, const char *lingo, const char *fn, val *values) {
   return got;
 }
 
-// lingo.setting(key, reference).
+// A setting's value, kept wherever its lingo keeps it, else its manifest's default, else nothing. all: its settings, as
+// declared gives them.
+static val *setting_value(run *r, const char *lingo, val *key, val *all, val *keep) {
+  val *v;
+  if (keep) {
+    val *values = v_list(r->a);
+    list_push(r->a, values, key);
+    v = kept(r, lingo, text_or(keep, "read", ""), values);
+  } else
+    v = lingo_setting(r->a, lingo, key->t.s);
+  for (size_t i = 0; (!v || v->k == V_NOTHING) && i < all->l.n; i++)
+    if (!strcmp(text_or(all->l.v[i], "name", ""), key->t.s)) v = rec_get(all->l.v[i], "default");
+  return v ? v : NOTHING;
+}
+
+// Whether the lingo running is another than lingo. The person, at the command line or through /onsay, is none.
+static int other(run *r, const char *lingo) { return r->lingo && strcmp(r->lingo, lingo); }
+
+// lingo.setting(key, reference). Another lingo's setting is read too, so one token serves many, but never one its
+// manifest calls secret.
 static val *setting_(run *r, val **a) {
   const char *lingo = whose(r, a[1], a[0]);
   val *keep = NULL;
   val *all = declared(r->a, lingo, &keep);
-  val *v;
-  if (keep) {
-    val *values = v_list(r->a);
-    list_push(r->a, values, a[0]);
-    v = kept(r, lingo, text_or(keep, "read", ""), values);
-  } else
-    v = lingo_setting(r->a, lingo, a[0]->t.s);
-  for (size_t i = 0; (!v || v->k == V_NOTHING) && i < all->l.n; i++)
-    if (!strcmp(text_or(all->l.v[i], "name", ""), a[0]->t.s)) v = rec_get(all->l.v[i], "default");
-  return v ? v : NOTHING;
+  for (size_t i = 0; other(r, lingo) && i < all->l.n; i++) {
+    val *secret = rec_get(all->l.v[i], "secret");
+    if (!strcmp(text_or(all->l.v[i], "name", ""), a[0]->t.s) && secret && truthy(secret))
+      fail(r, "phrase", "%s is a secret of %s's, and only %s reads it", a[0]->t.s, lingo, lingo);
+  }
+  return setting_value(r, lingo, a[0], all, keep);
 }
 
 // settings.get(lingo), for a form of them: each its manifest lists, with what it says, then each other one its code
 // reads, each with its value now.
 static val *settings_get(run *r, val **a) {
-  val *all = declared(r->a, whose(r, a[0], NULL), NULL);
-  val *asked_[2] = { NULL, a[0] };
+  const char *lingo = whose(r, a[0], NULL);
+  val *keep = NULL;
+  val *all = declared(r->a, lingo, &keep);
   for (size_t i = 0; i < all->l.n; i++) {
     val *secret = rec_get(all->l.v[i], "secret");
-    asked_[0] = rec_get(all->l.v[i], "name");
-    val *now = setting_(r, asked_);
-    // What comes in by request never carries a secret's value, only whether it is set: a model may read it. A form here does.
-    if (job.path && job.lingo && !strcmp(job.lingo, "onsay") && secret && truthy(secret) && now->k != V_NOTHING)
-      now = v_cstr(r->a, "set");
+    val *now = setting_value(r, lingo, rec_get(all->l.v[i], "name"), all, keep);
+    // A secret's value goes only to its own lingo and to the person's form here, never by request, where a model may
+    // read it, nor to another lingo: they get whether it is set.
+    int hidden = other(r, lingo) || (job.path && job.lingo && !strcmp(job.lingo, "onsay"));
+    if (hidden && secret && truthy(secret) && now->k != V_NOTHING) now = v_cstr(r->a, "set");
     rec_set(r->a, all->l.v[i], "value", now);
   }
   return all;
 }
 
-// settings.set(lingo, key, value), wherever that lingo keeps them.
+// settings.set(lingo, key, value), wherever that lingo keeps them. Only the lingo itself and the person change them.
 static val *settings_set(run *r, val **a) {
   const char *lingo = whose(r, a[0], a[1]);
+  if (other(r, lingo)) fail(r, "phrase", "only %s, or the person, changes %s's settings", lingo, lingo);
   val *keep = NULL;
   declared(r->a, lingo, &keep);
   if (keep) {

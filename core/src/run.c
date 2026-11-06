@@ -420,6 +420,7 @@ static int exec(run *r, val *body, val *frame, val **back) {
         trap_t t;
         void *volatile prev = r->trap;
         volatile int depth = r->depth;
+        const char *volatile lingo = r->lingo;
         size_t mark = r->at.n;
         r->trap = &t;
         if (!setjmp(t.j)) {
@@ -431,6 +432,7 @@ static int exec(run *r, val *body, val *frame, val **back) {
         }
         r->trap = prev;
         r->depth = depth;
+        r->lingo = lingo;   // an error caught from another lingo's function never leaves this code running as it
         if (!strcmp(r->code, "limit") || !strcmp(r->code, "denied") || !strcmp(r->code, "stopped") ||
             !strcmp(r->code, "crash"))
           rethrow(r);
@@ -460,13 +462,16 @@ static val *call_fn(run *r, const char *name, val *args) {
   buf_add(&saved, r->at.s ? r->at.s : "", r->at.n);
   val *frame = v_rec(r->a);
   val *back = NOTHING;
+  const char *was = r->lingo;
   bind(r, rec_get(fn, "params"), args, 0, frame);
+  r->lingo = v_text(r->a, name, strcspn(name, "."))->t.s;   // memo.recall is memo's
   at_cut(r, 0);
   buf_fmt(&r->at, "fn:%s", name);
   int out = exec(r, rec_get(fn, "body"), frame, &back);
   at_cut(r, 0);
   buf_add(&r->at, saved.s ? saved.s : "", saved.n);   // only on success, so an error inside still points inside
   buf_free(&saved);
+  r->lingo = was;
   r->depth--;
   return out == BACK ? back : NOTHING;
 }
@@ -490,9 +495,12 @@ static val *say(run *r, const char *id, val *args, val *frame) {
   }
   const char *was =
       phrase_now;   // a phrase may run others inside it, like lingo.run the requests Onsay sends meanwhile
+  const char *was_lingo = r->lingo;
   phrase_now = id;
+  if (p->lingo) r->lingo = native_name(p->lingo);   // a native lingo's phrase runs as that lingo
   val *out = p->fn(r, values);
   phrase_now = was;
+  r->lingo = was_lingo;
   return out ? out : NOTHING;
 }
 

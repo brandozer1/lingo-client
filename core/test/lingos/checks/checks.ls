@@ -154,15 +154,26 @@ fn waited() {
   return now() - a
 }
 
-// Onsay's own storage, its keys any text.
+// Onsay's own storage, its keys any text after its own name.
 fn stored() {
-  store.put("Notes/Today", "milk")
-  store.put("notes/today", "eggs")
-  store.put("a.b", [1])
-  store.put("x/../y", "safe")
-  out = [store.get("Notes/Today"), store.get("notes/today"), store.get("a.b"), store.get("nope"), store.keys("notes")]
-  store.delete("a.b")
-  return out + [store.get("a.b"), store.keys()]
+  store.put("checks/Notes/Today", "milk")
+  store.put("checks/notes/today", "eggs")
+  store.put("checks/a.b", [1])
+  store.put("checks/x/../y", "safe")
+  out = [store.get("checks/Notes/Today"), store.get("checks/notes/today"), store.get("checks/a.b"), store.get("checks/nope"), store.keys("checks/notes")]
+  store.delete("checks/a.b")
+  return out + [store.get("checks/a.b"), store.keys()]
+}
+
+// Another lingo's keys and secrets are its own, even after an error from its code is caught.
+fn others() {
+  out = []
+  try {store.get("vault/pin")} catch e {out += [e]}
+  try {setting("pin", "vault")} catch e {out += [e]}
+  try {settings.set("prefs", "units", "kelvin")} catch e {out += [e]}
+  try {vault.read("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")} catch e {}
+  try {store.keys("vault/")} catch e {out += [e]}
+  return out + [settings.get("vault")[0].value, setting("units", "prefs")]
 }
 
 // Never ends, until a limit or a stop.
@@ -189,18 +200,6 @@ fn sliced() {return std.slice("abc", 1)}
 // setting(...) of another lingo, and nothing when it is unset.
 fn tokens() {return [setting("token", "github"), setting("nope", "github") ?? "metric"]}
 
-// settings.set, then settings.get.
-fn set_units() {
-  settings.set("prefs", "units", "kelvin")
-  return [prefs.units(), settings.get("prefs")]
-}
-
-// A lingo that keeps its own settings.
-fn vault_keep() {
-  a = vault.pin()
-  settings.set("vault", "pin", "1234")
-  return [a, vault.pin(), store.get("vault/pin"), settings.get("vault")[0].value]
-}
 
 // http.send: a GET, its status, headers and text.
 fn http_get(base) {

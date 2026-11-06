@@ -260,7 +260,8 @@ token = setting("token", "github")
 ```
 
 - `setting("key")` is the lingo's own: the compiler fills in its name, like `agent`. `setting("key", "github")` reads
-  another lingo's, so one token serves many lingos.
+  another lingo's, so one token serves many lingos, but never one its manifest marks `secret`: only its own lingo reads
+  that.
 - It compiles to the phrase `lingo.setting(key, reference)`, every core's own, answered by the core on the computer when
   the line runs, never asked of Onsay: the value kept for that lingo on this computer, else the default its
   `openapi.json` gives, else `nothing`. Settings are never kept on Onsay's servers.
@@ -530,8 +531,9 @@ native lingo, which has no comments to read, and `x-lingo` with its settings, a 
 Who may reach a lingo is never in its manifest: that is the computer's policy (`core/README.md`). A lingo whose
 `openapi.json` lists its settings wrongly is set aside with the reason. The lingo client answers `setting(...)` from
 them, `settings.get(lingo)` gives every one with what its manifest says and its value now, and
-`settings.set(lingo, key, value)` changes one wherever it is kept (section 15). A lingo's settings are never sent to
-Onsay: its manifest names them only.
+`settings.set(lingo, key, value)` changes one wherever it is kept (section 15). Asked by another lingo, `settings.get`
+gives a secret only as `set`, and `settings.set` is refused: only the lingo itself and the person, at the command line
+or through `/onsay`, change its settings. A lingo's settings are never sent to Onsay: its manifest names them only.
 
 **`serve(request)`.** A lingo with a function `serve` answers every request to its route itself, like a page:
 
@@ -689,7 +691,7 @@ can write in a few lines is a standard function instead, written in Lingo on thi
 | `compute.now()` | The clock: seconds since 1970 |
 | `compute.wait(seconds)` | Pausing, at most 60 seconds, still stopping when asked |
 | `compute.log(x)` | A line in the lingo client's log, which the Windows app keeps |
-| `store.get`, `put`, `keys`, `delete` | Onsay's own storage on the computer, its files, needing `store` |
+| `store.get`, `put`, `keys`, `delete` | Onsay's own storage on the computer, its files, needing `store`. A lingo's keys start with its name, like `memo/today`, and it reaches no other's. `store.keys()` lists its own |
 | `settings.get(lingo)`, `settings.set(lingo, key, value)` | A lingo's settings, kept on the computer wherever that lingo keeps them, for a form of them and to change one (section 11) |
 | `http.send(method, url, headers=nothing, body=nothing, timeout=30)` | The computer's own web request, needing `net`. `request` and `use(...)` stand on it |
 | `socket.open(url, headers=nothing)`, `send(socket, text)`, `receive(socket, seconds=30)`, `close(socket)` | A WebSocket, needing `net`, for a service that talks both ways, like a browser driven over WebDriver BiDi. A request can't wait for a message the way a socket does |

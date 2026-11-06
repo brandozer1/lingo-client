@@ -224,7 +224,7 @@ const CASES = [
   { path: '/checks/deep_loop', check: gives(5000050000) },
   { name: 'compute.log writes to the log, and the program goes on', path: '/checks/notes', check: gives(1) },
   { path: '/checks/waited', check: (r) => r.status === 200 && r.json >= 0.19 && r.json < 1 },
-  { name: 'store: any key, kept as text, listed in order', path: '/checks/stored', check: gives(['milk', 'eggs', '[1]', null, ['notes/today'], null, ['Notes/Today', 'notes/today', 'x/../y']]) },
+  { name: 'store: any key after its own name, kept as text, listed in order', path: '/checks/stored', check: gives(['milk', 'eggs', '[1]', null, ['checks/notes/today'], null, ['checks/Notes/Today', 'checks/notes/today', 'checks/x/../y']]) },
   { name: 'limit: too many steps', path: '/checks/forever', check: fails(500, /too many steps/), timed: true },
   { name: 'stop: between two steps', path: '/checks/forever', stopAfter: 300, check: fails(500, STOPPED) },
   { name: 'stop: in a wait', path: '/checks/wait_long', stopAfter: 300, check: fails(500, STOPPED) },
@@ -251,12 +251,19 @@ const CASES = [
   { name: "setting(...): another lingo's, from a lingo", path: '/prefs/token', check: gives('tok') },
   {
     name: "settings.set keeps one in its file, and settings.get gives each with what its openapi.json says and its value",
-    path: '/checks/set_units',
+    path: '/prefs/set_units',
     check: (r) => r.status === 200 && r.json[0] === 'kelvin' && same(r.json[1], [
       { name: 'units', title: 'Units', about: 'metric or imperial.', default: 'metric', required: true, value: 'kelvin' }, { name: 'name', required: true, value: 'Ana' }, { name: 'color', value: null }]) &&
       JSON.parse(readFileSync(new URL('prefs.json', SETTINGS), 'utf8')).units === 'kelvin',
   },
-  { name: 'keep: a lingo that keeps its settings with its own functions', path: '/checks/vault_keep', check: (r) => gives(['0000', '1234', '"1234"', '1234'])(r) && !existsSync(new URL('vault.json', SETTINGS)) },
+  { name: 'keep: a lingo that keeps its settings with its own functions', path: '/vault/change', check: (r) => gives(['0000', '1234', '"1234"', '1234'])(r) && !existsSync(new URL('vault.json', SETTINGS)) },
+  {
+    name: "another lingo's keys, secrets and settings to change are its own, and settings.get shows its secrets only as set",
+    path: '/checks/others',
+    check: (r) => r.status === 200 && r.json.length === 6 && /vault\/pin.*checks's keys start with checks\//.test('vault/pin ' + r.json[0]) &&
+      /pin is a secret of vault's/.test(r.json[1]) && /only prefs, or the person, changes/.test(r.json[2]) &&
+      /checks's keys start with checks\//.test(r.json[3]) && r.json[4] === 'set' && r.json[5] === 'kelvin',
+  },
   {
     name: 'the command line: set changes one, as JSON or as text, and settings prints them all',
     before: () => {

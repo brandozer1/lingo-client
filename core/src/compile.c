@@ -677,8 +677,8 @@ static val *wanted(cx *c, val *args, int line) {
 }
 
 /* setting("key") is a call of lingo.setting, made as the program reaches it: this computer answers with this lingo's
-   setting of that name, kept here, or its default, or nothing (6. in core.c). setting("key", "github") reads another
-   lingo's, so one token serves many lingos. */
+   setting of that name, kept here, or its default, or nothing (7. in core.c). setting("key", "github") reads another
+   lingo's, so one token serves many lingos, but never a secret one. */
 static val *setting(cx *c, val *args, int line) {
   arena *a = c->a;
   val *key = at(args, 0);

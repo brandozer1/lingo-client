@@ -123,6 +123,7 @@ val *type_schema(arena *a, const char *words);   // a type in words, like "[path
 phrase *phrase_find(const char *id);
 void native_begin(size_t lingo);              // the phrases added from now on are native lingo number lingo's
 val *native_phrases(arena *a, size_t lingo);  // its phrases as the compiler reads them: [{id, params: [{name, default?}], does, needs}]
+const char *native_name(size_t lingo);        // a native lingo's name by its number, core being 0 (core.c)
 void std_phrases(void);                       // std.c
 // Stops the run with denied unless it may use need, like run or files.read, on path, a whole path, or on nothing when
 // path is NULL (core.c). Every phrase's needs are checked as it is called, and a native lingo's file phrases check each
@@ -138,6 +139,7 @@ struct run {
   double until;             // the time it must end by
   volatile int *stop;       // set from outside to stop between two steps
   int depth;
+  const char *lingo;        // the lingo whose code runs now, like memo, which store and settings answer to; NULL at the command line
   void *trap;               // where an error jumps to
   char code[16];
   buf message, at, at_error;
