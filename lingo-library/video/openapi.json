@@ -1,0 +1,10 @@
+{
+  "x-lingo": {
+    "types": {
+      "play": { "file": "path", "->": "{frames: whole, seconds: number}" }
+    },
+    "settings": [
+      { "name": "file", "title": "Video", "about": "The MP4 to play, its path on this computer, like C:/Videos/clip.mp4." }
+    ]
+  }
+}
