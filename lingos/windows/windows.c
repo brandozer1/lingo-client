@@ -1,6 +1,6 @@
 // windows.c - the base calls on Windows, built into the lingo client for Windows (build.ps1): windows, controls, files, the clipboard,
-// commands, notifications, Onsay's panel, input (the mouse and keyboard as a person uses them) and look (the screen read). OCR and notifications have no C API, so they go through Windows PowerShell. Positions are
-// physical desktop pixels. What the app draws, Onsay's pointer, its rings, his panel and lines in the chat, goes out as a
+// commands, notifications, input (the mouse and keyboard as a person uses them) and look (the screen read). OCR and notifications have no C API, so they go through Windows PowerShell. Positions are
+// physical desktop pixels. What the app draws, Onsay's pointer, its rings and lines in the chat, goes out as a
 // line of JSON on stdout (show), which onsay-desktop's Overlay.cs reads.
 //
 // 1. helpers                  text, boxes, paths, PowerShell
@@ -8,7 +8,7 @@
 // 3. controls                 find, list, read, press, fill, toggle, pick, scroll, wait_for
 // 4. screen                   a picture of it, and its words by OCR
 // 5. pointer and keys         Onsay's pointer (virtual or real), how input acts (headless, no follow), clicks, drags, the
-//                             wheel, rings, his panel, and typing
+//                             wheel, rings and typing
 // 6. files                    exists, list, find, copy, move, delete: what is Windows' own about them
 // 7. clipboard, commands, notifications
 // 8. input                    the mouse and keyboard the way a person uses them: words on screen, controls by name, places in a window
@@ -1486,27 +1486,6 @@ static val *input_point_at(run *r, val **a) {
 static val *show_clear(run *r, val **a) {
   buf b = { 0 };
   buf_str(&b, "{\"show\":\"clear\"}");
-  show(&b);
-  return NOTHING;
-}
-
-// A small rounded window of Onsay's own, drawn by the app, showing a page of HTML until it is hidden or closed.
-static val *panel_show(run *r, val **a) {
-  const char *html = str(r, a[0]);
-  const char *title = str(r, a[1]);
-  buf b = { 0 };
-  buf_fmt(&b, "{\"show\":\"panel\",\"w\":%d,\"h\":%d,\"title\":", (int)num_or(a[2], 480), (int)num_or(a[3], 360));
-  buf_json_str(&b, title, strlen(title));
-  buf_str(&b, ",\"html\":");
-  buf_json_str(&b, html, strlen(html));
-  buf_chr(&b, '}');
-  show(&b);
-  return NOTHING;
-}
-
-static val *panel_hide(run *r, val **a) {
-  buf b = { 0 };
-  buf_str(&b, "{\"show\":\"unpanel\"}");
   show(&b);
   return NOTHING;
 }

@@ -762,7 +762,6 @@ far. The one lingo every install ships beside them is `agent`, from `lingo-libra
   | `clipboard` | `read`, `write`                                                      |
   | `commands`  | `run`, `start`, `output`, `running`, `stop`                          |
   | `notify`    | `show`                                                               |
-  | `panel`     | `show`, `hide`: a small window of Onsay's own showing a page of HTML |
   | `input`     | the mouse and keyboard the way a person uses them, through Onsay's own pointer: `cursor`, `modes`, `click_text`, `click_on`, `type_into`, `type`, `paste`, `shortcut`, `type_lines`, `scroll_to_text`, `wait_for_text`, `copy_all`, `point_text`, `point_on`, `point_at`, `stop_pointing`, `click_in`, `move_in`, `drag_in`, `scroll_in`, `position_in` |
   | `look`      | the screen read: `screenshot`, `elements`, `overview`, `focused`, `page`, `lines`, `buttons`, `fields`, `near`, `find_text`, `open_windows` |
   | `chat`      | the person's Onsay chat on this computer, for any lingo running for them: `ask`, `say`, `step` |

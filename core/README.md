@@ -150,7 +150,7 @@ onsay-core settings.json <verb> ...           does one thing and prints its answ
 | `call <lingo.function> [values...]` | runs a function of a lingo, or a native lingo's phrase, as this computer, its values in order, each JSON or text, and prints its value: `call memo.recall milk`, `call onsay.sign_in` |
 
 The base calls also write a line of JSON on stdout for each thing an app draws: Onsay's pointer gliding and clicking, a
-ring around something on screen, his panel, and lines in the chat (`show` in `../lingos/windows/windows.c`).
+ring around something on screen, and lines in the chat (`show` in `../lingos/windows/windows.c`).
 
 ## Control routes
 

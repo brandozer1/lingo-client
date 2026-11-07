@@ -1,4 +1,4 @@
-// calls_device.h - the base calls that need a screen or a desktop: windows, controls, the clipboard, notifications, Onsay's panel, input and look.
+// calls_device.h - the base calls that need a screen or a desktop: windows, controls, the clipboard, notifications, input and look.
 // One call, one line: CALL(group, what it needs, its words, its function). A file that includes this says what CALL does,
 // and calls_shared.c what WINDOW, CONTROL and FILE_ are. Every computer has every call under the same name, so a lingo
 // written on one works on any other, and a call a device can't do says so when called.
@@ -22,10 +22,6 @@ CALL("controls", "screen.read", "wait_for(win: window, match: record, seconds: n
 CALL("clipboard", "screen.read", "read() -> text: the text copied to the clipboard", clip_get)
 CALL("clipboard", "screen.act", "write(text: text): copies text to the clipboard", clip_set)
 CALL("notify", "none", "show(title: text, text: text): shows a Windows notification", note_toast)
-CALL("panel", "none", "show(html: html, title: text=\"\", width: number=480, height: number=360): draws a small rounded window of Onsay's own on screen, beside him, "
-     "showing html: a page, a table, a chart, a picture or an answer laid out. It stays until hidden or the person closes it, and "
-     "showing again replaces it. Scripts in it run, with no reach to this computer", panel_show)
-CALL("panel", "none", "hide(): takes the window away", panel_hide)
 CALL("input", "none", "cursor(how: text=nothing) -> text: says which pointer Onsay clicks with, virtual or real, or switches it. It moves "
      "and clicks nothing. virtual, the default, never touches the user's mouse, and its clicks may be ignored by browsers, games "
      "and some apps. real moves and clicks the real mouse and works everywhere. Given how, it changes until changed again. "
