@@ -1137,7 +1137,6 @@ typedef struct {
   val *phrases;   // id -> phrase, every phrase the code may use
   const char *own;   // the name of the lingo whose code it is, like agent, for setting(...)
   int scan;   // only read for its listing: calls aren't checked, since what they reach isn't known yet
-  int trying;   // inside a try block: a call to a group this computer hasn't got fails as it runs, unknown, for the catch
   val *settings;   // the names of its own settings it reads, setting("key"), in order
   val *fn_lines;   // each fn's name -> the line it starts on, for the comments above it
   site *calls;   // calls with no dot, settled once every function is known
@@ -1549,9 +1548,7 @@ static val *bare(ps *p) {
     return mk(a, "fail", 1, e);
   }
   if (parse_accept(p, "try")) {
-    c->trying++;
     val *body = block(p);
-    c->trying--;
     if (!body) return NULL;
     if (!expect(p, "catch", "\"catch\" after the try block")) return NULL;
     GET(n, name(p, "a name for the error, like catch e"));
@@ -1623,6 +1620,14 @@ static val *using(cx *c, val *args, int line) {
   return mk(a, "say", 2, T(a, "lingo.use"), compile_named);
 }
 
+/* A call this computer hasn't got, its values in order: it compiles, so it can always be made, and as it runs it asks the
+   lingo search (searched), or fails with why, what it would have said here. */
+static val *unheard(cx *c, const char *id, val *args, const char *why) {
+  val *compile_named = v_rec(c->a);
+  for (size_t i = 0; i < args->l.n; i++) rec_set(c->a, compile_named, arena_fmt(c->a, "a%zu", i), args->l.v[i]);
+  return mk(c->a, "say", 3, T(c->a, id), compile_named, T(c->a, why));
+}
+
 // Values in the order the listing gives them, checked against it, then named for the phrase. While only reading a lingo
 // for its listing, what a call reaches isn't known yet, so it is kept as it is.
 static val *phrase_node(cx *c, const char *id, val *args, int line) {
@@ -1633,16 +1638,11 @@ static val *phrase_node(cx *c, const char *id, val *args, int line) {
     size_t first = strcspn(id, ".");
     int known = 0;
     for (size_t i = 0; i < c->phrases->r.n && !known; i++) known = !strncmp(c->phrases->r.key[i], id, first + 1);
-    if (!known && c->trying) {
-      val *compile_named = v_rec(a);
-      for (size_t i = 0; i < args->l.n; i++) rec_set(a, compile_named, arena_fmt(a, "a%zu", i), args->l.v[i]);
-      return mk(a, "say", 2, T(a, id), compile_named);
-    }
     if (!known) {
       char *path = arena_fmt(a, "%s", id + first + 1);
       for (char *s = path; *s; s++)
         if (*s == '.') *s = '/';
-      return problem(c, line,
+      return unheard(c, id, args,
           arena_fmt(a,
               "There's no lingo or group called %.*s here. To reach one somewhere else, write use(\"its address\"), like use(\"laptop.brandon/%.*s/%s\")",
               (int)first, id, (int)first, id, path));
@@ -1676,7 +1676,7 @@ static val *phrase_node(cx *c, const char *id, val *args, int line) {
     }
     char *m = buf_dup(a, &b);
     buf_free(&b);
-    return problem(c, line, m);
+    return unheard(c, id, args, m);
   }
   val *ps_ = rec_get(ph, "params");
   size_t len = ps_ ? ps_->l.n : 0;
@@ -2099,11 +2099,12 @@ static val *parse_with(cx *c, const char *code, size_t n) {
         buf_free(&b);
         return problem(c, s->line, m);
       }
-      if (!ids)
-        return problem(c, s->line,
-            arena_fmt(a, "There's no function or phrase called %s. Write it with fn %s(...){...}", s->name, s->name));
-      GET(said, phrase_node(c, ids->l.v[0]->t.s, s->node->l.v[2], s->line));
-      for (size_t k = 0; k < 3; k++) s->node->l.v[k] = said->l.v[k];
+      val *said = ids ? phrase_node(c, ids->l.v[0]->t.s, s->node->l.v[2], s->line)
+                      : unheard(c, s->name, s->node->l.v[2],
+                            arena_fmt(a, "There's no function or phrase called %s. Write it with fn %s(...){...}", s->name, s->name));
+      if (!said) return NULL;
+      s->node->l.n = 0;
+      for (size_t k = 0; k < said->l.n; k++) list_push(a, s->node, said->l.v[k]);
       continue;
     }
     val *fps = rec_get(fn, "params");
@@ -2290,7 +2291,8 @@ static val *rw_ex(rw *r, val *e) {
     val *given = e->l.v[2];
     for (size_t i = 0; i < given->r.n; i++) rec_set(a, args, given->r.key[i], rw_ex(r, given->r.v[i]));
     val *swap = r->say ? r->say(r, e->l.v[1], args) : NULL;
-    return swap ? swap : mk(a, "say", 2, e->l.v[1], args);
+    if (swap) return swap;
+    return e->l.n > 3 ? mk(a, "say", 3, e->l.v[1], args, e->l.v[3]) : mk(a, "say", 2, e->l.v[1], args);
   }
   val *out = v_list(a);   // list, get, and, or, not, neg, pick, else, range: all values
   list_push(a, out, e->l.v[0]);
@@ -3085,16 +3087,20 @@ static int exec(run *r, val *body, val *frame, val **back) {
         void *volatile prev = r->trap;
         volatile int depth = r->depth;
         const char *volatile lingo = r->lingo;
+        volatile int catching = r->catching;
         size_t mark = r->at.n;
         r->trap = &t;
+        r->catching++;
         if (!setjmp(t.j)) {
           buf_str(&r->at, "/0");
           int out = exec(r, item(s, 1), frame, back);
           r->trap = prev;
+          r->catching = catching;
           if (out) return out;
           break;
         }
         r->trap = prev;
+        r->catching = catching;
         r->depth = depth;
         r->lingo = lingo;   // an error caught from another lingo's function never leaves this code running as it
         if (!strcmp(r->code, "limit") || !strcmp(r->code, "denied") || !strcmp(r->code, "stopped") ||
@@ -3140,9 +3146,18 @@ static val *call_fn(run *r, const char *name, val *args) {
   return out == BACK ? back : NOTHING;
 }
 
-static val *say(run *r, const char *id, val *args, val *frame) {
+static int searchable(run *r, const char *id);
+static val *searched(run *r, const char *id, val *values, const char *code, const char *message);
+
+/* A phrase, or a call this computer hasn't got, which asks the lingo search, as one whose phrase fails does: why is what
+   the compiler would have said of a missing one. */
+static val *say(run *r, const char *id, val *args, val *frame, val *why) {
   phrase *p = phrase_find(id);
-  if (!p) fail(r, "unknown", "This computer doesn't have the phrase %s", id);
+  if (!p) {
+    val *given = v_list(r->a);
+    for (size_t i = 0; args && args->k == V_REC && i < args->r.n; i++) list_push(r->a, given, eval(r, args->r.v[i], frame));
+    return searched(r, id, given, "unknown", why ? why->t.s : arena_fmt(r->a, "This computer doesn't have the phrase %s", id));
+  }
   for (const char *n = p->needs; *n; n += strspn(n, ", ")) {   // everything it needs, like screen.act, screen.read
     char need[32];
     size_t len = strcspn(n, ",");
@@ -3162,7 +3177,28 @@ static val *say(run *r, const char *id, val *args, val *frame) {
   const char *was_lingo = r->lingo;
   phrase_now = id;
   if (p->lingo) r->lingo = native_name(p->lingo);   // a native lingo's phrase runs as that lingo
-  val *out = p->fn(r, values);
+  val *out;
+  if (!searchable(r, id))
+    out = p->fn(r, values);
+  else {
+    trap_t t;
+    void *volatile prev = r->trap;
+    volatile int depth = r->depth;
+    r->trap = &t;
+    if (!setjmp(t.j)) {
+      out = p->fn(r, values);
+      r->trap = prev;
+    } else {
+      r->trap = prev;
+      r->depth = depth;
+      phrase_now = was;
+      r->lingo = was_lingo;
+      if (strcmp(r->code, "phrase")) rethrow(r);
+      val *named = v_rec(r->a);
+      for (int i = 0; i < p->count; i++) rec_set(r->a, named, p->params[i], values[i]);
+      out = searched(r, id, named, "phrase", arena_fmt(r->a, "%.*s", (int)r->message.n, r->message.s ? r->message.s : ""));
+    }
+  }
   phrase_now = was;
   r->lingo = was_lingo;
   return out ? out : NOTHING;
@@ -3225,7 +3261,7 @@ static val *eval(run *r, val *e, val *frame) {
       for (size_t i = 0; i < given->l.n; i++) list_push(r->a, args, eval(r, given->l.v[i], frame));
       return call_fn(r, name_of(item(e, 1)), args);
     }
-    case T_SAY: return say(r, name_of(item(e, 1)), item(e, 2), frame);
+    case T_SAY: return say(r, name_of(item(e, 1)), item(e, 2), frame, e->l.n > 3 ? item(e, 3) : NULL);
     default: fail(r, "type", "This lingo doesn't know the expression \"%s\"", name_of(item(e, 0)));
   }
   return NOTHING;
@@ -4706,6 +4742,40 @@ static val *lingo_asked(run *r, val *ask, val *values, val *gives) {
   }
   buf_chr(&in, '}');
   return core_asked(r, &in);
+}
+
+/* Whether a call that is missing or fails may ask the lingo search: never inside a try, which wants the error, never in a
+   request Onsay itself sent, so a search never asks itself back, and never for lingo(...) and use(...) themselves. */
+static int searchable(run *r, const char *id) {
+  return !r->catching && strcmp(job.caller ? job.caller : "", "onsay") && strncmp(id, "lingo.", 6);
+}
+
+/* A call this computer hasn't got (code unknown), or one whose phrase failed (code phrase), with its values: asked of the
+   lingo search, which finds a way and gives back its answer, else the error it always was, message. Offline, or with the
+   onsay lingo's setting search_calls false, it is that error at once. */
+static val *searched(run *r, const char *id, val *values, const char *code, const char *message) {
+  val *off = lingo_setting(r->a, "onsay", "search_calls");
+  int no = off && (off->k == V_BOOL ? !truthy(off) : off->k == V_TEXT && !strcmp(off->t.s, "false"));
+  if (no || !searchable(r, id) || !onsay_ready()) fail(r, code, "%s", message);
+  val *with = v_rec(r->a);
+  rec_set(r->a, with, "values", values);
+  const char *ask = strcmp(code, "unknown") ? arena_fmt(r->a, "%s, which failed here: %s", id, message) : id;
+  trap_t t;
+  void *volatile prev = r->trap;
+  volatile int depth = r->depth;
+  const char *volatile lingo = r->lingo;
+  r->trap = &t;
+  if (!setjmp(t.j)) {
+    val *out = lingo_asked(r, v_cstr(r->a, ask), with, v_cstr(r->a, ""));
+    r->trap = prev;
+    return out;
+  }
+  r->trap = prev;
+  r->depth = depth;
+  r->lingo = lingo;
+  if (!strcmp(r->code, "stopped") || !strcmp(r->code, "limit") || !strcmp(r->code, "denied")) rethrow(r);
+  fail(r, code, "%s", message);
+  return NOTHING;
 }
 
 // lingo.run(ask, values, gives).

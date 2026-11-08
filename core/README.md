@@ -246,7 +246,8 @@ whole manifest (`../docs/lingo.md`, section 11), or `{name, error}` for one set 
 It reads the folder as it starts and again within 5 seconds of any change, to it or to `running.json`: every `.lingo`
 file and every folder of a lingo's files. It loads the native lingos, compiles every Lingo lingo against all of them,
 checks each says in its `openapi.json` all its code needs, and sets aside any that can't load with the reason, like
-`broken.ls line 3: There's no lingo or group called nope here`, the rest loading without it. A Lingo lingo whose name is
+`liar.ls: liar.fetch needs net, which its openapi.json doesn't say`, the rest loading without it. A call to what this computer
+hasn't got loads, and asks the lingo search as it runs (`../docs/lingo.md`, section 6). A Lingo lingo whose name is
 a native lingo's or one of its groups is set aside too: `input is already a part of onsay, this computer's own lingo`.
 Every lingo here loads, running or not, so a running one can call a stopped one by its dotted name.
 

@@ -146,6 +146,7 @@ struct run {
   double until;             // the time it must end by
   volatile int *stop;       // set from outside to stop between two steps
   int depth;
+  int catching;             // how many try blocks it is inside, where a failing call is the catch's, never searched
   const char *lingo;        // the lingo whose code runs now, like memo, which store and settings answer to; NULL at the command line
   void *trap;               // where an error jumps to
   char code[16];

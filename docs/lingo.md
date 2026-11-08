@@ -211,12 +211,16 @@ runs, its name and how many values it takes, as below:
   `json.get(v, "a.b")`, `request.get(address)` (section 15).
 - **A lingo in the same lingos folder,** by its name: `notes.add(title)` calls the function `add` of the lingo `notes`,
   there beside it. The compiler finds it in the folder, so there is nothing to import or list.
-- **Anything else doesn't compile,** and says to use `use(...)`: `There's no lingo or group called notes here. To reach
-  one somewhere else, write use("its address"), like use("laptop.brandon/notes/add")`.
-- **Inside a `try`, a group this computer hasn't got compiles,** and fails with `unknown` as the line runs, which the
-  `catch` takes: how a lingo uses what only some computers have and does without it elsewhere:
-  `try {answers = maps.route(from, to)} catch e {return {error: "This computer has no maps"}}`. A group it has is checked
-  as ever, so a misspelled phrase still doesn't compile.
+- **Anything else can always be called, and is found as it runs.** A call this computer hasn't got, like
+  `maps.route(from, to)` or a misspelled phrase, asks Onsay's lingo search with the call and its values, which finds a way
+  and gives back its answer. So does a call whose phrase fails, saying why. When the search finds nothing, Onsay can't be
+  reached, or the `search_calls` setting of the onsay lingo is `false`, it is the error it always was, like
+  `There's no lingo or group called notes here. To reach one somewhere else, write use("its address"), like
+  use("laptop.brandon/notes/add")`, with `unknown`, or the phrase's own with `phrase`.
+- **Inside a `try`, it is never searched:** the `catch` takes the error at once, which is how a lingo uses what only some
+  computers have and does without it elsewhere:
+  `try {answers = maps.route(from, to)} catch e {return {error: "This computer has no maps"}}`. A request Onsay itself
+  sent never searches either, so a search never asks itself back.
 
 **`use(address, values)`** reaches anything somewhere else, in one line, and gives back its answer, like `lingo(...)` part
 of the language. It is to Lingo what fetch is to JavaScript: for what is off this computer.
@@ -286,7 +290,7 @@ Every other call is checked before the program runs. A function must exist, and 
 must be in its listing. The values must number between the params without defaults and all the params. A phrase's
 values are given in the listing's order, and missing ones take its defaults when it runs.
 
-Errors name what is wrong and what exists instead:
+Errors name what is wrong and what exists instead, the first and the last as a call runs that the search can't answer:
 ```
 There's no phrase files.size. files has: read, write, add_to, exists, list, find, copy, move, delete, make_folder
 std.slice(x, from, to=null) takes 2 to 3 values, not 1
@@ -373,7 +377,7 @@ that fails is answered with its message, and a status by its code (`core/README.
 | `stopped` | Stopped from outside                                     | no               | 500    |
 | `crash`   | The C code under a phrase crashed, like a bad pointer in a native library. Only this call ends, and it can be tried again | no | 500 |
 
-Errors in reading a lingo, like a missing `}` or an unknown phrase, are found when it loads, before anything runs, and
+Errors in reading a lingo, like a missing `}` or the wrong number of values, are found when it loads, before anything runs, and
 give its file, the line and what was expected. The lingo is set aside with them until it is fixed.
 
 ## 10. Lingos and what they need
@@ -563,7 +567,7 @@ computer, is a native lingo compiled into it: never in the lingos folder, always
 nor a program isn't a lingo and is left alone.
 
 **Loading.** The lingo client compiles every lingo in its folder when it loads it, so a broken one is set aside with
-the reason then, never in the middle of a task. A dotted call to a lingo that isn't in the folder is one such reason.
+the reason then, never in the middle of a task. A call to a lingo that isn't in the folder isn't one: it is searched as it runs.
 A lingo whose name is that of a native lingo or one of its groups is set aside too, like an old `input` on Windows:
 `input is already a part of windows, this computer's own lingo`. Every lingo here loads, and a lingo calls another by
 its dotted name whether that one is running or stopped: running is only whether its routes answer (`core/README.md`).

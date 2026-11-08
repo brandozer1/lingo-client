@@ -204,6 +204,11 @@ const keepRule = ({ allow, who, account, handle, ip, routes, devices }) => {
 // needs. stopAfter: a stop for it is sent that many ms after it.
 const CASES = [
   // The language and the core's own phrases, from checks.ls.
+  // A call this computer hasn't got, or one that fails, asks the lingo search, and a try keeps its error.
+  { path: '/broken/go', name: 'search: a call this computer has not got asks the lingo search, with the call and its values', check: gives('found a way, given 2') },
+  { path: '/broken/fails', name: 'search: a call that fails asks the lingo search, saying why, with its values by name', check: gives({ fixed: 'nope' }) },
+  { path: '/broken/caught', name: 'search: inside a try a failing call is the catch\'s, never searched', check: gives('caught') },
+  { path: '/typo/go', name: 'search: when it finds nothing, it is the error it always was', check: fails(404, /There's no phrase std\.lenn\. std has: /) },
   { path: '/checks/numbers', check: gives([7, 1, 2, 0.3333333333333333, 0.30000000000000004, -3, 1e21, 100000000000000000000, 123456789012, 0.000001, 1e-7, 0, 2.5, 2, 33.333333333333336]) },
   { path: '/checks/text_in_text', check: gives('3 and x and [1,"two",1.5] and  and true and {"k":null}') },
   { path: '/checks/lists', check: gives([[100, 4, 9, 16, 25, 6], 6, null, 6, [4, 9, 16, 25], false]) },
@@ -219,7 +224,7 @@ const CASES = [
   { path: '/checks/functions', check: gives([6765, 11, 3]) },
   { path: '/checks/control', check: gives([11, 5, 'big', true, 2, 'b']) },
   { path: '/checks/greet', values: { who: 'Ana' }, check: gives(['hi Ana', 'hi Ana']) },
-  { path: '/checks/try_and_fail', check: gives(['boom', null, "Can't use - with text", "std.from_json: that text isn't JSON", "This computer doesn't have the phrase nowhere.thing"]) },
+  { path: '/checks/try_and_fail', check: gives(['boom', null, "Can't use - with text", "std.from_json: that text isn't JSON", "There's no lingo or group called nowhere here. To reach one somewhere else, write use(\"its address\"), like use(\"laptop.brandon/nowhere/thing\")"]) },
   { name: 'an error names its lingo and line', path: '/checks/error_at_a_line', check: fails(500, /^checks\.ls line \d+: Can't compare number with text$/) },
   { path: '/checks/divide_by_zero', check: fails(500, /Can't divide by zero/) },
   { path: '/checks/deep_loop', check: gives(5000050000) },
@@ -502,7 +507,7 @@ const WEB_CASES = [
   ['web: GET / lists every lingo for this computer, each at its route, and whether it runs', async () => {
     const r = await web('/')
     return r.status === 200 && r.json.lingos.some((l) => l.name === 'page' && l.route === '/hello' && l.running === true) && r.json.lingos.some((l) => l.name === 'memo' && l.route === '/memo') &&
-      r.json.lingos.some((l) => l.name === 'broken' && /broken\.ls line 3/.test(l.error))
+      r.json.lingos.some((l) => l.name === 'liar' && /needs net/.test(l.error))
   }],
   ['web: serve answers text as text', async () => {
     const r = await web('/hello/text?name=Ana+B%C3%A9')
@@ -758,9 +763,9 @@ const WEB_CASES = [
       !all.find((l) => l.name === 'agent')?.functions.some((f) => f.name === 'described')
   }],
   ["lingo.save: code that can't run says why, and saving it again fixed runs it", async () => {
-    const broken = await post('/maker/make', { name: 'made', code: '// made - broken.\n\n// Breaks.\nfn hello() {return nope.x()}\n' })
+    const broken = await post('/maker/make', { name: 'made', code: '// made - broken.\n\n// Breaks.\nfn hello() {return 1 +}\n' })
     await post('/maker/make', { name: 'made', code: '// made - fixed.\n\n// Says hi.\nfn hi() {return "hi"}\n' })
-    return broken.status >= 400 && /made was saved, but it can't run: .*nope/.test(broken.json?.error) && gives('hi')(await web('/made/hi'))
+    return broken.status >= 400 && /made was saved, but it can't run: /.test(broken.json?.error) && gives('hi')(await web('/made/hi'))
   }],
   ['pack: a folder made into its .lingo file, its paths made from its code, with what each needs', async () => {
     command('pack', 'test/lingos/memo', 'test/data/packed')
@@ -795,8 +800,8 @@ const WEB_CASES = [
   ['the command line: manifest prints a lingo\'s whole manifest, and why one can\'t load', async () => {
     const m = command('manifest', 'memo')
     let why = ''
-    try { execFileSync(EXE, ['test/onsay.json', 'manifest', 'broken'], { cwd: CORE, encoding: 'utf8', stdio: ['ignore', 'ignore', 'pipe'] }) } catch (e) { why = e.stderr }
-    return m.paths?.['/memo/recall']?.post['x-lingo-function'] === 'memo.recall' && m['x-lingo'].route === '/memo' && /broken\.ls line 3: There's no lingo or group called nope/.test(why)
+    try { execFileSync(EXE, ['test/onsay.json', 'manifest', 'notazip'], { cwd: CORE, encoding: 'utf8', stdio: ['ignore', 'ignore', 'pipe'] }) } catch (e) { why = e.stderr }
+    return m.paths?.['/memo/recall']?.post['x-lingo-function'] === 'memo.recall' && m['x-lingo'].route === '/memo' && /isn't a \.lingo file/.test(why)
   }],
   ['the command line: call asks lingo(...) and use(...) of the address its settings name as ask, never Onsay\'s connection', async () => {
     writeFileSync(new URL('asking.json', DATA), JSON.stringify({ home: 'test/data', ask: `http://127.0.0.1:${PORT}/ask` }))
@@ -1170,6 +1175,8 @@ const LINGO = [
   [/never answered/, () => new Promise(() => {})],
   [/^the ways to do it$/, ({ mode }) => mode === 'list' ? [{ does: 'Does it', where: 'on your laptop', address: 'laptop.tester/memo/all', inputs: {} }] : 'it ran'],
   [/^trip\/plan$/, () => ({ questions: ['Where to?', 'When?'] })],
+  [/^nope\.thing$/, ({ values }) => `found a way, given ${values.values}`],
+  [/^std\.from_json, which failed here: /, ({ values }) => ({ fixed: values.values.text })],
 ]
 let deskOnline = false   // the account's computer desk, off until a test turns it on
 let deskScreen = null   // a screen desk says it opened, as a step, as it answers a call
@@ -1371,8 +1378,7 @@ const session = (link) => {
       !('x-lingo-internal' in phrase('agent', 'agent.ask')) && !ops('memo').some((o) => 'x-lingo-internal' in o))
     report('catalog: native is ready, one phrase that calls into the system', phrase('onsay', 'native.call') !== undefined)
     report('catalog: a native without its library', /nolibrary\.dll/.test(entry('nolibrary').error))
-    report('catalog: a broken one says why', /^broken\.ls line 3: There's no lingo or group called nope here.*use\(/.test(entry('broken').error))
-    report('catalog: a phrase spelled wrong says what there is', /There's no phrase std\.lenn/.test(entry('typo').error))
+    report('catalog: a lingo calling what this computer has not got, or spelled wrong, still loads', entry('broken') && !entry('broken').error && entry('typo') && !entry('typo').error)
     report('catalog: a Lingo lingo can\'t hide a group of windows', !!entry('input')?.error &&
       (has('onsay') ? /already a part of onsay/ : /no lingo or group called pointer/).test(entry('input').error))
     report('catalog: a folder with no openapi.json and no program is not a lingo', !entry('notalingo'))
