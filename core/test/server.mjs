@@ -1369,7 +1369,7 @@ const session = (link) => {
     report('catalog: ai is the AI for every lingo, with prompt and chat, and agent asks it, with one function to ask the agent', has('ai') && phrase('ai', 'ai.prompt') && phrase('ai', 'ai.chat') && has('agent') && phrase('agent', 'agent.ask') && !phrase('agent', 'agent.chat') && !entry('openrouter'))
     report("catalog: a helper whose comment says it is for its lingo's own use is marked x-lingo-internal, and nothing else", phrase('agent', 'agent.described')?.['x-lingo-internal'] === true &&
       !('x-lingo-internal' in phrase('agent', 'agent.ask')) && !ops('memo').some((o) => 'x-lingo-internal' in o))
-    report('catalog: native is ready, one phrase that calls into Windows', phrase('onsay', 'native.call') !== undefined)
+    report('catalog: native is ready, one phrase that calls into the system', phrase('onsay', 'native.call') !== undefined)
     report('catalog: a native without its library', /nolibrary\.dll/.test(entry('nolibrary').error))
     report('catalog: a broken one says why', /^broken\.ls line 3: There's no lingo or group called nope here.*use\(/.test(entry('broken').error))
     report('catalog: a phrase spelled wrong says what there is', /There's no phrase std\.lenn/.test(entry('typo').error))

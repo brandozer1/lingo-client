@@ -42,26 +42,36 @@ $lines += "};"
 Set-Content "$here/obj/builtins.h" $lines
 
 $flags = "-std=c11", "-O2", "-Wall", "-Wextra", "-Wno-unused-parameter", "-I$here/obj", "-I$here", "-I$here/vendor"
-$both = "$here/lingo.c", "$here/vendor/puff.c", "$here/vendor/monocypher.c", "$here/vendor/monocypher-ed25519.c"
-
-# Windows. native calls any Windows function by its layout, with a small vendored part of libffi (vendor/libffi,
-# MIT). Its chip's assembly compiles on its own; the rest is plain C.
-$win = "-target", "x86_64-windows-gnu"
+# native.call calls any function of the system by its layout, with a small part of libffi (vendor/libffi, MIT): the
+# same C everywhere, and each chip's own part, its assembly compiled on its own.
 $ffi = "$here/vendor/libffi"
+$both = "$here/lingo.c", "$here/vendor/puff.c", "$here/vendor/monocypher.c", "$here/vendor/monocypher-ed25519.c"
+$both += "$ffi/prep_cif.c", "$ffi/types.c", "-DFFI_BUILDING", "-I$ffi/include"
+
+# Windows.
+$win = "-target", "x86_64-windows-gnu"
 build ($win + "-DX86_WIN64", "-I$ffi/include", "-I$ffi/x86", "-c", "$ffi/x86/win64.S", "-o", "$here/obj/win64.o")
 $windows = $both + "$lingos/windows/windows.c", "$lingos/onsay/agent.c", "-I$lingos/onsay"
-$windows += "$ffi/prep_cif.c", "$ffi/types.c", "$ffi/x86/ffiw64.c", "$here/obj/win64.o"
-$windows += "-DLINGO_CORE", "-DFFI_BUILDING", "-DX86_WIN64", "-I$ffi/include", "-I$ffi/x86"
+$windows += "$ffi/x86/ffiw64.c", "$here/obj/win64.o", "-DLINGO_CORE", "-DX86_WIN64", "-I$ffi/x86"
 $windows += "-lwinhttp", "-lws2_32", "-luser32", "-lbcrypt", "-lcrypt32", "-lole32", "-loleaut32", "-lshell32", "-lgdi32"
 build ($win + $windows + "-o", "$here/bin/onsay-core.exe", "-Wl,--out-implib,$here/bin/onsay-core.lib")
 build ($win + $windows + "-DTEST", "-o", "$here/bin/test/onsay-core.exe")
 
 # Linux. -rdynamic shares the core's words with a native lingo's library, as onsay-core.lib does on Windows.
 $linux = $both + "$lingos/linux/linux.c", "$lingos/onsay/agent.c", "-I$lingos/onsay", "-DLINGO_CORE"
-foreach ($arch in @{ x64 = "x86_64"; arm64 = "aarch64" }.GetEnumerator()) {
+# Each chip: its target, its folder in vendor/libffi, the define libffi wants, and its files there, GNU C and assembly,
+# each compiled on its own.
+$chips = @{ x64 = @("x86_64", "x86", "X86_64", "ffi64.c ffiw64.c unix64.S win64.S"); arm64 = @("aarch64", "aarch64", "AARCH64", "ffi.c sysv.S") }
+foreach ($arch in $chips.GetEnumerator()) {
+  $cpu, $dir, $define, $files = $arch.Value
   New-Item -ItemType Directory -Force "$here/bin/linux-$($arch.Key)" | Out-Null
-  $target = "-target", "$($arch.Value)-linux-gnu.2.28", "-D_POSIX_C_SOURCE=200809L"
-  build ($target + $linux + "-rdynamic", "-ldl", "-lpthread", "-o", "$here/bin/linux-$($arch.Key)/onsay-core")
+  $target = "-target", "$cpu-linux-gnu.2.28", "-D_POSIX_C_SOURCE=200809L", "-D$define", "-I$ffi/$dir"
+  $chip = @()
+  foreach ($one in $files -split " ") {
+    build ($target + "-std=gnu11", "-DFFI_BUILDING", "-I$ffi/include", "-c", "$ffi/$dir/$one", "-o", "$here/obj/$one-$cpu.o")
+    $chip += "$here/obj/$one-$cpu.o"
+  }
+  build ($target + $linux + $chip + "-rdynamic", "-ldl", "-lpthread", "-o", "$here/bin/linux-$($arch.Key)/onsay-core")
 }
 Get-ChildItem "$here/bin", "$here/obj" -Recurse -Include *.pdb, *.lib -Exclude onsay-core.lib | Remove-Item
 

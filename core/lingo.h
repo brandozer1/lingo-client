@@ -354,6 +354,10 @@ void pl_context(buf *out);
 
 void pl_random(void *to, size_t n);   // bytes no one can guess, for keys
 
+// A function of the system or of a library by name, the library loaded and kept, or this program's own when library is
+// "". NULL when it isn't there. What native.call reaches.
+void *pl_symbol(const char *library, const char *function);
+
 // A native lingo's library, like notes.dll, loaded and kept: its lingo_phrases, or NULL with why in error.
 lingo_entry pl_library(const char *path, buf *error);
 

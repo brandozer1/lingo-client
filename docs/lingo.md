@@ -778,8 +778,8 @@ far. The one lingo every install ships beside them is `agent`, from `lingo-libra
   | `look`      | the screen read: `screenshot`, `elements`, `overview`, `focused`, `page`, `lines`, `buttons`, `fields`, `near`, `find_text`, `open_windows` |
   | `chat`      | the person's Onsay chat on this computer, for any lingo running for them: `ask`, `say`, `step` |
 
-On Windows alone there is also `native.call(library, function, returns, args)` calls any function in Windows or a DLL by
-  its name and layout, needing `run`.
+On Windows and Linux there is also `native.call(library, function, returns, args)`, which calls any function of the
+  system or a library, like `kernel32.dll` or `libc.so.6`, by its name and layout, needing `run`. Not on Android yet.
 
 Conventions that matter in practice:
 - **Paths:** write them with `/`, as in `"~/notes/today.txt"`, so text never needs escapes. A path may start with `~`
