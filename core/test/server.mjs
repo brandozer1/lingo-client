@@ -1381,7 +1381,7 @@ const session = (link) => {
     report('the build ships two lingos, ai and the agent on it, and each says what each function does', same(shipped, ['agent.lingo', 'ai.lingo']) && ['ai', 'agent'].every((n) => about(n) && !ops(n).some((o) => !o.description)))
     report('standard functions are no app: no entry in the catalog, and nothing to install', !['text', 'list', 'math', 'json', 'url', 'request', 'time', 'encode'].some((g) => entry(g)))
     report('hello: the lingo client, its version, its device key and its catalog, and nothing else', same(Object.keys(hello), ['type', 'token', 'client', 'version', 'key', 'catalog']) &&
-      hello.client === 'lingo-client' && hello.version === readFileSync(new URL('../src/core.h', import.meta.url), 'utf8').match(/CORE_VERSION "(.+)"/)[1] && /^ed25519:[A-Za-z0-9+/]{43}=$/.test(hello.key) && Array.isArray(hello.catalog))
+      hello.client === 'lingo-client' && hello.version === readFileSync(new URL('../lingo.c', import.meta.url), 'utf8').match(/CORE_VERSION "(.+)"/)[1] && /^ed25519:[A-Za-z0-9+/]{43}=$/.test(hello.key) && Array.isArray(hello.catalog))
     report('catalog: onsay, built in, ready, its door for prompts never in the index', builtIn('onsay') && phrase('onsay', 'onsay.serve')?.['x-lingo-internal'] === true)
     for (const [name, test, lingo] of WEB_CASES) {
       if (lingo && !has(lingo)) { skipped++; console.log(`  skip  ${name}: this core has no ${lingo}`); continue }

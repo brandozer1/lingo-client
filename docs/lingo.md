@@ -405,7 +405,7 @@ A lingo is a `.lingo` file in a computer's lingos folder: a zip of two files, it
 
 **Writing one.** Its maker writes only its code, `memo.ls`, and an `openapi.json` when the code can't say something
 itself, like its settings. Its listing, what it shares, is made from the code by the compiler (`listing` in
-`core/src/compile.c`):
+`core/lingo.c`, Compiling):
 
 - **Every `fn`** is a function it shares, called at its route, like `/memo/recall`, or by its dotted name,
   `memo.recall(k)`, from a lingo in the same folder. Its values and their plain defaults are its `fn`'s own. A default

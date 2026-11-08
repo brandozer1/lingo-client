@@ -1,4 +1,4 @@
-// lingo.h - the Lingo core's own words, in plain C11 that knows nothing of any device (platform.h is the only door to one).
+// lingo.h - what a lingo attaches to the lingo client with: its values, phrases, hooks and the floor of the computer it runs on.
 //
 // 1. Values      nothing, true/false, numbers, text, lists, records and bytes, in an arena freed all at once
 // 2. Buffers     growing text, for JSON and messages
@@ -7,11 +7,14 @@
 // 5. Compiling   every lingo in the lingos folder, and a call of one of their functions, linked down to native phrases
 // 6. Signing     SHA-256, base64, Ed25519, and this device's own keys
 // 7. Hooks       what a native lingo fills to connect this lingo client to more than its port, like the onsay lingo
-// A native lingo's library is written against this and platform.h. Its one entry is lingo_phrases (LINGO_ENTRY).
+// A native lingo's library is written against this. Its one entry is lingo_phrases (LINGO_ENTRY).
 #ifndef LINGO_H
 #define LINGO_H
 
 #include <stddef.h>
+#ifdef _WIN32
+#include <wchar.h>
+#endif
 
 // The core is built with LINGO_CORE and shares what's between LINGO_SHARED and LINGO_SHARED_END; a library takes them.
 #if defined(_WIN32) && (defined(LINGO_CORE) || defined(LINGO_LIBRARY))
@@ -38,7 +41,7 @@ typedef enum { V_NOTHING, V_BOOL, V_NUM, V_TEXT, V_LIST, V_REC, V_BYTES } vkind;
 typedef struct val val;
 struct val {
   vkind k;
-  int tag;   // a tree node's kind, worked out the first time it runs, see run.c
+  int tag;   // a tree node's kind, worked out the first time it runs, see running in lingo.c
   union {
     int b;
     double n;
@@ -110,7 +113,7 @@ typedef struct {
   const char *id;      // group.name
   const char *needs;   // everything it needs on the device, like "screen.act, screen.read", or "none"
   const char *does;    // its words, after the signature and what it gives, like "sorted"
-  const char *gives;   // what it gives, in the type words of phrase.c, like "[text]", or NULL
+  const char *gives;   // what it gives, in the type words of lingo.c's phrases, like "[text]", or NULL
   phrase_fn fn;
   size_t lingo;        // the native lingo it is of, by number, core being 0
   int count;           // how many values it takes, read from its line
@@ -126,10 +129,10 @@ val *type_schema(arena *a, const char *words);   // a type in words, like "[path
 phrase *phrase_find(const char *id);
 void native_begin(size_t lingo);              // the phrases added from now on are native lingo number lingo's
 val *native_phrases(arena *a, size_t lingo);  // its phrases as the compiler reads them: [{id, params: [{name, default?}], does, needs}]
-const char *native_name(size_t lingo);        // a native lingo's name by its number, core being 0 (core.c)
-void std_phrases(void);                       // std.c
+const char *native_name(size_t lingo);        // a native lingo's name by its number, core being 0
+void std_phrases(void);
 // Stops the run with denied unless it may use need, like run or files.read, on path, a whole path, or on nothing when
-// path is NULL (core.c). Every phrase's needs are checked as it is called, and a native lingo's file phrases check each
+// path is NULL. Every phrase's needs are checked as it is called, and a native lingo's file phrases check each
 // path they reach.
 void may(run *r, const char *need, const char *path);
 
@@ -173,7 +176,7 @@ val *bytes_of(run *r, val *x);   // bytes as they are, text as its UTF-8 bytes, 
 
 ////////// 6. SIGNING //////////
 
-// sign.c, on Monocypher. A key is 32 bytes, a private one its seed, and a signature 64.
+// On Monocypher. A key is 32 bytes, a private one its seed, and a signature 64.
 void sha256(const void *data, size_t n, unsigned char out[32]);
 void sha1(const unsigned char *s, size_t n, unsigned char digest[20]);
 void base64(buf *out, const void *data, size_t n);
@@ -183,7 +186,7 @@ void ed25519_sign(const unsigned char seed[32], const void *msg, size_t n, unsig
 int ed25519_check(const unsigned char key[32], const void *msg, size_t n, const unsigned char sig[64]);   // 1 when key signed it
 
 // This device's own key pairs, by a name like device, kept in home/keys, the private half sealed by the device (pl_seal)
-// and never handed out (core.c). key_of gives the public half, made first when missing and make is set. 0 when there is
+// and never handed out. key_of gives the public half, made first when missing and make is set. 0 when there is
 // none, or it couldn't be kept or signed with.
 int key_of(const char *name, int make, unsigned char key[32]);
 int key_sign(const char *name, const void *msg, size_t n, unsigned char sig[64]);
@@ -236,14 +239,14 @@ void lingo_hook(const lingo_hooks *hooks);
                     sends such lines on (said in lingo_hooks). 1 when it took it, else 0, and this computer shows it
      lingo_job      on the job thread: the id, as JSON, of the request running now, or NULL outside one
      lingo_push     one message for everything watching path on the port as a WebSocket, like an app watching
-                    /onsay/screens: what the lingo at that path answered its GET with came first (host.c, Streams)
+                    /onsay/screens: what the lingo at that path answered its GET with came first (lingo.c, the host's streams)
      lingo_watch    a native lingo watching path the same way, each message handed to send with arg, like the onsay
                     lingo passing a stream on to another computer. lingo_unwatch(arg) ends it, after which send is
                     never called with arg again
      lingo_called   one request this lingo client made, handed to each running native lingo that keeps calls (called in
                     lingo_hooks) as {at, ms, kind, address, ask, request {method, url, path, headers, body}, response
                     {status, headers, body}, error, stopped}. kind is web, lingo or socket, got what pl_http gives, {status,
-                    headers, text}, or NULL. For a socket, text is {sent, received, closed} (core.c let_go). A header
+                    headers, text}, or NULL. For a socket, text is {sent, received, closed} (let_go in lingo.c). A header
                     that carries a key, and a query value whose name says it is one, are taken out first, and each body
                     text cut to 4 KB */
 void lingo_hand(const char *request, size_t n, const char *caller, void (*answered)(void *arg, const char *response, size_t n), void *arg);
@@ -263,6 +266,114 @@ void lingo_watch(const char *path, void (*send)(void *arg, const char *text, siz
 void lingo_unwatch(void *arg);
 void lingo_called(const char *kind, const char *address, const char *ask, const char *method, const char *url, val *headers,
     const char *body, size_t n, val *got, const char *error, int stopped, double ms);
+
+
+////////// 1. TIME //////////
+
+double pl_now(void);               // seconds since 1970, with fractions
+void pl_sleep(double seconds);
+
+////////// 2. THREADS //////////
+
+void pl_thread(void (*fn)(void *), void *arg);
+
+typedef struct pl_gate pl_gate;
+pl_gate *pl_gate_new(void);
+void pl_enter(pl_gate *g);
+void pl_leave(pl_gate *g);
+void pl_wait(pl_gate *g, double seconds);   // inside the gate: let go, wait to be woken or for the time, take it again
+void pl_wake(pl_gate *g);
+
+// A crash on this thread while *active is set, like a bad pointer or the stack running out, goes to recover, which never
+// returns, instead of ending the program. On any other thread, or with *active unset, it ends the program as ever.
+void pl_faults(void *volatile *active, void (*recover)(const char *what));
+void pl_fault_over(void);   // once off the stack that crashed, so the stack can run out and be caught again
+
+////////// 3. LINKS //////////
+
+// Any thread may send, and any thread may close, which ends a receive waiting on another thread. Only free is final.
+typedef struct pl_link pl_link;
+pl_link *pl_connect(const char *url, const char *headers, buf *error);   // ws:// or wss://, headers NULL or whole
+                                                                       // lines, each "Name: value\r\n"
+int pl_send(pl_link *l, const char *text, size_t n);
+int pl_receive(pl_link *l, buf *out);               // one whole message into out; 0 once the link is closed
+void pl_close(pl_link *l);
+void pl_free(pl_link *l);
+
+////////// 4. FILES //////////
+
+int pl_read(const char *path, buf *out);
+int pl_write(const char *path, const char *data, size_t n);   // replaces the file whole, never half written
+int pl_append(const char *path, const char *data, size_t n);  // adds to its end, making it when missing
+int pl_delete(const char *path);
+int pl_folder(const char *path);                              // makes it, and the folders above it, if missing
+void pl_whole(const char *path, buf *out);                    // the path whole, from the folder it runs in
+// Everything in a folder, one level: each name, whether it is a folder, its size, and when it last changed, in seconds.
+void pl_list(const char *folder, void (*each)(const char *name, int folder, double size, double changed, void *arg), void *arg);
+// A secret kept at path for this computer's user alone, like a private key: on Windows sealed by Windows (DPAPI), so it is
+// never a plain file, and on Linux a file only its user can read. 0 when it couldn't be kept, or read back.
+int pl_seal(const char *path, const void *data, size_t n);
+int pl_unseal(const char *path, buf *out);
+
+////////// 5. DEVICE //////////
+
+// What was around a lingo(...) asked from here, as one JSON record of each it knows: "os", "time" its
+// local time with its offset, like 2026-10-19T16:31:07-04:00, "zone", "language", and "app" and "window" in front.
+void pl_context(buf *out);
+
+void pl_random(void *to, size_t n);   // bytes no one can guess, for keys
+
+// A native lingo's library, like notes.dll, loaded and kept: its lingo_phrases, or NULL with why in error.
+lingo_entry pl_library(const char *path, buf *error);
+
+// One web request, for http.send: method a word in capitals, url whole with no #, headers a record of text, each a whole
+// line. Its answer, {status, headers, text}, headers a record by lower case name, redirects followed, or NULL with why in
+// error, in words. An answer over 4 MB, or not text, is an error too.
+val *pl_http(arena *a, const char *method, const char *url, val *headers, const char *body, size_t n, double seconds, buf *error);
+
+////////// 6. PORT //////////
+
+// A port this computer listens on, on every address it has when everywhere, else on 127.0.0.1 alone, and each connection
+// to it, both a pl_socket. Each connection is read on its own thread.
+typedef struct pl_socket pl_socket;
+pl_socket *pl_listen(int port, int everywhere, buf *error);
+pl_socket *pl_accept(pl_socket *port, buf *from);          // the next connection, and the address it is from, like
+                                                           // 127.0.0.1, or NULL when none came within a second
+int pl_take(pl_socket *c, char *to, size_t n);             // what came, up to n bytes. 0 once it closed or was quiet 10 seconds
+int pl_give(pl_socket *c, const char *data, size_t n);     // all of it, or 0
+void pl_hang_up(pl_socket *c);                              // closes it and frees it
+
+////////// 7. CONNECTIONS //////////
+
+// The floor under every protocol, for connection.open: bytes over a connection to a host and port. kind is one of
+// PL_KINDS, the kinds this port opens itself. Any thread may put, and any thread may shut, which ends a get waiting on
+// another. Only drop is final.
+#define PL_KINDS "tcp udp"
+typedef struct pl_conn pl_conn;
+pl_conn *pl_dial(const char *kind, const char *host, int port, buf *error);
+pl_conn *pl_bind(const char *kind, int port, buf *error);    // tcp connections coming in, on 127.0.0.1 alone
+pl_conn *pl_next(pl_conn *listener, buf *from, double seconds);   // the next one, and where it is from, or NULL in time
+int pl_put(pl_conn *c, const char *data, size_t n);          // all of it, for udp one packet, or 0
+int pl_get(pl_conn *c, buf *out);                            // what comes next, added to out, waiting; 0 once closed
+void pl_shut(pl_conn *c);
+void pl_drop(pl_conn *c);
+
+#ifdef __ANDROID__
+// What only the app around the core can do on Android, asked of it by name with a JSON record: the web, links, what is
+// around, the screen, input, the clipboard, notifications, and lines for the app to draw. Written by the app (onsay-mobile).
+// 1 with its answer as JSON in out, or 0 with why in out, in words.
+int pl_device(const char *name, const char *json, buf *out);
+// A crash that ends the app, said in words, kept by the app for the next time it opens. Only what a signal handler may do.
+void pl_crashed(const char *what);
+#endif
+
+#ifdef _WIN32
+// UTF-8 to and from Windows' UTF-16, for what is written for Windows alone. win_wide's text is freed with free.
+wchar_t *win_wide(const char *s);
+void win_narrow(buf *out, const wchar_t *w, int len);   // len < 0: up to its 0
+#endif
+
+void core_say(const char *fmt, ...);   // a line on stderr, the lingo client's log
 
 LINGO_SHARED_END
 

@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version, like 0.4.1 (CORE_VERSION in core/src/core.h)'
+        description: 'Version, like 0.4.1 (CORE_VERSION in core/lingo.c)'
         required: true
 
 jobs:

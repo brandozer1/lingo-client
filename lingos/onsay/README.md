@@ -12,7 +12,7 @@ the wire*.
   as a document of its index.
 - **Signing in** keeps the token as its secret setting, `token`, and makes this device's key, kept by the device
   (`core/README.md`, `keys/`). Its hello carries the key, and Onsay's statement on it is checked as it is ready.
-- **What Onsay signs is checked** against Onsay's key built in (`ONSAY_KEY` in `onsay.c`), never one told over the
+- **What Onsay signs is checked** against Onsay's key built in (`ONSAY_KEY` in `../../core/lingo.c`), never one told over the
   wire: its statement on this device's key, each request for the account's own, run as `me`, Onsay's own search and
   agent, run as `onsay`, and the account's policy.
 - **The account's policy** is fetched when Onsay says there's a new one, checked, kept unless its version is older,
@@ -109,7 +109,7 @@ onsay-core core.json call onsay.sign_out         this computer forgets its sign 
 
 | File | Job |
 |------|-----|
-| `onsay.c` | the connection, the checks, the policy, `/onsay`, `sent.log` and signing in, against `../../core/src/lingo.h` and `platform.h` |
+| `../../core/lingo.c` | its C, section 9 (Onsay): the connection, the checks, the policy, `/onsay`, `sent.log` and signing in |
 | `calls_every.h`, `calls_device.h` | the tables of base calls: those every computer can run, and those that need a screen |
 | `calls_shared.c` | the base calls that are the same plain C everywhere, included by `../windows/windows.c` and `../linux/linux.c` |
 | `openapi.json` | what it is, and its two settings |

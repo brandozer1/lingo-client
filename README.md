@@ -16,10 +16,9 @@ Apache 2.0 licensed and made to be built on: add lingos, or wrap it in your own 
 
 | Folder | What it is |
 |--------|------------|
-| `core/` | The lingo client: its settings, its policy and who may call, its command line, its hooks for native lingos, and building and testing it. See its README |
-| `lingos/onsay/` | What makes it Onsay's: its connection, signing in and `/onsay`, see its README, the tables of base calls every computer has, and those calls' shared C (`calls_shared.c`) |
+| `core/` | The lingo client, one C file (`lingo.c`) and what lingos attach with (`lingo.h`), the code it takes as it came (`vendor/`), and building and testing it. See its README |
+| `lingos/onsay/` | What Onsay's part of the client is (see its README), its manifest, the tables of base calls every computer has, and those calls' shared C (`calls_shared.c`) |
 | `lingos/windows/`, `lingos/linux/` | The base calls on each platform, built in for it |
-| `lingos/native/` | The Windows call `native.call`, and the part of libffi it needs |
 | `lingos/standard/` | The standard functions built into the language, written in Lingo: `text`, `list`, `json`, `request` and more |
 | `lingo-library/` | Lingos that aren't built in: `ai` and `agent`, the ones that ship. See its README |
 | `docs/` | `lingo.md`: the language, and what a lingo and its `.lingo` file are |

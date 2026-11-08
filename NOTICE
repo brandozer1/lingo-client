@@ -8,17 +8,17 @@ Licensed under the Apache License, Version 2.0. See LICENSE.
 ----------------------------------------------------------------------
 Third-party components:
 
-libffi (lingos/native/libffi/)
+libffi (core/vendor/libffi/)
   A small, call-only subset is vendored in to call OS and library
   functions by their layout. libffi is distributed under the MIT license.
-  See lingos/native/libffi/LICENSE for its full text and copyright.
+  See core/vendor/libffi/LICENSE for its full text and copyright.
 
-puff (core/src/puff.c, core/src/puff.h)
+puff (core/vendor/puff.c, core/vendor/puff.h)
   zlib's small inflate, by Mark Adler, used as it comes to read deflated
   files in a .lingo file. Distributed under the zlib license, which is in
-  core/src/puff.h with its copyright.
+  core/vendor/puff.h with its copyright.
 
-Monocypher 4.0.2 (core/src/monocypher.c, monocypher.h, monocypher-ed25519.c,
+Monocypher 4.0.2 (core/vendor/monocypher.c, monocypher.h, monocypher-ed25519.c,
 monocypher-ed25519.h)
   Ed25519 signing and checking, by Loup Vaillant, Michael Savage and Fabio
   Scotoni, used as it comes (https://monocypher.org). Dedicated to the public

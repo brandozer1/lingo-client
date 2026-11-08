@@ -8,7 +8,7 @@
 #include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
-#include "platform.h"
+#include "lingo.h"
 
 // What windows, controls and files are, written out where a call gives one (calls_every.h and calls_device.h).
 #define WINDOW "{id: whole, app: text, title: text, x: number, y: number, w: number, h: number, focused: bool, minimized: bool}"

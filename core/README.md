@@ -173,9 +173,9 @@ answers what the command line prints, or `{error}` with a 400.
 
 Every web address the lingo client is given, to `http.send`, so to `request`, and as the `ask` setting, may name a host
 on the web or an Onsay name, told apart by the one rule every Onsay program keeps: a host is on the web when it is an
-IP, `localhost`, or a name with a dot ending in one of the web's top level domains (`src/tlds.txt`), like
+IP, `localhost`, or a name with a dot ending in one of the web's top level domains (`tlds.txt`), like
 `example.com`. Any other, like `laptop.brandon` or `brandon`, is an Onsay name, and the lingo client asks Onsay's
-resolve endpoint, `https://api.onsay.dev/resolve/<name>` (`ONSAY` and `RESOLVE` in `src/core.h`, the only place it
+resolve endpoint, `https://api.onsay.dev/resolve/<name>` (`ONSAY` and `RESOLVE` in `lingo.c`, the only place it
 is written), for its web address, then sends the request there, what followed the name after it. Today that is the free
 proxy, `https://api.onsay.dev/proxy/laptop.brandon`. `http://` or `https://` may be left off, `https` for a name and
 `http` for an IP. A signed request is signed over the address it is sent to, so it checks out as the proxy passes it
@@ -201,14 +201,14 @@ text of at most 4 MB sent with a `Content-Length`.
   function that failed, its message starting with its lingo's file and line when it failed in Lingo code.
 
 **One at a time.** One request runs at a time, in the order they came, whether from the port or handed in. Each from
-the port is read on its own thread (`src/host.c`), so a stop still lands at once. A request that comes while another
+the port is read on its own thread (the host, in `lingo.c`), so a stop still lands at once. A request that comes while another
 waits, on `lingo(...)` or `use(...)` or on the person's answer, runs inside that wait, so a lingo can be reached from
 inside another's run, and an app's answer comes in.
 
 ## Hooks
 
 A native lingo that connects the lingo client to more than its port fills `lingo_hooks` as it loads, with
-`lingo_hook` (`src/lingo.h`, section 7). They are used only while it runs, in a lingo client that serves, never at the
+`lingo_hook` (`lingo.h`, section 7). They are used only while it runs, in a lingo client that serves, never at the
 command line.
 
 | Hook | What it does |
@@ -236,7 +236,7 @@ What the lingo client offers it back, from any thread:
 | `lingo_home` | its home folder, as a whole path, for a file a native lingo keeps there, like the onsay lingo's `sent.log` |
 | `lingo_said(text)` | on the job thread, a line the running request says, handed to the running native lingo that fills `said`: 1 when it took it |
 | `key_of`, `key_sign`, `key_forget` | this computer's own key pairs, in `home/keys`, the private half never handed out |
-| `sha256`, `base64`, `unbase64`, `ed25519_key`, `ed25519_sign`, `ed25519_check` | signing and checking (`src/sign.c`) |
+| `sha256`, `base64`, `unbase64`, `ed25519_key`, `ed25519_sign`, `ed25519_check` | signing and checking (`lingo.c`, Signing) |
 
 **The catalog** is every running lingo, never its code and never the values of its settings: `{name, openapi}`, its
 whole manifest (`../docs/lingo.md`, section 11), or `{name, error}` for one set aside, with why.
@@ -250,7 +250,7 @@ checks each says in its `openapi.json` all its code needs, and sets aside any th
 a native lingo's or one of its groups is set aside too: `input is already a part of onsay, this computer's own lingo`.
 Every lingo here loads, running or not, so a running one can call a stopped one by its dotted name.
 
-**A native lingo** is a library written in C against `src/lingo.h` and `src/platform.h`, linked with
+**A native lingo** is a library written in C against `lingo.h`, linked with
 `bin/onsay-core.lib` (on Linux the core shares its words with `-rdynamic`). Its one entry, `lingo_phrases`, calls
 `phrase_add(group, needs, line, fn)` for each phrase: `needs` everything it uses, like `"screen.act, screen.read"`, and
 `line` its signature, then `-> what it gives` and `: what it does`, and `lingo_hook` when it has hooks. A file phrase
@@ -265,22 +265,10 @@ the lingo's own functions when its `openapi.json`'s `x-lingo` says `keep` (`../d
 
 | File | Job |
 |------|-----|
-| `src/lingo.h` | the core's words: values, buffers, phrases, running and compiling, signing, and the hooks, shared with native lingos |
-| `src/value.c` | values in an arena freed all at once, JSON, numbers written as JavaScript writes them, and headers |
-| `src/compile.c` | the compiler: lex, parse, a Lingo lingo's listing made from its code, what each function needs, every lingo loaded together, and a call of one linked down to native phrases |
-| `src/run.c` | the runner, and its step, time and memory limits |
-| `src/phrase.c` | the table of phrases this computer has |
-| `src/std.c` | the `std` group: reaching inside values and converting them |
-| `src/core.h`, `src/core.c` | the engine: where Onsay is, settings, the floor phrases `compute`, `store`, `http`, `socket`, `connection` and `settings`, Onsay names resolved, `lingo(...)` and `use(...)` asked of a native lingo, `.lingo` files and folders, their manifests, running and stopped, the catalog and the hooks, the policy, callers, signatures and every check, the control verbs, this computer's keys, stops, requests answered at their routes, and pack |
-| `src/tlds.txt` | the web's top level domains, IANA's list, the same file Onsay keeps, made into `obj/tlds.h` by `build.ps1` for telling a name on the web from an Onsay name (*Names*) |
-| `src/sign.c` | SHA-256, base64, and Ed25519 on Monocypher |
-| `src/monocypher.c`, `src/monocypher-ed25519.c` and their `.h` | Ed25519, by Loup Vaillant and others, as it comes (`../NOTICE`) |
-| `src/zip.c` | a file read out of a `.lingo` file, stored or deflated, and one made |
-| `src/puff.c`, `src/puff.h` | inflate, for a deflated file in a zip: zlib's puff, by Mark Adler, as it comes (`../NOTICE`) |
-| `src/host.c` | the engine as a program: the command line, the port and reading each request, every request in turn on one thread, and `lingo_hand`, `lingo_stop`, `lingo_wait` and `lingo_done` |
-| `src/platform.h` | everything the core needs from a device. Porting it is writing this for the new device |
-| `src/platform_win.c` | that, for Windows: WinHTTP for links, so `socket`, and `http.send`, so proxies and certificates work as for any Windows program, threads, files, secrets sealed by DPAPI, and the port and `connection` through Winsock |
-| `src/platform_linux.c` | that, for Linux: pthreads, POSIX files, secrets in files only their user reads, the port and `connection` on plain sockets, `dlopen` for native lingos, and the web through libcurl, loaded as it starts, so it builds with nothing of Linux's and says to install libcurl when it's missing |
+| `lingo.c` | the lingo client, whole, in sections: values and JSON, phrases, the compiler, the runner and its limits, `std`, signing, zips, the engine (where Onsay is, settings, the floor calls, Onsay names, `lingo(...)` and `use(...)`, lingos loaded, the catalog, the policy, callers, signatures and every check, the control verbs, keys, stops, requests at their routes, pack), Onsay (the link, signing in, policy sync, the log sent, prompts and screens), the host (the command line, the port, every request in turn on one thread), and the floor for Windows (WinHTTP, Winsock, DPAPI, `native.call`) and for Linux and Android (pthreads, POSIX files, plain sockets, `dlopen`, libcurl loaded as it starts) |
+| `lingo.h` | what a lingo attaches with: values, buffers, phrases, running and compiling, signing, the hooks, and the floor of the computer it runs on (`pl_...`). Porting is writing that floor for the new device |
+| `tlds.txt` | the web's top level domains, IANA's list, the same file Onsay keeps, made into `obj/tlds.h` by `build.ps1` for telling a name on the web from an Onsay name (*Names*) |
+| `vendor/` | code taken as it came (`../NOTICE`): Monocypher for Ed25519, zlib's puff for deflated zips, and part of libffi for `native.call` |
 | `install.sh` | puts it on a Linux server: the program for its processor, the onsay lingo, running, its folder (`~/.onsay`, or `/var/lib/onsay` as root) with `core.json` in it, and a systemd service. `--sign-in` signs it in |
 | `test/server.mjs` | a stand-in for Onsay, speaking the onsay lingo's contract, that runs every test against a real core |
 | `test/lingos/` | the lingos the tests use, a folder each, beside the library's and the device's |
