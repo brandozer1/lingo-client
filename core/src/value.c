@@ -119,6 +119,12 @@ val *v_text(arena *a, const char *s, size_t len) {
 
 val *v_cstr(arena *a, const char *s) { return v_text(a, s, strlen(s)); }
 
+val *v_bytes(arena *a, const char *s, size_t len) {
+  val *v = v_text(a, s, len);
+  v->k = V_BYTES;
+  return v;
+}
+
 val *v_list(arena *a) {
   val *v = arena_get(a, sizeof *v);
   v->k = V_LIST;
@@ -208,7 +214,7 @@ val *header_lines(arena *a, const char *s) {
   return out;
 }
 
-// Text and numbers never change once made, so only lists and records need copying.
+// Text, bytes and numbers never change once made, so only lists and records need copying.
 val *v_copy(arena *a, val *x) {
   if (x->k == V_LIST) {
     val *c = v_list(a);
@@ -223,14 +229,25 @@ val *v_copy(arena *a, val *x) {
   return x;
 }
 
+// Bytes are the same as a list of the same numbers, since a lingo reads them as one.
+static int bytes_list(val *bytes, val *list) {
+  if (bytes->t.len != list->l.n) return 0;
+  for (size_t i = 0; i < list->l.n; i++)
+    if (list->l.v[i]->k != V_NUM || list->l.v[i]->n != (unsigned char)bytes->t.s[i]) return 0;
+  return 1;
+}
+
 int v_same(val *a, val *b) {
   if (a == b) return 1;
+  if (a->k == V_BYTES && b->k == V_LIST) return bytes_list(a, b);
+  if (a->k == V_LIST && b->k == V_BYTES) return bytes_list(b, a);
   if (a->k != b->k) return 0;
   switch (a->k) {
     case V_NOTHING: return 1;
     case V_BOOL: return a->b == b->b;
     case V_NUM: return a->n == b->n;
-    case V_TEXT: return a->t.len == b->t.len && !memcmp(a->t.s, b->t.s, a->t.len);
+    case V_TEXT:
+    case V_BYTES: return a->t.len == b->t.len && !memcmp(a->t.s, b->t.s, a->t.len);
     case V_LIST:
       if (a->l.n != b->l.n) return 0;
       for (size_t i = 0; i < a->l.n; i++)
@@ -250,7 +267,7 @@ int v_same(val *a, val *b) {
 int truthy(val *x) { return x->k != V_NOTHING && !(x->k == V_BOOL && !x->b); }
 
 const char *kind_name(val *x) {
-  static const char *names[] = { "nothing", "true/false", "number", "text", "list", "record" };
+  static const char *names[] = { "nothing", "true/false", "number", "text", "list", "record", "bytes" };
   return names[x->k];
 }
 
@@ -433,6 +450,14 @@ void buf_json(buf *b, val *x) {
         buf_num(b, x->n);
       break;
     case V_TEXT: buf_json_str(b, x->t.s, x->t.len); break;
+    case V_BYTES:
+      buf_chr(b, '[');
+      for (size_t i = 0; i < x->t.len; i++) {
+        if (i) buf_chr(b, ',');
+        buf_fmt(b, "%u", (unsigned char)x->t.s[i]);
+      }
+      buf_chr(b, ']');
+      break;
     case V_LIST:
       buf_chr(b, '[');
       for (size_t i = 0; i < x->l.n; i++) {

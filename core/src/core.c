@@ -1,7 +1,7 @@
 // core.c - the lingo client's engine: its settings, the lingos it loads, who may call what, and every request it answers.
 //
 // 1. Settings        the settings file, read once, and JSON files in its home
-// 2. Floor           the compute, store, http, socket and settings phrases every core has, and lingo(...) and use(...),
+// 2. Floor           the compute, store, http, socket, connection and settings phrases every core has, and lingo(...) and use(...),
 //                    asked of the native lingo that answers them, or of the settings' ask
 // 3. Lingos          .lingo files and folders: read, loaded, their OpenAPI manifests, running or stopped, the catalog,
 //                    and the hooks of native lingos that run
@@ -16,7 +16,7 @@
 // 10. Requests       web requests, from this computer's port or handed in by a native lingo, each answered by the lingo
 //                    at its route when the caller may reach it
 // 11. Beginning, and packing a lingo
-// It starts no thread and holds no connection but each http.send's and each socket's (see core.h), and core_stop may run
+// It starts no thread and holds no connection but each http.send's, each socket's and each connection's (see core.h), and core_stop may run
 // on another thread, so those and the running request's stop are kept behind one gate.
 #include "core.h"
 #include "platform.h"
@@ -687,6 +687,233 @@ static val *socket_close(run *r, val **a) {
   return NOTHING;
 }
 
+/* connection: the floor under every protocol, bytes over a connection a run opens, tcp or udp to a host and port, or a
+   listener taking tcp connections coming in to this computer. Its address says its kind, like tcp://example.com:80, and
+   the kinds a port opens itself are PL_KINDS. Each is opened and read on a thread of its own (pull), what comes kept in
+   waiting until connection.receive or connection.accept takes it, and the reading pauses while a lot is waiting. Every
+   connection a run opened is closed as that run ends (core_call). pull frees one its run let go of once pull ends, else
+   the run frees it, the way a socket is freed. */
+typedef struct cn {
+  struct cn *next;
+  long id;
+  char kind[8], *host;
+  int port, listening;
+  pl_conn *c;              // set once, as it opens, and freed with it
+  buf waiting;             // bytes come and not yet taken, or for a listener each connection come in, a pl_conn *
+  buf why;                 // why it didn't open
+  volatile int news;       // set as it opens or ends and as anything comes, for lingo_wait
+  int ended, finished, left;
+} cn;
+
+#define CN_HELD (4 << 20)   // the most kept waiting before reading pauses
+static cn *cns;
+static long cns_made;
+
+static void cn_free(cn *k) {
+  if (k->listening)
+    for (size_t i = 0; i + sizeof(pl_conn *) <= k->waiting.n; i += sizeof(pl_conn *)) {
+      pl_conn *c;
+      memcpy(&c, k->waiting.s + i, sizeof c);
+      pl_drop(c);
+    }
+  if (k->c) pl_drop(k->c);
+  buf_free(&k->waiting);
+  buf_free(&k->why);
+  free(k->host);
+  free(k);
+}
+
+static int cn_left(cn *k) {
+  pl_enter(gate);
+  int left = k->left;
+  pl_leave(gate);
+  return left;
+}
+
+static void pull(void *arg) {
+  cn *k = arg;
+  buf in = { 0 };
+  buf from = { 0 };
+  pl_conn *c = k->c;
+  if (!c) c = k->listening ? pl_bind(k->kind, k->port, &k->why) : pl_dial(k->kind, k->host, k->port, &k->why);
+  pl_enter(gate);
+  k->c = c;
+  if (c && k->left) pl_shut(c);
+  pl_leave(gate);
+  lingo_done(&k->news);
+  while (c && !cn_left(k)) {
+    pl_conn *came = NULL;
+    if (k->listening && !(came = pl_next(c, &from, 1))) continue;
+    if (!k->listening && !pl_get(c, &in)) break;
+    pl_enter(gate);
+    if (came) buf_add(&k->waiting, (const char *)&came, sizeof came);
+    if (!came) buf_add(&k->waiting, in.s, in.n);
+    int full = k->waiting.n > CN_HELD;
+    pl_leave(gate);
+    lingo_done(&k->news);
+    in.n = 0;
+    from.n = 0;
+    while (full && !cn_left(k)) {
+      pl_sleep(0.01);
+      pl_enter(gate);
+      full = k->waiting.n > CN_HELD;
+      pl_leave(gate);
+    }
+  }
+  buf_free(&in);
+  buf_free(&from);
+  pl_enter(gate);
+  k->ended = 1;
+  pl_leave(gate);
+  lingo_done(&k->news);
+  pl_enter(gate);
+  k->finished = 1;
+  int left = k->left;
+  pl_leave(gate);
+  if (left) cn_free(k);
+}
+
+static void cn_let_go(cn *k) {
+  cn **at = &cns;
+  while (*at != k) at = &(*at)->next;
+  *at = k->next;
+  pl_enter(gate);
+  k->left = 1;
+  if (k->c) pl_shut(k->c);
+  int finished = k->finished;
+  pl_leave(gate);
+  if (finished) cn_free(k);
+}
+
+static cn *cn_of(run *r, val *id, int listening) {
+  cn *k = cns;
+  while (k && !(id->k == V_NUM && k->id == id->n)) k = k->next;
+  if (!k) fail(r, "phrase", "no connection %s is open in this run", text_of(r, id)->t.s);
+  if (k->listening != listening)
+    fail(r, "phrase", listening ? "that's a connection: send to it and receive from it" : "that's a listener: accept from it");
+  return k;
+}
+
+// One started and its thread waited for until it opens or can't. c is one already open, come in to a listener.
+static long cn_start(run *r, const char *kind, const char *host, int port, int listening, pl_conn *c) {
+  cn *k = calloc(1, sizeof *k);
+  k->id = ++cns_made;
+  snprintf(k->kind, sizeof k->kind, "%s", kind);
+  k->host = strdup(host);
+  k->port = port;
+  k->listening = listening;
+  k->c = c;
+  k->next = cns;
+  cns = k;
+  pl_thread(pull, k);
+  while (!k->news && !*r->stop) lingo_wait(&k->news, r->stop, 1);
+  pl_enter(gate);
+  int open = k->c != NULL;
+  pl_leave(gate);
+  if (open) return k->id;
+  val *why = v_text(r->a, k->why.s ? k->why.s : "", k->why.n);
+  cn_let_go(k);
+  if (*r->stop) fail(r, "stopped", "Stopped by the person");
+  fail(r, "phrase", "%s", why->t.s);
+  return 0;
+}
+
+// kind://host:port into its parts, a host in brackets for IPv6, like tcp://[::1]:80. An address with no kind is an Onsay
+// address, a lingo on a computer, which isn't reached this way yet.
+static void cn_address(run *r, val *address, char kind[8], buf *host, int *port) {
+  const char *s = text_of(r, address)->t.s;
+  const char *rest = strstr(s, "://");
+  if (!rest) fail(r, "phrase", "a connection to a lingo on a computer, like %s, isn't built yet: give a kind, like tcp://%s", s, s);
+  if (rest - s >= 8 || rest == s) fail(r, "phrase", "%s has no kind of connection this computer knows", s);
+  memcpy(kind, s, (size_t)(rest - s));
+  kind[rest - s] = 0;
+  char words[16];
+  snprintf(words, sizeof words, " %s ", kind);
+  if (!strstr(" " PL_KINDS " ", words)) fail(r, "phrase", "this computer can't open %s connections", kind);
+  rest += 3;
+  const char *colon = rest[0] == '[' ? strstr(rest, "]:") : strrchr(rest, ':');
+  if (rest[0] == '[' && colon) colon++;
+  char *end = NULL;
+  long n = colon ? strtol(colon + 1, &end, 10) : 0;
+  if (!colon || !end || *end || n < 1 || n > 65535)
+    fail(r, "phrase", "%s needs a port, like %s://example.com:80", s, kind);
+  if (rest[0] == '[')
+    buf_add(host, rest + 1, (size_t)(colon - rest - 2));
+  else
+    buf_add(host, rest, (size_t)(colon - rest));
+  buf_chr(host, 0);
+  *port = (int)n;
+}
+
+static val *connection_open(run *r, val **a) {
+  char kind[8];
+  buf host = { 0 };
+  int port;
+  cn_address(r, a[0], kind, &host, &port);
+  val *where = v_cstr(r->a, host.s);
+  buf_free(&host);
+  return v_num(r->a, (double)cn_start(r, kind, where->t.s, port, 0, NULL));
+}
+
+// Only on this computer: what comes from elsewhere comes through the port, where the policies stand.
+static val *connection_listen(run *r, val **a) {
+  char kind[8];
+  buf host = { 0 };
+  int port;
+  cn_address(r, a[0], kind, &host, &port);
+  int here = !host.s[0] || !strcmp(host.s, "127.0.0.1") || !strcmp(host.s, "localhost");
+  buf_free(&host);
+  if (!here) fail(r, "phrase", "a lingo listens on this computer alone, like %s://127.0.0.1:%d", kind, port);
+  return v_num(r->a, (double)cn_start(r, kind, "127.0.0.1", port, 1, NULL));
+}
+
+static val *connection_send(run *r, val **a) {
+  cn *k = cn_of(r, a[0], 0);
+  val *data = bytes_of(r, a[1]);
+  if (!pl_put(k->c, data->t.s, data->t.len)) fail(r, "phrase", "the connection was closed");
+  return NOTHING;
+}
+
+// Everything that came and wasn't taken, else what comes within seconds, else nothing. For a listener, the next
+// connection come in, as a connection of this run.
+static val *taken(run *r, cn *k, double seconds) {
+  double until = pl_now() + (seconds >= 0 && seconds < 3600 ? seconds : 30);
+  for (;;) {
+    val *got = NULL;
+    pl_conn *came = NULL;
+    pl_enter(gate);
+    if (k->listening && k->waiting.n >= sizeof came) {
+      memcpy(&came, k->waiting.s, sizeof came);
+      k->waiting.n -= sizeof came;
+      memmove(k->waiting.s, k->waiting.s + sizeof came, k->waiting.n);
+    } else if (!k->listening && k->waiting.n) {
+      got = v_bytes(r->a, k->waiting.s, k->waiting.n);
+      k->waiting.n = 0;
+    }
+    int ended = k->ended;
+    if (!got && !came && !ended) k->news = 0;
+    pl_leave(gate);
+    if (came) return v_num(r->a, (double)cn_start(r, k->kind, "127.0.0.1", k->port, 0, came));
+    if (got) return got;
+    if (*r->stop) fail(r, "stopped", "Stopped by the person");
+    if (ended) fail(r, "phrase", "the connection was closed");
+    if (pl_now() >= until) return NOTHING;
+    lingo_wait(&k->news, r->stop, until - pl_now());
+  }
+}
+
+static val *connection_receive(run *r, val **a) { return taken(r, cn_of(r, a[0], 0), a[1]->k == V_NUM ? a[1]->n : 30); }
+
+static val *connection_accept(run *r, val **a) { return taken(r, cn_of(r, a[0], 1), a[1]->k == V_NUM ? a[1]->n : 30); }
+
+static val *connection_close(run *r, val **a) {
+  cn *k = cns;
+  while (k && !(a[0]->k == V_NUM && k->id == a[0]->n)) k = k->next;
+  if (!k) fail(r, "phrase", "no connection %s is open in this run", text_of(r, a[0])->t.s);
+  cn_let_go(k);
+  return NOTHING;
+}
+
 /* lingo(...) and use(...) as a program reaches them, in, with for, the request it runs for: asked of the running native
    lingo that answers them, which waits, else POSTed to the settings' ask, a web address that answers the same way. */
 static val *asked(run *r, buf *in) {
@@ -799,6 +1026,24 @@ static void floor_phrases(void) {
       "receive(socket: whole, seconds: number=30) -> text?: the next message, or nothing when none came in seconds",
       socket_receive);
   phrase_add("socket", "net", "close(socket: whole)", socket_close);
+  phrase_add("connection", "net",
+      "open(address: text) -> whole: bytes over a connection, its kind first, like tcp://example.com:80 or udp://10.0.0.5:53, "
+      "its number for the other connection phrases. Closed when the run ends, if not before",
+      connection_open);
+  phrase_add("connection", "net", "send(connection: whole, data: bytes): all of it, text as its UTF-8 bytes, for udp one packet",
+      connection_send);
+  phrase_add("connection", "net",
+      "receive(connection: whole, seconds: number=30) -> bytes?: everything come and not yet taken, else what comes within "
+      "seconds, else nothing",
+      connection_receive);
+  phrase_add("connection", "net", "close(connection: whole)", connection_close);
+  phrase_add("connection", "net",
+      "listen(address: text) -> whole: connections coming in on this computer, like tcp://127.0.0.1:7000, its number for "
+      "connection.accept",
+      connection_listen);
+  phrase_add("connection", "net",
+      "accept(listener: whole, seconds: number=30) -> whole?: the next connection come in, else nothing within seconds",
+      connection_accept);
   phrase_add("settings", "none",
       "get(lingo: text) -> [record]: every setting of a lingo, as its openapi.json and its code say, each "
       "with its value now",
@@ -1867,8 +2112,10 @@ static val *core_call(
     rec_set(a, input, name, values->l.v[i]);
   }
   long before = socks_made;
+  long opened = cns_made;
   val *got = run_program(a, program, input, (limits){ set.steps, set.ms, stop }, code, message);
   while (socks && socks->id > before) let_go(socks, "as the run ended", 0);
+  while (cns && cns->id > opened) cn_let_go(cns);
   return got;
 }
 

@@ -6,7 +6,8 @@
 // 4. Files and device, and loading a native lingo
 // 5. Web                http.send, one request through curl
 // 6. Port               web requests coming in, on plain sockets
-// 7. Android            the same file built into the Android app, where the app does links, the web and what is
+// 7. Connections        tcp and udp, out and in, on plain sockets
+// 8. Android            the same file built into the Android app, where the app does links, the web and what is
 //                       around (pl_device), in place of 2, 3, 5 and the context
 // libcurl's own WebSocket API is left alone, since many distributions build curl without it.
 #define _GNU_SOURCE
@@ -15,6 +16,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <arpa/inet.h>
+#include <netdb.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <pthread.h>
@@ -783,7 +785,102 @@ void pl_hang_up(pl_socket *c) {
   free(c);
 }
 
-////////// 7. ANDROID //////////
+////////// 7. CONNECTIONS //////////
+
+struct pl_conn {
+  int s;
+  int udp;
+};
+
+static pl_conn *conn(int s, int udp) {
+  pl_conn *c = malloc(sizeof *c);
+  c->s = s;
+  c->udp = udp;
+  return c;
+}
+
+// Every address the name has is tried in turn, IPv6 and IPv4, until one answers.
+pl_conn *pl_dial(const char *kind, const char *host, int port, buf *error) {
+  struct addrinfo hints = { 0 };
+  struct addrinfo *found = NULL;
+  char service[16];
+  int udp = !strcmp(kind, "udp");
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = udp ? SOCK_DGRAM : SOCK_STREAM;
+  snprintf(service, sizeof service, "%d", port);
+  if (getaddrinfo(host, service, &hints, &found)) {
+    buf_fmt(error, "%s couldn't be found", host);
+    return NULL;
+  }
+  int s = -1;
+  for (struct addrinfo *at = found; at && s == -1; at = at->ai_next) {
+    s = socket(at->ai_family, at->ai_socktype, at->ai_protocol);
+    if (s != -1 && connect(s, at->ai_addr, (socklen_t)at->ai_addrlen)) {
+      close(s);
+      s = -1;
+    }
+  }
+  freeaddrinfo(found);
+  if (s == -1) {
+    buf_fmt(error, "%s didn't answer on port %d", host, port);
+    return NULL;
+  }
+  return conn(s, udp);
+}
+
+// On 127.0.0.1 alone: what comes from elsewhere comes through the port, where the policies stand.
+pl_conn *pl_bind(const char *kind, int port, buf *error) {
+  struct sockaddr_in here = { 0 };
+  if (strcmp(kind, "tcp")) {
+    buf_fmt(error, "only tcp connections can come in so far");
+    return NULL;
+  }
+  here.sin_family = AF_INET;
+  here.sin_port = htons((unsigned short)port);
+  here.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  int s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  if (s == -1 || bind(s, (struct sockaddr *)&here, sizeof here) || listen(s, 16)) {
+    buf_fmt(error, "port %d couldn't be opened: another program may be using it", port);
+    if (s != -1) close(s);
+    return NULL;
+  }
+  return conn(s, 0);
+}
+
+pl_conn *pl_next(pl_conn *listener, buf *from, double seconds) {
+  struct timeval wait = { (long)seconds, (long)((seconds - (long)seconds) * 1e6) };
+  fd_set ready;
+  FD_ZERO(&ready);
+  FD_SET(listener->s, &ready);
+  if (select((int)listener->s + 1, &ready, NULL, NULL, &wait) != 1) return NULL;
+  int s = accept(listener->s, NULL, NULL);
+  if (s == -1) return NULL;
+  buf_str(from, "127.0.0.1");
+  return conn(s, 0);
+}
+
+int pl_put(pl_conn *c, const char *data, size_t n) {
+  if (c->udp) return send(c->s, data, (int)n, 0) == (int)n;
+  for (int sent; n; data += sent, n -= (size_t)sent)
+    if ((sent = send(c->s, data, (int)n, 0)) <= 0) return 0;
+  return 1;
+}
+
+int pl_get(pl_conn *c, buf *out) {
+  char chunk[65536];
+  int got = recv(c->s, chunk, sizeof chunk, 0);
+  if (got > 0) buf_add(out, chunk, (size_t)got);
+  return got > 0;
+}
+
+void pl_shut(pl_conn *c) { shutdown(c->s, SHUT_RDWR); }
+
+void pl_drop(pl_conn *c) {
+  close(c->s);
+  free(c);
+}
+
+////////// 8. ANDROID //////////
 
 #ifdef __ANDROID__
 // An app on Android has no curl, and Android's own does the web, so the app around the core reaches it, holds the links

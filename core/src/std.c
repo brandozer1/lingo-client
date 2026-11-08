@@ -1,7 +1,7 @@
 // std.c - the std group of the base calls: what Lingo can't write for itself, reaching inside values and converting them.
 // Everything else for text, lists, numbers and dates is written in Lingo, in ../../lingos/standard.
 //
-// 1. Inside values   length, keys, slice: counted by characters for text, not bytes
+// 1. Inside values   length, keys, slice, find: counted by characters for text, not bytes
 // 2. Converting      number, text, to_json, from_json, bytes, from_bytes
 // 3. std_phrases()   -> adds them all
 #include "lingo.h"
@@ -22,6 +22,7 @@ static val *len(run *r, val **a) {
   size_t n = 0;
   if (x->k == V_LIST) n = x->l.n;
   if (x->k == V_TEXT) n = utf8_count(x->t.s, x->t.len);
+  if (x->k == V_BYTES) n = x->t.len;
   if (x->k == V_REC) n = x->r.n;
   return v_num(r->a, (double)n);
 }
@@ -53,12 +54,28 @@ static val *slice(run *r, val **a) {
     size_t at = utf8_offset(x->t.s, x->t.len, from);
     return v_text(r->a, x->t.s + at, utf8_offset(x->t.s + at, x->t.len - at, to - from));
   }
+  if (x->k == V_BYTES) {
+    size_t from = edge(r, a[1], (double)x->t.len, 0);
+    size_t to = edge(r, a[2], (double)x->t.len, x->t.len);
+    return v_bytes(r->a, x->t.s + from, to > from ? to - from : 0);
+  }
   list_of(r, x);
   size_t from = edge(r, a[1], (double)x->l.n, 0);
   size_t to = edge(r, a[2], (double)x->l.n, x->l.n);
   val *out = v_list(r->a);
   for (size_t i = from; i < to; i++) list_push(r->a, out, x->l.v[i]);
   return out;
+}
+
+// Where some bytes first are inside bytes, from a place on: what a protocol needs to find the end of a line or a header
+// in what came in without going through it a byte at a time.
+static val *find(run *r, val **a) {
+  val *in = bytes_of(r, a[0]);
+  val *what = bytes_of(r, a[1]);
+  size_t from = edge(r, a[2], (double)in->t.len, 0);
+  for (size_t i = from; i + what->t.len <= in->t.len; i++)
+    if (!memcmp(in->t.s + i, what->t.s, what->t.len)) return v_num(r->a, (double)i);
+  return NOTHING;
 }
 
 ////////// 2. CONVERTING //////////
@@ -114,32 +131,16 @@ static val *parse(run *r, val **a) {
   return out;
 }
 
-// Text as its UTF-8 bytes and back: how a lingo reaches a character's code, to change its case or encode it.
+// Text as its UTF-8 bytes and back: how a lingo reaches a character's code, and what a connection sends and receives.
 static val *bytes(run *r, val **a) {
-  val *t = text_of(r, a[0]);
-  val *out = v_list(r->a);
-  for (size_t i = 0; i < t->t.len; i++) list_push(r->a, out, v_num(r->a, (unsigned char)t->t.s[i]));
-  return out;
+  if (a[0]->k == V_LIST || a[0]->k == V_BYTES) return bytes_of(r, a[0]);
+  return bytes_of(r, text_of(r, a[0]));
 }
 
 static val *from_bytes(run *r, val **a) {
-  val *l = list_of(r, a[0]);
-  buf b = { 0 };
-  for (size_t i = 0; i < l->l.n; i++) {
-    double n = l->l.v[i]->k == V_NUM ? l->l.v[i]->n : -1;
-    if (n < 0 || n > 255 || n != floor(n)) {
-      buf_free(&b);
-      fail(r, "phrase", "a byte is a whole number from 0 to 255");
-    }
-    buf_chr(&b, (char)(unsigned char)n);
-  }
-  if (!utf8_ok(b.s ? b.s : "", b.n)) {
-    buf_free(&b);
-    fail(r, "phrase", "those bytes aren't UTF-8 text");
-  }
-  val *out = v_text(r->a, b.s ? b.s : "", b.n);
-  buf_free(&b);
-  return out;
+  val *b = bytes_of(r, a[0]);
+  if (!utf8_ok(b->t.s, b->t.len)) fail(r, "phrase", "those bytes aren't UTF-8 text");
+  return v_text(r->a, b->t.s, b->t.len);
 }
 
 ////////// 3. STD_PHRASES //////////
@@ -148,11 +149,12 @@ void std_phrases(void) {
   phrase_add("std", "none", "length(x: any) -> number: items, characters or parts", len);
   phrase_add("std", "none", "keys(r: record) -> [text]: a record's part names", keys);
   phrase_add(
-      "std", "none", "slice(x: any, from: whole, to: whole=nothing) -> list|text: to not included, negative counts from the end", slice);
+      "std", "none", "slice(x: any, from: whole, to: whole=nothing) -> list|text|bytes: to not included, negative counts from the end", slice);
+  phrase_add("std", "none", "find(in: bytes, what: bytes, from: whole=0) -> whole?: where what first is in in, from there on", find);
   phrase_add("std", "none", "number(x: any) -> number?: from text like \"$1,204.50\"", num);
   phrase_add("std", "none", "text(x: any) -> text", text);
   phrase_add("std", "none", "to_json(x: any) -> text", json);
   phrase_add("std", "none", "from_json(text: text) -> any: from JSON", parse);
-  phrase_add("std", "none", "bytes(text: text) -> [number]: its UTF-8 bytes, each 0 to 255", bytes);
-  phrase_add("std", "none", "from_bytes(list: [number]) -> text: UTF-8 bytes back to text", from_bytes);
+  phrase_add("std", "none", "bytes(x: any) -> bytes: text's UTF-8 bytes, or a list of numbers 0 to 255 as bytes", bytes);
+  phrase_add("std", "none", "from_bytes(b: bytes) -> text: UTF-8 bytes back to text", from_bytes);
 }

@@ -99,6 +99,7 @@ every program fully known before it runs.
 | text       | `"hello"`                      | Unicode                                                 |
 | list       | `[1, "a", [2]]`                | Ordered, counted from 0. A comma after the last item is allowed |
 | record     | `{name: "Ann", "two words": 1}` | Parts named by text, kept in the order they were added. A part name is a name, a keyword or quoted text |
+| bytes      | `std.bytes("hi")`              | Any bytes, kept whole so a stream stays fast. Read as a list of numbers 0 to 255: indexed, gone through, counted, sliced, added to and compared the same, and written in JSON as that list |
 
 **Truth:** only `nothing` and `false` count as false. `0`, `""` and `[]` count as true.
 
@@ -683,11 +684,12 @@ can write in a few lines is a standard function instead, written in Lingo on thi
 |--------|-----------------------|
 | `std.length(x)` | Items, characters or parts. Counting by a loop each time would cost a step for every one |
 | `std.keys(r)` | A record's part names as a list, with no loop |
-| `std.slice(x, from, to=nothing)` | Part of a list or text, by characters. Building text one character at a time is slow and costs memory |
+| `std.slice(x, from, to=nothing)` | Part of a list, text or bytes, text by characters. Building text one character at a time is slow and costs memory |
+| `std.find(in, what, from=0)` | Where some bytes first are in bytes, or nothing: how a protocol finds the end of a line or a header without a step for every byte |
 | `std.number(x)` | Text to a number, like "$1,204.50". Lingo has no other way from digits to a number |
 | `std.text(x)` | Any value as text, the way `"{x}"` writes it, by name |
 | `std.to_json(x)`, `std.from_json(text)` | JSON, exactly and fast, for every web answer |
-| `std.bytes(text)`, `std.from_bytes(list)` | A character's UTF-8 bytes and back, Lingo's only way to a letter's code: case, encodings |
+| `std.bytes(x)`, `std.from_bytes(b)` | Text's UTF-8 bytes, or a list of numbers as bytes, and back to text: a letter's code, encodings, and what a connection sends and receives |
 | `compute.now()` | The clock: seconds since 1970 |
 | `compute.wait(seconds)` | Pausing, at most 60 seconds, still stopping when asked |
 | `compute.log(x)` | A line in the lingo client's log, which the Windows app keeps |
@@ -695,6 +697,7 @@ can write in a few lines is a standard function instead, written in Lingo on thi
 | `settings.get(lingo)`, `settings.set(lingo, key, value)` | A lingo's settings, kept on the computer wherever that lingo keeps them, for a form of them and to change one (section 11) |
 | `http.send(method, url, headers=nothing, body=nothing, timeout=30)` | The computer's own web request, needing `net`. `request` and `use(...)` stand on it |
 | `socket.open(url, headers=nothing)`, `send(socket, text)`, `receive(socket, seconds=30)`, `close(socket)` | A WebSocket, needing `net`, for a service that talks both ways, like a browser driven over WebDriver BiDi. A request can't wait for a message the way a socket does |
+| `connection.open(address)`, `send(connection, data)`, `receive(connection, seconds=30)`, `close(connection)`, `listen(address)`, `accept(listener, seconds=30)` | Bytes over a connection, needing `net`: the floor every protocol is written on. Its address says its kind, `tcp://example.com:80` or `udp://10.0.0.5:53` |
 | `lingo.list()` | Every lingo running on the computer but those built in, `{name, about, functions: [{name, does}]}`, so an agent knows what is here |
 | `lingo.code(name)` | A lingo's code, `{code, openapi}`, its openapi.json as its maker writes it, to change it or learn from it |
 | `lingo.save(name, code, openapi=nothing)` | A lingo written or changed as a folder in the lingos folder, started and read again at once, needing `lingos`: its functions, or why it can't run, like its code's first mistake. How agents keep what they work out |
@@ -703,6 +706,15 @@ can write in a few lines is a standard function instead, written in Lingo on thi
 back, and fails when it takes longer than its timeout. Windows makes it with WinHTTP and Linux with libcurl, so proxies
 and certificates work as they do for every other program. Most lingos use `request` (`lingos/standard/request.ls`),
 built on it, or `use(...)` for one plain request.
+
+`connection.open` takes its kind, then a host and a port, like `tcp://example.com:80`, `udp://10.0.0.5:53` or
+`tcp://[::1]:7000`, and gives the connection's number for the others. `send` sends all of its bytes, text as its UTF-8
+bytes, and for udp one packet. `receive` gives every byte come and not yet taken, else waits up to its seconds for
+more, and gives `nothing` when none came, so a protocol reads until it has what it needs (`std.find`). `listen` takes
+tcp connections coming in, on this computer alone, like `tcp://127.0.0.1:7000`, since what comes from elsewhere comes
+through the port, where the policies stand, and `accept` gives the next as a connection. Every connection a run opened
+is closed as it ends. The kinds this computer opens itself are tcp and udp; an address with no kind, a lingo on a
+computer, isn't reached this way yet.
 
 `socket.open` takes a `ws://` or `wss://` address, `ws://127.0.0.1:9222/session` on this computer too, or an Onsay name
 (below), with headers like `http.send`'s, and gives the socket's number for the other three. `send` sends one text message, and `receive` gives

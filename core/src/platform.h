@@ -6,6 +6,7 @@
 // 4. Files     read, write, add to, delete and list, for the core's own storage and its log, and secrets sealed
 // 5. Device    what is around it, chance, a native lingo's library, and web requests going out
 // 6. Port      web requests coming in: a port to listen on, and each connection to it
+// 7. Connections  bytes over tcp or udp, out and in, the floor under every protocol
 // The engine (core.c) uses time, the gate, files and the device, and a thread for each http.send and each socket with its
 // link. The port is for host.c, and native lingos may use all of it.
 #ifndef PLATFORM_H
@@ -92,6 +93,21 @@ pl_socket *pl_accept(pl_socket *port, buf *from);          // the next connectio
 int pl_take(pl_socket *c, char *to, size_t n);             // what came, up to n bytes. 0 once it closed or was quiet 10 seconds
 int pl_give(pl_socket *c, const char *data, size_t n);     // all of it, or 0
 void pl_hang_up(pl_socket *c);                              // closes it and frees it
+
+////////// 7. CONNECTIONS //////////
+
+// The floor under every protocol, for connection.open: bytes over a connection to a host and port. kind is one of
+// PL_KINDS, the kinds this port opens itself. Any thread may put, and any thread may shut, which ends a get waiting on
+// another. Only drop is final.
+#define PL_KINDS "tcp udp"
+typedef struct pl_conn pl_conn;
+pl_conn *pl_dial(const char *kind, const char *host, int port, buf *error);
+pl_conn *pl_bind(const char *kind, int port, buf *error);    // tcp connections coming in, on 127.0.0.1 alone
+pl_conn *pl_next(pl_conn *listener, buf *from, double seconds);   // the next one, and where it is from, or NULL in time
+int pl_put(pl_conn *c, const char *data, size_t n);          // all of it, for udp one packet, or 0
+int pl_get(pl_conn *c, buf *out);                            // what comes next, added to out, waiting; 0 once closed
+void pl_shut(pl_conn *c);
+void pl_drop(pl_conn *c);
 
 #ifdef __ANDROID__
 // What only the app around the core can do on Android, asked of it by name with a JSON record: the web, links, what is

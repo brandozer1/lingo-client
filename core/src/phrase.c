@@ -170,7 +170,7 @@ val *native_phrases(arena *a, size_t lingo) {
 // What a word in a line means. A meaning is text with a format, since "text" alone can't tell a file's path from a sentence.
 static const struct { const char *word, *type, *format; } TYPES[] = {
   { "text", "string", NULL }, { "number", "number", NULL }, { "whole", "integer", NULL }, { "bool", "boolean", NULL },
-  { "list", "array", NULL }, { "record", "object", NULL }, { "nothing", "null", NULL }, { "any", NULL, NULL },
+  { "list", "array", NULL }, { "bytes", "array", "bytes" }, { "record", "object", NULL }, { "nothing", "null", NULL }, { "any", NULL, NULL },
   { "path", "string", "path" }, { "folder", "string", "folder" }, { "command", "string", "command" }, { "url", "string", "url" },
   { "pattern", "string", "pattern" }, { "html", "string", "html" }, { "combo", "string", "combo" }, { "app", "string", "app" },
   { "control", "object", "control" },

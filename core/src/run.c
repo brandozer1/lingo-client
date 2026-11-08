@@ -139,6 +139,23 @@ val *text_of(run *r, val *x) {
 
 static int whole(val *x) { return x->k == V_NUM && x->n == floor(x->n) && fabs(x->n) < 9007199254740992.0; }
 
+val *bytes_of(run *r, val *x) {
+  if (x->k == V_BYTES) return x;
+  if (x->k == V_TEXT) return v_bytes(r->a, x->t.s, x->t.len);
+  if (x->k != V_LIST) fail(r, "phrase", "Expected bytes, but this is %s", kind_name(x));
+  room(r, x->l.n);
+  char *s = arena_get(r->a, x->l.n + 1);
+  for (size_t i = 0; i < x->l.n; i++) {
+    val *n = x->l.v[i];
+    if (!whole(n) || n->n < 0 || n->n > 255) fail(r, "phrase", "a byte is a whole number from 0 to 255");
+    s[i] = (char)(unsigned char)n->n;
+  }
+  val *out = v_bytes(r->a, "", 0);
+  out->t.s = s;
+  out->t.len = x->l.n;
+  return out;
+}
+
 // Reading something missing gives nothing, never an error. Negative positions count from the end.
 static val *part(run *r, val *from, val *key) {
   if (from->k == V_LIST || from->k == V_TEXT) {
@@ -150,6 +167,12 @@ static val *part(run *r, val *from, val *key) {
     size_t a = utf8_offset(from->t.s, from->t.len, (size_t)i);
     size_t b = utf8_offset(from->t.s, from->t.len, (size_t)i + 1);
     return v_text(r->a, from->t.s + a, b - a);
+  }
+  if (from->k == V_BYTES) {
+    if (!whole(key)) return NOTHING;
+    double i = key->n < 0 ? (double)from->t.len + key->n : key->n;
+    if (i < 0 || i >= (double)from->t.len) return NOTHING;
+    return v_num(r->a, (unsigned char)from->t.s[(size_t)i]);
   }
   if (from->k == V_REC) {
     val *v = rec_get(from, text_of(r, key)->t.s);
@@ -190,6 +213,16 @@ static val *op(run *r, const char *o, val *a, val *b) {
       val *out = v_list(r->a);
       for (size_t i = 0; i < a->l.n; i++) list_push(r->a, out, a->l.v[i]);
       for (size_t i = 0; i < b->l.n; i++) list_push(r->a, out, b->l.v[i]);
+      return out;
+    }
+    if (a->k == V_BYTES && (b->k == V_BYTES || b->k == V_LIST)) {
+      val *more = bytes_of(r, b);
+      room(r, a->t.len + more->t.len);
+      val *out = v_bytes(r->a, "", 0);
+      out->t.s = arena_get(r->a, a->t.len + more->t.len + 1);
+      memcpy(out->t.s, a->t.s, a->t.len);
+      memcpy(out->t.s + a->t.len, more->t.s, more->t.len);
+      out->t.len = a->t.len + more->t.len;
       return out;
     }
     if (a->k == V_TEXT || b->k == V_TEXT) {
@@ -236,6 +269,11 @@ static val *op(run *r, const char *o, val *a, val *b) {
       return VBOOL(contains(b->t.s, b->t.len, t->t.s, t->t.len));
     }
     if (b->k == V_REC) return VBOOL(rec_get(b, text_of(r, a)->t.s) != NULL);
+    if (b->k == V_BYTES) {
+      if (a->k == V_NUM) return VBOOL(whole(a) && a->n >= 0 && a->n <= 255 && memchr(b->t.s, (int)a->n, b->t.len));
+      val *m = bytes_of(r, a);
+      return VBOOL(contains(b->t.s, b->t.len, m->t.s, m->t.len));
+    }
     return VBOOL(0);
   }
   fail(r, "type", "There is no operator %s", o);
@@ -379,6 +417,14 @@ static int exec(run *r, val *body, val *frame, val **back) {
                 keys[j] = NOTHING;
                 items[j] = k;
               }
+            }
+          } else if (x->k == V_BYTES) {
+            count = x->t.len;
+            items = arena_get(r->a, (count + 1) * sizeof *items);
+            keys = arena_get(r->a, (count + 1) * sizeof *keys);
+            for (size_t j = 0; j < count; j++) {
+              items[j] = v_num(r->a, (unsigned char)x->t.s[j]);
+              keys[j] = v_num(r->a, (double)j);
             }
           } else if (x->k == V_TEXT) {
             count = utf8_count(x->t.s, x->t.len);

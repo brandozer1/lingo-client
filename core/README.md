@@ -271,7 +271,7 @@ the lingo's own functions when its `openapi.json`'s `x-lingo` says `keep` (`../d
 | `src/run.c` | the runner, and its step, time and memory limits |
 | `src/phrase.c` | the table of phrases this computer has |
 | `src/std.c` | the `std` group: reaching inside values and converting them |
-| `src/core.h`, `src/core.c` | the engine: where Onsay is, settings, the floor phrases `compute`, `store`, `http`, `socket` and `settings`, Onsay names resolved, `lingo(...)` and `use(...)` asked of a native lingo, `.lingo` files and folders, their manifests, running and stopped, the catalog and the hooks, the policy, callers, signatures and every check, the control verbs, this computer's keys, stops, requests answered at their routes, and pack |
+| `src/core.h`, `src/core.c` | the engine: where Onsay is, settings, the floor phrases `compute`, `store`, `http`, `socket`, `connection` and `settings`, Onsay names resolved, `lingo(...)` and `use(...)` asked of a native lingo, `.lingo` files and folders, their manifests, running and stopped, the catalog and the hooks, the policy, callers, signatures and every check, the control verbs, this computer's keys, stops, requests answered at their routes, and pack |
 | `src/tlds.txt` | the web's top level domains, IANA's list, the same file Onsay keeps, made into `obj/tlds.h` by `build.ps1` for telling a name on the web from an Onsay name (*Names*) |
 | `src/sign.c` | SHA-256, base64, and Ed25519 on Monocypher |
 | `src/monocypher.c`, `src/monocypher-ed25519.c` and their `.h` | Ed25519, by Loup Vaillant and others, as it comes (`../NOTICE`) |
@@ -279,8 +279,8 @@ the lingo's own functions when its `openapi.json`'s `x-lingo` says `keep` (`../d
 | `src/puff.c`, `src/puff.h` | inflate, for a deflated file in a zip: zlib's puff, by Mark Adler, as it comes (`../NOTICE`) |
 | `src/host.c` | the engine as a program: the command line, the port and reading each request, every request in turn on one thread, and `lingo_hand`, `lingo_stop`, `lingo_wait` and `lingo_done` |
 | `src/platform.h` | everything the core needs from a device. Porting it is writing this for the new device |
-| `src/platform_win.c` | that, for Windows: WinHTTP for links, so `socket`, and `http.send`, so proxies and certificates work as for any Windows program, threads, files, secrets sealed by DPAPI, and the port through Winsock |
-| `src/platform_linux.c` | that, for Linux: pthreads, POSIX files, secrets in files only their user reads, the port on plain sockets, `dlopen` for native lingos, and the web through libcurl, loaded as it starts, so it builds with nothing of Linux's and says to install libcurl when it's missing |
+| `src/platform_win.c` | that, for Windows: WinHTTP for links, so `socket`, and `http.send`, so proxies and certificates work as for any Windows program, threads, files, secrets sealed by DPAPI, and the port and `connection` through Winsock |
+| `src/platform_linux.c` | that, for Linux: pthreads, POSIX files, secrets in files only their user reads, the port and `connection` on plain sockets, `dlopen` for native lingos, and the web through libcurl, loaded as it starts, so it builds with nothing of Linux's and says to install libcurl when it's missing |
 | `install.sh` | puts it on a Linux server: the program for its processor, the onsay lingo, running, its folder (`~/.onsay`, or `/var/lib/onsay` as root) with `core.json` in it, and a systemd service. `--sign-in` signs it in |
 | `test/server.mjs` | a stand-in for Onsay, speaking the onsay lingo's contract, that runs every test against a real core |
 | `test/lingos/` | the lingos the tests use, a folder each, beside the library's and the device's |

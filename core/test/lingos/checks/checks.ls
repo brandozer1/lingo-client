@@ -82,6 +82,17 @@ fn bytes_back() {
   return [b, from_bytes(b), from_bytes([]), x, y]
 }
 
+// Bytes read as a list of numbers: indexed, counted, sliced, added to, found in, gone through and compared.
+fn bytes_like_a_list() {
+  b = bytes("GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+  end = std.find(b, "\r\n\r\n")
+  line = slice(b, 0, std.find(b, "\r\n"))
+  more = bytes("ab") + [99]
+  sum = 0
+  for n in more {sum += n}
+  return [b[0], b[-1], b[999], length(b), end, std.find(b, "nope"), from_bytes(line), from_bytes(more), sum, 97 in more, "bc" in more, more == [97, 98, 99], bytes([1, 2]) == bytes([1, 2])]
+}
+
 // A function calling itself.
 fn fib(n) {
   if n < 2 {return n}
@@ -253,6 +264,28 @@ fn socket_echo(base) {
 
 // socket: one left open, which the end of the run closes.
 fn socket_left(base) {return socket.open(base + "/echo") > 0}
+
+// connection: a listener on this computer, a tcp connection to it, bytes each way, nothing when none comes in time, the
+// other side closing, and addresses it turns down.
+fn connection_round(port) {
+  l = connection.listen("tcp://127.0.0.1:{port}")
+  c = connection.open("tcp://localhost:{port}")
+  s = connection.accept(l, 5)
+  connection.send(c, "ping")
+  got = connection.receive(s, 5)
+  connection.send(s, std.bytes([0, 255]))
+  back = connection.receive(c, 5)
+  none = connection.receive(c, 0.2)
+  connection.close(c)
+  try {connection.receive(s, 5)} catch e {closed = e}
+  wrong = []
+  for address in ["example.com:80", "tcp://example.com", "carrier://x:1"] {
+    try {connection.open(address)} catch e {wrong += [e]}
+  }
+  try {connection.listen("tcp://0.0.0.0:{port}")} catch e {wrong += [e]}
+  try {connection.accept(s)} catch e {wrong += [e]}
+  return [std.from_bytes(got), back, none, closed, wrong]
+}
 
 // socket.open at Onsay names: each one's greeting and echo, or why it couldn't open.
 fn socket_names(names) {

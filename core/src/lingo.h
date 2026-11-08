@@ -1,6 +1,6 @@
 // lingo.h - the Lingo core's own words, in plain C11 that knows nothing of any device (platform.h is the only door to one).
 //
-// 1. Values      nothing, true/false, numbers, text, lists and records, in an arena freed all at once
+// 1. Values      nothing, true/false, numbers, text, lists, records and bytes, in an arena freed all at once
 // 2. Buffers     growing text, for JSON and messages
 // 3. Phrases     what this computer can do: an id, its line, what it needs, and the C function behind it
 // 4. Running     a tree to its value or its error
@@ -33,7 +33,7 @@ LINGO_SHARED
 
 ////////// 1. VALUES //////////
 
-typedef enum { V_NOTHING, V_BOOL, V_NUM, V_TEXT, V_LIST, V_REC } vkind;
+typedef enum { V_NOTHING, V_BOOL, V_NUM, V_TEXT, V_LIST, V_REC, V_BYTES } vkind;
 
 typedef struct val val;
 struct val {
@@ -42,7 +42,7 @@ struct val {
   union {
     int b;
     double n;
-    struct { char *s; size_t len; } t;                  // UTF-8, also ending in a 0 byte
+    struct { char *s; size_t len; } t;                  // UTF-8, also ending in a 0 byte. Bytes keep any bytes here
     struct { val **v; size_t n, cap; } l;
     struct { char **key; val **v; size_t n, cap; } r;   // parts kept in the order they were added
   };
@@ -62,6 +62,9 @@ extern val V_NOTHING_VAL, V_TRUE_VAL, V_FALSE_VAL;
 
 val *v_num(arena *a, double n);
 val *v_text(arena *a, const char *s, size_t len);
+// Bytes are kept whole, never as a list, so a stream stays fast, and read as a list of numbers 0 to 255: indexed, gone
+// through, added and counted the same, and written in JSON as that list.
+val *v_bytes(arena *a, const char *s, size_t len);
 val *v_cstr(arena *a, const char *s);
 val *v_list(arena *a);
 val *v_rec(arena *a);
@@ -166,6 +169,7 @@ val *lingo_call(arena *a, val *inst, const char *fn);
 _Noreturn void fail(run *r, const char *code, const char *fmt, ...);   // stops with an error, never returns
 double num_of(run *r, val *x, const char *what);
 val *text_of(run *r, val *x);                                           // any value as text
+val *bytes_of(run *r, val *x);   // bytes as they are, text as its UTF-8 bytes, a list of numbers 0 to 255 as those bytes
 
 ////////// 6. SIGNING //////////
 
