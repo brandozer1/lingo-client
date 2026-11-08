@@ -109,7 +109,8 @@ onsay-core core.json call onsay.sign_out         this computer forgets its sign 
 
 | File | Job |
 |------|-----|
-| `../../core/lingo.c` | its C, section 9 (Onsay): the connection, the checks, the policy, `/onsay`, `sent.log` and signing in |
+| `../../core/lingo.c` | its C, section 9 (Onsay): the connection, the checks, the policy, `sent.log` and signing in, and the link offered to private lingos (`lingo.h`, Onsay) |
+| `agent.c` | `/onsay`: the agent loop, its sessions, and the screens lingos draw on, on that link, added by each distribution as it adds its base calls |
 | `calls_every.h`, `calls_device.h` | the tables of base calls: those every computer can run, and those that need a screen |
 | `calls_shared.c` | the base calls that are the same plain C everywhere, included by `../windows/windows.c` and `../linux/linux.c` |
 | `openapi.json` | what it is, and its two settings |

@@ -7,6 +7,7 @@
 // 5. Compiling   every lingo in the lingos folder, and a call of one of their functions, linked down to native phrases
 // 6. Signing     SHA-256, base64, Ed25519, and this device's own keys
 // 7. Hooks       what a native lingo fills to connect this lingo client to more than its port, like the onsay lingo
+// 8. Onsay       the link to Onsay, for a distribution's private lingos, like the agent loop
 // A native lingo's library is written against this. Its one entry is lingo_phrases (LINGO_ENTRY).
 #ifndef LINGO_H
 #define LINGO_H
@@ -267,6 +268,36 @@ void lingo_unwatch(void *arg);
 void lingo_called(const char *kind, const char *address, const char *ask, const char *method, const char *url, val *headers,
     const char *body, size_t n, val *got, const char *error, int stopped, double ms);
 
+////////// 8. ONSAY //////////
+
+/* The lingo client's link to Onsay, offered to a distribution's private lingos, like the agent loop (lingos/onsay/agent.c).
+     onsay_send       one message down the link, a JSON record. 0 when it isn't open
+     onsay_exchange   a message {type, id: a new number, ...rest}, rest a JSON record, and its answer by that id waited for,
+                      answering requests meanwhile. 1 with the answer in reply, 0 when Onsay isn't reached, stop was set or
+                      seconds passed. heard, when set, gets each step Onsay says of it first, with arg, outside every lock
+     onsay_id         a new number for a message, like a stream to watch, never one an exchange uses
+     onsay_ready      1 while Onsay is reached and took this computer's hello
+     onsay_name       this computer's name on the account and its handle, like desk.brandon, added to out, or nothing yet
+     onsay_api        one request to Onsay's API: its answer as a record, and its status, or NULL with why in error
+     onsay_listen     the one private lingo that hears what the link doesn't know, each member NULL when it doesn't:
+                        started   once, as the link starts in a lingo client that serves
+                        heard     a message from Onsay the link doesn't know, 1 when it took it; NULL as the link closes
+                        follows   who hears the steps of a lingo(...) or use(...) the request job asks, with arg, or NULL
+   The lingo client never calls these members while it holds a lock of its own. */
+typedef void (*onsay_heard)(void *arg, const char *message, size_t n);
+typedef struct {
+  void (*started)(void);
+  int (*heard)(const char *message, size_t n);
+  onsay_heard (*follows)(const char *job, void **arg);
+} onsay_listener;
+int onsay_send(const char *text, size_t n);
+int onsay_exchange(const char *type, const char *rest, size_t n, volatile int *stop, double seconds, buf *reply,
+    onsay_heard heard, void *arg);
+long onsay_id(void);
+int onsay_ready(void);
+void onsay_name(buf *out);
+val *onsay_api(arena *a, const char *method, const char *path, const char *body, double *status, buf *error);
+void onsay_listen(const onsay_listener *l);
 
 ////////// 1. TIME //////////
 

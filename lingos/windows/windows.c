@@ -2415,7 +2415,8 @@ static val *look_open_windows(run *r, val **a) {
 
 ////////// 10. BASE_CALLS //////////
 
-void native_calls(void);   // native.c
+void native_calls(void);   // lingo.c, Windows
+void agent_calls(void);   // ../onsay/agent.c
 
 // Each call that needs a screen as a function of its own that runs it through or_in_front.
 #define CALL(group, needs, line, fn) static val *fn##_or_in_front(run *r, val **a) { return or_in_front(r, fn, a); }
@@ -2436,4 +2437,5 @@ void base_calls(void) {
 #include "calls_device.h"
 #undef CALL
   native_calls();
+  agent_calls();
 }
