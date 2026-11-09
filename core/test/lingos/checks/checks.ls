@@ -384,3 +384,6 @@ fn list_basics() {
   place = url.parse("https://laptop.brandon/weather/now")
   return [list.sum([1, 2, 3]), list.sum([]), list.unique([1, 2, 1, 3]), list.flatten([1, [2, 3], [4]]), list.index_of(["a", "b"], "b"), list.index_of([], "b"), math.abs(-3), [place.host, place.path]]
 }
+
+// Who called, and the data of the badge it came with.
+fn who() {return badge.read()}

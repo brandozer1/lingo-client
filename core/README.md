@@ -2,7 +2,7 @@
 
 The lingo client in C: a small program that runs lingos, built for Windows and Linux. It runs the lingos in its
 computer's lingos folder and answers on its port, 6969, each running lingo at its own route, for whoever its policy lets
-in: this computer always, anyone else only by a rule. Bare, it knows nothing beyond its port, and where Onsay says where an Onsay name goes (*Names*). A native lingo can
+in: its owner always, anyone else only by a grant or a badge. Bare, it knows nothing beyond its port, and where Onsay says where an Onsay name goes (*Names*). A native lingo can
 connect it to more through its hooks (*Hooks*): the onsay lingo (`../lingos/onsay`) connects it to Onsay, so Onsay and
 the person's other devices can reach its lingos, and its lingos can ask Onsay with `lingo(...)` and `use(...)`. It has no
 screen of its own: the Windows app (onsay-desktop) ships `bin/onsay-core.exe` and `bin/lingos`, and on a Linux server
@@ -28,7 +28,7 @@ One JSON file, given as the first argument.
 |---------|------------|
 | `home` | its own folder, and its root: everything it keeps is in it (below), and its lingos reach files inside it freely |
 | `lingos` | the lingos folder, `home/lingos` when left out |
-| `port` | where it answers, 6969 when left out: on 127.0.0.1 alone, so the firewall never asks, until a rule written in the policy lets in `public` or an `ip`, then on every address the computer has, opened again within 5 seconds of a change |
+| `port` | where it answers, 6969 when left out: on 127.0.0.1 alone, so the firewall never asks, until a grant in the policy is for `public`, then on every address the computer has, opened again within 5 seconds of a change |
 | `steps`, `ms` | the most one request may take, in steps and milliseconds |
 | `ask` | a web address or an Onsay name (*Names*) that answers `lingo(...)` and `use(...)` when no running native lingo does, at the command line too: each is POSTed there as JSON, as the `ask` hook is given it, and answered the same way (*Hooks*). Left out, they fail. Onsay runs its own library this way |
 
@@ -43,25 +43,23 @@ What it keeps in `home`:
 | `sent.log` | every message the onsay lingo sent Onsay, `{at, message}` a line, every token in it masked, for the person to read. Cut to its newest half past 4 MB |
 | `settings/<lingo>.json` | a lingo's settings, unless it keeps them itself (`../docs/lingo.md`, section 11). The onsay lingo's sign in is its `token` here |
 | `store/` | Onsay's own storage, the `store` phrases', one file a key |
-| `keys/<name>` | this computer's own key pairs, like `device`: on Windows sealed by Windows (DPAPI), so the private key is never a plain file, and on Linux a file only its user can read |
+| `keys/<name>` | this computer's own key pairs, like `device`, the one its badges are signed with, kept when it signs out: on Windows sealed by Windows (DPAPI), so the private key is never a plain file, and on Linux a file only its user can read |
 | `libraries/<lingo>/` | a native lingo's library, taken out of its `.lingo` file to be loaded |
 
 ## Who may do what
 
-Every request answers two questions, and both must say yes: may this caller reach this route, and may this lingo do what
-each phrase it runs needs, here. A request from this computer is let in by its own, and local calls skip the first
-question. The policy is ingress only.
+Every request answers two questions, and both must say yes: may this caller reach this address, and may this lingo do
+what each phrase it runs needs, here. The policy is ingress only. The whole design is in the onsay repo,
+`docs/lingo-function.md`, Badges and grants.
 
-**The caller**, from most to least trusted:
+**The caller** comes from whatever proof the request came with. An IP address never lets anyone in:
 
 | Caller | Who it is | In the log |
 |--------|-----------|------------|
-| this computer | a request to the port from 127.0.0.1 or ::1, when its `Host` names this computer and no `Origin` or `Sec-Fetch-Site` says a page elsewhere sent it. It reaches every running lingo and the control routes | `this computer` |
-| me | the account's own call, handed in by a native lingo that checked it (`lingo_hand`), like the onsay lingo for a request Onsay signed for this computer's account | `me` |
-| my devices | a signed request from another computer on the same account | its keyid, like `laptop.brandon` |
-| onsay | Onsay's own search and agent, signed `as: "onsay"` | `onsay` |
-| a signed device | a request with an HTTP Message Signature (RFC 9421, Ed25519) that checks out, its signer's key looked up by the native lingo that knows keys (`key` in *Hooks*), so its account is known | its keyid, like `laptop.james` |
-| anyone else | known by their address, the port's, or the one a native lingo hands in, like the first of a proxy's `x-forwarded-for` | `ip 203.0.113.7` |
+| the owner | this computer's own: the command line, the account's own call, handed in by a native lingo that checked it (`lingo_hand`, like the onsay lingo for a request Onsay signed for this account), or a signed request from another computer of its handle. It reaches everything | `me`, or its keyid |
+| a signer | a request with an HTTP Message Signature (RFC 9421, Ed25519) that checks out, its signer's key looked up by the native lingo that knows keys (`key` in *Hooks*) | its keyid, like `laptop.james` |
+| onsay | Onsay's own search and agent, handed in as `onsay` | `onsay` |
+| anyone | no proof: a request to the port, or one a native lingo hands in from an address, like the first of a proxy's `x-forwarded-for` | `ip 203.0.113.7` |
 
 A signed request's `Signature-Input` covers `@method`, `@target-uri` and `content-digest` at least, and has `created`,
 `nonce` and `keyid`. It must check out, be made within 5 minutes, its nonce new in that time, and its `Content-Digest`
@@ -69,41 +67,49 @@ its body's sha-256. Its `@target-uri` is `x-forwarded-proto` (else `http`), `://
 `x-forwarded-uri` (else the path), so a request a proxy passed on is checked as it was sent. One that doesn't check out
 is a 401 that says why. Anyone not let in gets a 404, as if the lingo weren't there.
 
-**The policy** is the account's, kept by Onsay and written to `policy.account.json` here by the onsay lingo
-(`lingo_policy`). The website, the desktop app and the command line all edit the same one.
+**A grant** is one permission slip: "I, `by`, let `to` reach `allow`, until `until`".
+
+```json
+{ "by": "desk.brandon", "to": "alice", "allow": ["/notes"], "except": ["/notes/private"], "pass": true,
+  "until": 1794268800, "data": { "note": "the recipes are in /notes/recipes" }, "sig": "..." }
+```
+
+| Field | Meaning |
+|---|---|
+| `to` | `public`, a handle, every one of its computers, a computer like `laptop.alice`, or `onsay` |
+| `allow` | addresses: one starting with `/` is on this computer, any other starts with a computer or a handle, like `desk.brandon/notes` or `brandon/notes`. `*` is any one part, and an address covers itself and everything under it |
+| `except` | addresses taken out of this grant's `allow`, never anything more |
+| `pass` | `true` when `to` may hand it on |
+| `until` | when it stops, in seconds since 1970. None, and it lasts |
+| `data` | anything the holder's lingos read with `badge.read()`. It never opens anything |
+| `sig` | `by`'s Ed25519 signature over the `sig` before it and this grant as Onsay signs (keys sorted, no spaces), without `sig` |
+
+**The policy** is the account's grants, kept by Onsay and written to `policy.account.json` here by the onsay lingo
+(`lingo_policy`), with no `by` or `sig`: they are trusted for being the policy. Everything is closed until one opens it.
 
 ```json
 {
   "version": 14,
   "device": "laptop",
-  "default": "closed",
-  "rules": [
-    { "allow": true, "who": "me" },
-    { "allow": true, "who": "my devices" },
-    { "allow": true, "who": "onsay", "routes": ["/onsay"] },
-    { "allow": true, "account": "acct_6acbe318259da01c630272e6", "handle": "james", "routes": ["/photos/share"] },
-    { "allow": false, "ip": "203.0.113.0/24" }
+  "grants": [
+    { "to": "onsay", "allow": ["/onsay"] },
+    { "to": "james", "allow": ["/photos/share"] },
+    { "to": "public", "allow": ["/weather"], "except": ["/weather/history"] },
+    { "to": "onsay", "allow": ["/shop"], "pass": true }
   ]
 }
 ```
 
-`default` is always `"closed"`. `rules` is one list, read top to bottom: a rule that matches sets the answer, and a
-later deny wins. If no rule matches, the caller stays out. A rule has:
+**A badge** is grants that travel, each handing on the one before, sent as the base64 of their JSON list: the
+`Onsay-Badge` header on the port, or `badge` in a request a native lingo hands in. The `badge` verb makes one, signed by
+this computer's key in `keys/device`, by its name, like `laptop.brandon`, or `this computer` before it signs in.
 
-| Field | Meaning |
-|---|---|
-| `allow` | `true` to let in, `false` to keep out. Required |
-| `who` | one built-in: `me`, `my devices`, `onsay`, or `public` |
-| `account` | an account id, `acct_...`. The permission key |
-| `handle` | a handle or `handle#tag`, resolved to its account when the rule is written. The name shown |
-| `ip` | an address or range, like `203.0.113.7` or `10.0.0.0/8` |
-| `routes` | full paths, like `["/photos/share"]`. Absent means every route |
-| `devices` | computer names, like `["laptop"]`. Absent means every computer |
-
-A rule names its caller with one of `who`, a person (`account`, or a `handle` to resolve), or `ip`. A stored rule for a
-person always has `account` and `handle`: the id is the key, and the handle is a label. `routes` and `devices` narrow the
-rule. A route matches itself and everything under it, like `/photos` and `/photos/share`. There is no separate lingo
-field: naming the route names the lingo.
+**The check.** A request is let in when its caller is the owner, when a grant in the policy names it and covers the
+address, or when it came with a badge where the first grant is signed by the owner, or by someone a policy grant names
+and lets pass it on, each grant's `to` is the next one's signer and lets it pass on, the last `to` is the caller or
+`public`, and every grant covers the address and is in date. Since every grant must, a handoff can only narrow. A badge
+whose signature doesn't check out, or that isn't handed on, is a 401. The control routes open only to the owner or a
+badge the owner signed, never to a grant in the policy.
 
 `policy.json`, changed only on this computer, holds the ceiling:
 
@@ -114,20 +120,18 @@ field: naming the route names the lingo.
 ```
 
 **The ceiling** is the most this computer ever allows, every need when left out. Nothing from elsewhere can raise it.
-A policy stored in the old `{ access, grants, offline }` shape is read as the default policy at its stored version, so
-nothing old is enforced.
 
 **At every phrase**, each need the lingo's `openapi.json` declares for the route the request reached
-(`x-lingo-needs`) must be under the ceiling. Then it is allowed: there is no per-caller grant and no prompt. `net`,
+(`x-lingo-needs`) must be under the ceiling. Then it is allowed: there is no per-caller need and no prompt. `net`,
 `store` and files inside `home` are routine; anything else is logged so the person can see what an app did. A need over
 the ceiling is a 403.
 
-**`decisions.log`** has a line for each request from anyone but this computer, let in or not, and each need over the
-routine, allowed or refused. Each line also goes to every running native lingo that wants it, like the onsay lingo,
-which sends it to Onsay for the account's activity feed.
+**`decisions.log`** has a line for each request from anyone but the owner on its port, let in or not, and each need
+over the routine, allowed or refused. Each line also goes to every running native lingo that wants it, like the onsay
+lingo, which sends it to Onsay for the account's activity feed.
 
 ```json
-{"at":"2026-10-28T14:00:00Z","caller":"ip 203.0.113.7","lingo":"photos","route":"/photos/share","need":null,"allowed":true,"why":"rule: 203.0.113.7"}
+{"at":"2026-10-28T14:00:00Z","caller":"ip 203.0.113.7","lingo":"photos","route":"/photos/share","need":null,"allowed":true,"why":"grant: public"}
 {"at":"2026-10-28T14:00:01Z","caller":"this computer","lingo":"desk","route":"/desk/tidy","need":"run","allowed":true,"why":"allowed"}
 ```
 
@@ -143,20 +147,22 @@ onsay-core settings.json <verb> ...           does one thing and prints its answ
 | `pack <folder> [<to>]` | makes the folder of a lingo's files into its `.lingo` file, in `to` or beside the folder (`../docs/lingo.md`, section 11) |
 | `start <lingo>`, `stop <lingo>` | a lingo running or stopped. A running lingo client sees it within 5 seconds |
 | `ceiling <needs...>` | sets the ceiling: `ceiling net store files.read` |
-| `policy` | prints the policy in force, `{ceiling, default, rules, device}`, and `local` and `account`, the files as they are |
+| `policy` | prints the policy in force, `{ceiling, grants, device}`, and `local` and `account`, the files as they are |
 | `settings <lingo>` | prints every setting of a lingo, each with its value now, for a form of them |
 | `set <lingo> <key> <value>` | changes one, wherever that lingo keeps it. The value is JSON, like `"metric"` or `5`, or text as it is when it isn't JSON |
 | `manifest <lingo>` | prints a lingo's whole OpenAPI manifest, as the catalog has it, or why it can't load |
 | `call <lingo.function> [values...]` | runs a function of a lingo, or a native lingo's phrase, as this computer, its values in order, each JSON or text, and prints its value: `call memo.recall milk`, `call onsay.sign_in` |
+| `badge [<grant>]` | prints a badge signed by this computer, for `public`, everything and a day unless the grant, one JSON record, says: `badge {"to":"alice","allow":["/notes"],"pass":true}`. With `badge` in it, the grant is stapled on to that one (*Who may do what*) |
 
 The base calls also write a line of JSON on stdout for each thing an app draws: Onsay's pointer gliding and clicking, a
 ring around something on screen, and lines in the chat (`show` in `../lingos/windows/windows.c`).
 
 ## Control routes
 
-The same verbs for an app on this computer, at `/.lingo/<verb>`, answering only this computer's own requests to its
-port, never one handed in: a `GET` with its values in the query, or a `POST` of them as a JSON record by name. Each
-answers what the command line prints, or `{error}` with a 400.
+The same verbs for an app on this computer, at `/.lingo/<verb>`, answering only the owner on its port, never one handed
+in: a request with the owner's badge, which an app gets from the command line's `badge` as it starts. A `GET` with its
+values in the query, or a `POST` of them as a JSON record by name. Each answers what the command line prints, or
+`{error}` with a 400.
 
 | Route | Values | Answer |
 |-------|--------|--------|
@@ -168,6 +174,7 @@ answers what the command line prints, or `{error}` with a 400.
 | `/.lingo/policy` | | the policy in force, with the files |
 | `/.lingo/ceiling` | `needs`, a list | the policy in force |
 | `/.lingo/call` | `fn`, and `values`, a list | the function's value |
+| `/.lingo/badge` | `to`, `allow`, `except`, `pass`, `until`, `data`, `badge` | a badge signed by this computer, as base64 |
 
 ## Names
 
@@ -230,7 +237,7 @@ What the lingo client offers it back, from any thread:
 | `lingo_ask(r, question, seconds)` | on the job thread, a question for the person, a record, waited for in `/.lingo/asks` until an app answers it, the run is stopped or `seconds` pass: its answer, `nothing` when none came, or `NULL` when no app is open to ask |
 | `lingo_job()` | on the job thread, the id, as JSON, of the request running now, or `NULL` outside one |
 | `lingo_push(path, text, n)` | one message for everything watching `path` on the port as a WebSocket. A GET to the port with `Upgrade: websocket` is answered like any other first, so every check applies, and on a 200 it stays open: what the lingo answered is the first message, then each push, until either side closes it. The agent loop streams `/onsay/screens` this way (`../lingos/onsay/agent.c`) |
-| `lingo_policy(a, account, device, why)` | keeps the account's policy, with its version, as the one in force, its rules for this computer by `device`. Refused when older than the one kept. Gives an empty record, which callers report as `clamped`: there is nothing to clamp any more |
+| `lingo_policy(a, account, device, why)` | keeps the account's policy, with its version, as the one in force, its grants, and `device`, this computer's name on the account. Refused when older than the one kept. Gives an empty record, which callers report as `clamped`: there is nothing to clamp any more |
 | `lingo_setting`, `lingo_set` | one of a lingo's settings, as this computer keeps them |
 | `lingo_called(kind, address, ask, method, url, headers, body, n, got, error, stopped, ms)` | one request made, handed to every running native lingo with `called`: each `http.send` does, each socket is kept the same way, and a native lingo calls it for a request it makes itself |
 | `lingo_home` | its home folder, as a whole path, for a file a native lingo keeps there, like the onsay lingo's `sent.log` |
@@ -266,7 +273,7 @@ the lingo's own functions when its `openapi.json`'s `x-lingo` says `keep` (`../d
 
 | File | Job |
 |------|-----|
-| `lingo.c` | the lingo client, whole, in sections: values and JSON, phrases, the compiler, the runner and its limits, `std`, signing, zips, the engine (where Onsay is, settings, the floor calls with `native.call`, Onsay names, `lingo(...)` and `use(...)`, lingos loaded, the catalog, the policy, callers, signatures and every check, the control verbs, keys, stops, requests at their routes, pack), Onsay (the link, offered to private lingos too, signing in, policy sync, the log sent), the host (the command line, the port, every request in turn on one thread), and the floor for Windows (WinHTTP, Winsock, DPAPI, `GetProcAddress`) and for Linux and Android (pthreads, POSIX files, plain sockets, `dlopen`, libcurl loaded as it starts) |
+| `lingo.c` | the lingo client, whole, in sections: values and JSON, phrases, the compiler, the runner and its limits, `std`, signing, zips, the engine (where Onsay is, settings, the floor calls with `native.call`, Onsay names, `lingo(...)` and `use(...)`, lingos loaded, the catalog, the policy, callers, signatures, grants, badges and every check, the control verbs, keys, stops, requests at their routes, pack), Onsay (the link, offered to private lingos too, signing in, policy sync, the log sent), the host (the command line, the port, every request in turn on one thread), and the floor for Windows (WinHTTP, Winsock, DPAPI, `GetProcAddress`) and for Linux and Android (pthreads, POSIX files, plain sockets, `dlopen`, libcurl loaded as it starts) |
 | `lingo.h` | what a lingo attaches with: values, buffers, phrases, running and compiling, signing, the hooks, and the floor of the computer it runs on (`pl_...`). Porting is writing that floor for the new device |
 | `tlds.txt` | the web's top level domains, IANA's list, the same file Onsay keeps, made into `obj/tlds.h` by `build.ps1` for telling a name on the web from an Onsay name (*Names*) |
 | `vendor/` | code taken as it came (`../NOTICE`): Monocypher for Ed25519, zlib's puff for deflated zips, and part of libffi for `native.call`, its C the same everywhere and each chip's own part (x86-64 and arm64) |
@@ -296,8 +303,8 @@ request, down the onsay lingo's connection, signed by Onsay as the account's own
 signed device, or to its port, 6970, or a command: the language and the core's phrases (`test/lingos/checks/checks.ls`),
 limits and stops, settings, `lingo(...)` and `use(...)` asked of the stand-in while it reaches this computer, web
 requests to Onsay names, resolved by the stand-in, the library, the base calls for real (`test/lingos/desk/desk.ls`), which may read the screen but never act on it, the
-catalog, packing and loading, running and stopped, ingress by address, range, route, handle, account and device,
-signatures that check out and those that don't, deny rules that win, the account policy pushed, fetched, kept and
+catalog, packing and loading, running and stopped, grants for public, a handle, a computer and a route, with except, *
+and until, badges made, handed on and refused, signatures that check out and those that don't, the account policy pushed, fetched, kept and
 refused when older, the ceiling, the root, the person's answers through an app, the decision log and its lines
 sent on, `/onsay`, its agent loop (calls run here, the step limit, a stop and Let me choose) and its sessions, `sent.log`, signing in and out from the command line and from an app, the control
 routes, every command, `call` asking `lingo(...)` and `use(...)` of its settings' `ask`, a bare core with no onsay lingo

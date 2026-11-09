@@ -222,9 +222,10 @@ typedef struct {
 void lingo_hook(const lingo_hooks *hooks);
 
 /* What the lingo client offers it back, from any thread unless it says.
-     lingo_hand     a web request from elsewhere, {id, method, path, headers, body, base64} as JSON, answered in turn as
-                    the port answers one, its caller "me", the account's own call, "onsay", Onsay's own search or agent,
-                    or "ip <address>". answered gets {id, status, headers, body, base64}, on the job thread
+     lingo_hand     a web request from elsewhere, {id, method, path, headers, body, base64, badge} as JSON, answered in
+                    turn as the port answers one, its caller "me", the account's own call, "onsay", Onsay's own search or
+                    agent, or "ip <address>", and badge the one it came with, if any, as base64. answered gets {id,
+                    status, headers, body, base64}, on the job thread
      lingo_stop     stops the request whose id, as JSON, is id, with every request running inside its wait
      lingo_wait     on the job thread: waits until done or stop is set, or seconds pass, answering requests meanwhile
      lingo_done     sets done, and wakes the job thread's wait

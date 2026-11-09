@@ -102,7 +102,7 @@ onsay-core core.json call onsay.status           {signed_in, signing_in, failed,
 onsay-core core.json call onsay.devices          [{name, online, seen}]: the account's computers, as Onsay knows them
 onsay-core core.json call onsay.ai               {plan, ends, over}: the account's plan of Onsay's AI, trial or paid,
                                                  when its free trial ends and whether it is over
-onsay-core core.json call onsay.sign_out         this computer forgets its sign in and its key
+onsay-core core.json call onsay.sign_out         this computer forgets its sign in, keeping its key
 ```
 
 ## Files
