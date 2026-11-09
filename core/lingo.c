@@ -8498,11 +8498,6 @@ static void visitor(void *arg) {
     host_answer to = { { 0 }, 0 };
     buf msg = { 0 };
     const char *ip = v.from.s ? v.from.s : "";
-#ifdef __ANDROID__
-    // Every app on a phone can reach its 127.0.0.1, so only Onsay's own, sending the key it gave the core, is this phone.
-    const char *app_key = getenv("ONSAY_APP_KEY");
-    if (!app_key || !*app_key || strcmp(text_or(headers, "x-onsay-app", ""), app_key)) ip = "another app";
-#endif
     pl_enter(host_gate);
     buf_fmt(&msg, "{\"id\":\"port %ld\",\"method\":\"%.*s\",\"path\":", ++requests, (int)method, in.s);
     pl_leave(host_gate);
