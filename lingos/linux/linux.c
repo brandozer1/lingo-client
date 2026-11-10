@@ -346,8 +346,6 @@ static val *not_here(run *r, val **a) {
 ////////// 4. BASE_CALLS //////////
 
 // Called once as the lingo client starts (onsay_lingo). Every call has the same name on every computer.
-void agent_calls(void);   // ../onsay/agent.c
-
 void base_calls(void) {
 #ifdef __ANDROID__
 #define CALL(group, needs, line, fn)   if (!strcmp(group, "chat")) phrase_add(group, needs, line, fn);
@@ -361,5 +359,4 @@ void base_calls(void) {
 #include "calls_device.h"
 #undef CALL
 #endif
-  agent_calls();
 }

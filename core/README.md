@@ -11,6 +11,23 @@ screen of its own: the Windows app (onsay-desktop) ships `bin/onsay-core.exe` an
 The language, and what a lingo is, its `.lingo` file, its code, its `openapi.json` and `serve(request)`, are in
 `../docs/lingo.md`.
 
+**The floor**, `floor.c`, is the new lingo client that replaces this one: one function, lingo script in and its value
+out. It takes a call, checks who signed it and whether the policy lets them, runs the script it carries, logs it and
+tries to send its log to Onsay, sealed so only Onsay can read it. Everything else becomes a lingo. It is built beside
+this one, `bin/floor.exe` and `bin/linux-*/floor`, and tested by `test/floor.mjs`, until the releases switch to it
+(`../../onsay/docs/lingo-function.md`, The floor).
+
+| Call | What it does |
+|------|--------------|
+| `POST /`, lingo script as its body | runs it, its value as JSON. Each of the computer's own calls it makes but pure computing is a request to `/group/name`, like `/lingo/use`, judged by the policy for whoever sent the script |
+| `POST /group/name`, values as JSON | the same as the script `return group.name(...)`: a list in order, or a record by name for one of this computer's own calls |
+| `GET /` | what it is, `{floor, name, key}`, its own key for an owner to add to their record |
+
+Its settings (`floor.json`): `home`, `port`, `name`, `owner` (a key or a handle), `keys` (signers known by key),
+`calls` (where a call it doesn't answer goes, by group), `ask` (where `lingo(...)` and `use(...)` of a name are asked),
+`steps` and `ms`. On the command line, `floor <settings> key` gives its key and `floor <settings> run <script>` runs a
+script as the owner.
+
 ## Settings
 
 One JSON file, given as the first argument.
@@ -277,12 +294,17 @@ the lingo's own functions when its `openapi.json`'s `x-lingo` says `keep` (`../d
 
 | File | Job |
 |------|-----|
-| `lingo.c` | the lingo client, whole, in sections: values and JSON, phrases, the compiler, the runner and its limits, `std`, signing, zips, the engine (where Onsay is, settings, the floor calls with `native.call`, Onsay names, `lingo(...)` and `use(...)`, lingos loaded, the catalog, the policy, callers, signatures, grants, badges and every check, the control verbs, keys, stops, requests at their routes and their log, pack), Onsay (the link, offered to private lingos too, signing in, policy sync, the log sent), the host (the command line, the port, every request in turn on one thread), and the floor for Windows (WinHTTP, Winsock, DPAPI, `GetProcAddress`) and for Linux and Android (pthreads, POSIX files, plain sockets, `dlopen`, libcurl loaded as it starts) |
+| `floor.c` | the floor, the new lingo client: its settings, callers, the calls a script makes, the log and its sealed sending to Onsay, running, the port and the command line |
+| `language.c` | Lingo itself, shared by both: values and JSON, phrases, the compiler, the runner and its limits, `std` and signing |
+| `checks.c` | who is calling and whether they may, shared by both: signatures both ways (RFC 9421), grants, badges, the one check and this computer's keys |
+| `hardware.c` | the hardware calls under both (`pl_...`), on Windows (WinHTTP, Winsock, DPAPI, `GetProcAddress`) and on Linux and Android (pthreads, POSIX files, plain sockets, `dlopen`, libcurl loaded as it starts) |
+| `lingo.c` | the lingo client before the floor, in sections, including `language.c`, `checks.c` and `hardware.c`: zips, the engine (where Onsay is, settings, the floor calls with `native.call`, Onsay names, `lingo(...)` and `use(...)`, lingos loaded, the catalog, the policy, callers, signatures, grants, badges and every check, the control verbs, keys, stops, requests at their routes and their log, pack), Onsay (the link, offered to private lingos too, signing in, policy sync, the log sent), and the host (the command line, the port, every request in turn on one thread) |
 | `lingo.h` | what a lingo attaches with: values, buffers, phrases, running and compiling, signing, the hooks, and the floor of the computer it runs on (`pl_...`). Porting is writing that floor for the new device |
 | `tlds.txt` | the web's top level domains, IANA's list, the same file Onsay keeps, made into `obj/tlds.h` by `build.ps1` for telling a name on the web from an Onsay name (*Names*) |
 | `vendor/` | code taken as it came (`../NOTICE`): Monocypher for Ed25519, zlib's puff for deflated zips, and part of libffi for `native.call`, its C the same everywhere and each chip's own part (x86-64 and arm64) |
 | `install.sh` | puts it on a Linux server: the program for its processor, the onsay lingo, running, its folder (`~/.onsay`, or `/var/lib/onsay` as root) with `core.json` in it, and a systemd service. `--sign-in` signs it in |
 | `test/server.mjs` | a stand-in for Onsay, speaking the onsay lingo's contract, that runs every test against a real core |
+| `test/floor.mjs` | the floor's tests, against a stand-in for Onsay's resolve endpoint, log box and ask |
 | `test/lingos/` | the lingos the tests use, a folder each, beside the library's and the device's |
 
 ## Build and test

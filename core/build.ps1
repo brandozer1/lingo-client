@@ -62,6 +62,17 @@ $windows += "-lwinhttp", "-lws2_32", "-luser32", "-lbcrypt", "-lcrypt32", "-lole
 build ($win + $windows + $small + "-o", "$here/bin/onsay-core.exe", "-Wl,--out-implib,$here/bin/onsay-core.lib")
 build ($win + $windows + $small + "-DTEST", "-o", "$here/bin/test/onsay-core.exe")
 
+# The floor, the new lingo client: Lingo, its checks, its log and the hardware calls, nothing else (floor.c).
+$floor = "$here/floor.c", "$here/vendor/monocypher.c", "$here/vendor/monocypher-ed25519.c"
+$floorwin = "-lwinhttp", "-lws2_32", "-luser32", "-lbcrypt", "-lcrypt32", "-lole32", "-loleaut32", "-lshell32", "-lgdi32"
+build ($win + $floor + $floorwin + $small + "-o", "$here/bin/floor.exe")
+build ($win + $floor + $floorwin + $small + "-DTEST", "-o", "$here/bin/test/floor.exe")
+# And with the lingos a Windows computer carries built in: its base calls (files, commands, the screen and input) and the web.
+$withwin = "$lingos/windows/windows.c", "$lingos/web/web.c", "-I$lingos/onsay", "-DLINGOS=X(base_calls)X(web_calls)"
+New-Item -ItemType Directory -Force "$here/bin/windows", "$here/bin/test/windows" | Out-Null
+build ($win + $floor + $withwin + $floorwin + $small + "-o", "$here/bin/windows/floor.exe")
+build ($win + $floor + $withwin + $floorwin + $small + "-DTEST", "-o", "$here/bin/test/windows/floor.exe")
+
 # Linux. -rdynamic shares the core's words with a native lingo's library, as onsay-core.lib does on Windows.
 $linux = $both + "$lingos/linux/linux.c", "$lingos/onsay/agent.c", "-I$lingos/onsay", "-DLINGO_CORE"
 # Each chip: its target, its folder in vendor/libffi, the define libffi wants, and its files there, GNU C and assembly,
@@ -77,6 +88,7 @@ foreach ($arch in $chips.GetEnumerator()) {
     $chip += "$here/obj/$one-$cpu.o"
   }
   build ($target + $linux + $chip + $small + "-rdynamic", "-ldl", "-lpthread", "-o", "$here/bin/linux-$($arch.Key)/onsay-core")
+  build ($target + $floor + $small + "-ldl", "-lpthread", "-o", "$here/bin/linux-$($arch.Key)/floor")
 }
 Get-ChildItem "$here/bin", "$here/obj" -Recurse -Include *.pdb, *.lib -Exclude onsay-core.lib | Remove-Item
 
@@ -87,4 +99,4 @@ foreach ($name in @("ai", "agent")) {
   & "$here/bin/onsay-core.exe" "$here/obj/pack.json" pack "$here/../lingo-library/$name" "$here/bin/lingos" 2>$null
   if ($LASTEXITCODE -ne 0) { Write-Error "$name couldn't be packed. To see why: bin/onsay-core.exe obj/pack.json pack ../lingo-library/$name"; exit 1 }
 }
-Write-Output "built bin/onsay-core.exe, bin/test/onsay-core.exe, bin/linux-x64, bin/linux-arm64 and bin/lingos"
+Write-Output "built bin/onsay-core.exe, bin/floor.exe, bin/test, bin/linux-x64, bin/linux-arm64 and bin/lingos"

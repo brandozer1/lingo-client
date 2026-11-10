@@ -1,6 +1,9 @@
-# What core/build.ps1 makes, the test core's home and lingos folder, which core/test/server.mjs fills, and releases.
+# What core/build.ps1 makes, the test cores' homes and settings, which core/test/server.mjs and floor.mjs fill, and releases.
 core/bin/
 core/obj/
 core/test/data/
+core/test/floor-data/
+core/test/floor.json
+core/test/floor-windows.json
 release/
 node_modules/

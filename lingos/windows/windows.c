@@ -2414,8 +2414,6 @@ static val *look_open_windows(run *r, val **a) {
 
 ////////// 10. BASE_CALLS //////////
 
-void agent_calls(void);   // ../onsay/agent.c
-
 // Each call that needs a screen as a function of its own that runs it through or_in_front.
 #define CALL(group, needs, line, fn) static val *fn##_or_in_front(run *r, val **a) { return or_in_front(r, fn, a); }
 #include "calls_device.h"
@@ -2434,5 +2432,4 @@ void base_calls(void) {
 #define CALL(group, needs, line, fn) phrase_add(group, needs, line, fn##_or_in_front);
 #include "calls_device.h"
 #undef CALL
-  agent_calls();
 }
