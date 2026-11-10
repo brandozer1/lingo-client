@@ -367,32 +367,23 @@ lingo_entry pl_library(const char *path, buf *error);
 // error, in words. An answer over 4 MB, or not text, is an error too.
 val *pl_http(arena *a, const char *method, const char *url, val *headers, const char *body, size_t n, double seconds, buf *error);
 
-////////// 6. PORT //////////
+////////// 6. CONNECTIONS //////////
 
-// A port this computer listens on, on every address it has when everywhere, else on 127.0.0.1 alone, and each connection
-// to it, both a pl_socket. Each connection is read on its own thread.
-typedef struct pl_socket pl_socket;
-pl_socket *pl_listen(int port, int everywhere, buf *error);
-pl_socket *pl_accept(pl_socket *port, buf *from);          // the next connection, and the address it is from, like
-                                                           // 127.0.0.1, or NULL when none came within a second
-int pl_take(pl_socket *c, char *to, size_t n);             // what came, up to n bytes. 0 once it closed or was quiet 10 seconds
-int pl_give(pl_socket *c, const char *data, size_t n);     // all of it, or 0
-void pl_hang_up(pl_socket *c);                              // closes it and frees it
-
-////////// 7. CONNECTIONS //////////
-
-// The floor under every protocol, for connection.open: bytes over a connection to a host and port. kind is one of
-// PL_KINDS, the kinds this port opens itself. Any thread may put, and any thread may shut, which ends a get waiting on
-// another. Only drop is final.
+// The floor under every protocol, for connection.open and the port's web requests alike: bytes over a connection to a
+// host and port. kind is one of PL_KINDS, the kinds this port opens itself. Any thread may put, and any thread may shut,
+// which ends a get waiting on another. Only drop is final. Nothing put may wait more than 10 seconds to be taken.
 #define PL_KINDS "tcp udp"
 typedef struct pl_conn pl_conn;
 pl_conn *pl_dial(const char *kind, const char *host, int port, buf *error);
-pl_conn *pl_bind(const char *kind, int port, buf *error);    // tcp connections coming in, on 127.0.0.1 alone
-pl_conn *pl_next(pl_conn *listener, buf *from, double seconds);   // the next one, and where it is from, or NULL in time
-int pl_put(pl_conn *c, const char *data, size_t n);          // all of it, for udp one packet, or 0
-int pl_get(pl_conn *c, buf *out);                            // what comes next, added to out, waiting; 0 once closed
+// Connections coming in, on every address this computer has when everywhere, else on 127.0.0.1 alone.
+pl_conn *pl_bind(const char *kind, int port, int everywhere, buf *error);
+// The next one, and the address it is from, like 127.0.0.1, or NULL when none came in time.
+pl_conn *pl_next(pl_conn *listener, buf *from, double seconds);
+int pl_put(pl_conn *c, const char *data, size_t n);           // all of it, for udp one packet, or 0
+int pl_get(pl_conn *c, buf *out, double seconds);             // what comes next, added to out, waiting up to seconds, or
+                                                              // for ever with 0; 0 once closed or quiet that long
 void pl_shut(pl_conn *c);
-void pl_drop(pl_conn *c);
+void pl_drop(pl_conn *c);                                     // what was put goes first, then it closes and is freed
 
 #ifdef __ANDROID__
 // What only the app around the core can do on Android, asked of it by name with a JSON record: the web, links, what is

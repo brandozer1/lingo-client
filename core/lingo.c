@@ -4521,7 +4521,7 @@ static void pull(void *arg) {
   buf in = { 0 };
   buf from = { 0 };
   pl_conn *c = k->c;
-  if (!c) c = k->listening ? pl_bind(k->kind, k->port, &k->why) : pl_dial(k->kind, k->host, k->port, &k->why);
+  if (!c) c = k->listening ? pl_bind(k->kind, k->port, 0, &k->why) : pl_dial(k->kind, k->host, k->port, &k->why);
   pl_enter(core_gate);
   k->c = c;
   if (c && k->left) pl_shut(c);
@@ -4530,7 +4530,7 @@ static void pull(void *arg) {
   while (c && !cn_left(k)) {
     pl_conn *came = NULL;
     if (k->listening && !(came = pl_next(c, &from, 1))) continue;
-    if (!k->listening && !pl_get(c, &in)) break;
+    if (!k->listening && !pl_get(c, &in, 0)) break;
     pl_enter(core_gate);
     if (came) buf_add(&k->waiting, (const char *)&came, sizeof came);
     if (!came) buf_add(&k->waiting, in.s, in.n);
@@ -8074,6 +8074,7 @@ void onsay_lingo(void) {
 
 #define HEAD (64 << 10)   // the most a web request's first line and headers may be
 #define BODY_ROOM (4 << 20)   // and its body
+#define QUIET 10   // seconds a connection to the port may say nothing before it is closed, or a stream asked if it is there
 
 // One request for main: its text, its caller (NULL for the port, its ip in it), and who gets its answer.
 typedef struct message {
@@ -8229,7 +8230,7 @@ void host_stop(void) {
    (lingo_push), until either side closes it. What the other side sends is not read, but its close. */
 typedef struct watcher {
   struct watcher *next;
-  pl_socket *c;   // a connection to the port, or NULL for a native lingo's (lingo_watch)
+  pl_conn *c;   // a connection to the port, or NULL for a native lingo's (lingo_watch)
   void (*send)(void *arg, const char *text, size_t n);
   void *arg;
   char path[256];
@@ -8237,7 +8238,7 @@ typedef struct watcher {
 static watcher *watchers;
 
 // One frame, unmasked, as a server sends it: text, opcode 1, or a ping, 9. Under watch.
-static int ws_frame(pl_socket *c, int opcode, const char *text, size_t n) {
+static int ws_frame(pl_conn *c, int opcode, const char *text, size_t n) {
   unsigned char head[10];
   size_t k = 2;
   head[0] = (unsigned char)(0x80 | opcode);
@@ -8253,7 +8254,7 @@ static int ws_frame(pl_socket *c, int opcode, const char *text, size_t n) {
     for (int i = 0; i < 8; i++) head[2 + i] = (unsigned char)((unsigned long long)n >> (56 - 8 * i));
     k = 10;
   }
-  return pl_give(c, (const char *)head, k) && (!n || pl_give(c, text, n));
+  return pl_put(c, (const char *)head, k) && (!n || pl_put(c, text, n));
 }
 
 // lingo.h
@@ -8296,12 +8297,12 @@ void lingo_unwatch(void *arg) {
 
 // On the visitor's thread, until it closes: a quiet 10 seconds is asked about with a ping, and nothing coming back at
 // once means it closed.
-static void stream(pl_socket *c, const char *path, size_t n, const char *key, const char *first, size_t size) {
+static void stream(pl_conn *c, const char *path, size_t n, const char *key, const char *first, size_t size) {
   buf joined = { 0 };
   buf accept = { 0 };
   buf head = { 0 };
   unsigned char digest[20];
-  char chunk[4096];
+  buf came = { 0 };
   watcher w = { NULL, c, NULL, NULL, "" };
   size_t len = 0;
   while (len < n && path[len] != '?') len++;
@@ -8313,16 +8314,17 @@ static void stream(pl_socket *c, const char *path, size_t n, const char *key, co
       "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
       "Sec-WebSocket-Accept: %s\r\n\r\n", accept.s);
   pl_enter(watch);
-  int open = pl_give(c, head.s, head.n) && ws_frame(c, 1, first, size);
+  int open = pl_put(c, head.s, head.n) && ws_frame(c, 1, first, size);
   if (open) {
     w.next = watchers;
     watchers = &w;
   }
   pl_leave(watch);
-  for (int got; open;) {
+  while (open) {
     double began = pl_now();
-    if ((got = pl_take(c, chunk, sizeof chunk)) > 0) {
-      open = (chunk[0] & 0x0f) != 8;
+    came.n = 0;
+    if (pl_get(c, &came, QUIET)) {
+      open = (came.s[0] & 0x0f) != 8;
       continue;
     }
     pl_enter(watch);
@@ -8339,12 +8341,13 @@ static void stream(pl_socket *c, const char *path, size_t n, const char *key, co
   buf_free(&joined);
   buf_free(&accept);
   buf_free(&head);
+  buf_free(&came);
 }
 
 ////////// THE PORT //////////
 
 // An answer written to a web request's connection: its status, its headers by lower case name, and its body.
-static void respond(pl_socket *c, int status, val *h, const char *body, size_t n) {
+static void respond(pl_conn *c, int status, val *h, const char *body, size_t n) {
   buf out = { 0 };
   buf_fmt(&out, "HTTP/1.1 %d \r\n", status);
   for (size_t i = 0; h && h->k == V_REC && i < h->r.n; i++) {
@@ -8358,7 +8361,7 @@ static void respond(pl_socket *c, int status, val *h, const char *body, size_t n
   }
   buf_fmt(&out, "Content-Length: %zu\r\nConnection: close\r\n\r\n", n);
   buf_add(&out, body, n);
-  pl_give(c, out.s, out.n);
+  pl_put(c, out.s, out.n);
   buf_free(&out);
 }
 
@@ -8374,7 +8377,7 @@ static void host_answered(void *arg, const char *response, size_t n) {
 }
 
 typedef struct {
-  pl_socket *c;
+  pl_conn *c;
   buf from;
 } visit;
 
@@ -8386,7 +8389,6 @@ static void visitor(void *arg) {
   free(arg);
   arena *a = arena_new();
   buf in = { 0 };
-  char chunk[16384];
   const char *end = NULL;
   const char *bad = NULL;
   int status = 400;
@@ -8396,8 +8398,7 @@ static void visitor(void *arg) {
   size_t size = 0;
   size_t from = 0;
   val *headers = v_rec(a);
-  while (got && !(end = in.s ? strstr(in.s, "\r\n\r\n") : NULL) && in.n < HEAD)
-    if ((got = pl_take(v.c, chunk, sizeof chunk))) buf_add(&in, chunk, (size_t)got);
+  while (got && !(end = in.s ? strstr(in.s, "\r\n\r\n") : NULL) && in.n < HEAD) got = pl_get(v.c, &in, QUIET);
   if (!end && in.n >= HEAD) {
     status = 431;
     bad = "Its headers are more than 64 KB";
@@ -8435,8 +8436,8 @@ static void visitor(void *arg) {
     }
     from = (size_t)(end - in.s) + 4;
     if (!bad && !strcmp(text_or(headers, "expect", ""), "100-continue") && in.n - from < size)
-      pl_give(v.c, "HTTP/1.1 100 Continue\r\n\r\n", 25);
-    while (!bad && in.n - from < size && (got = pl_take(v.c, chunk, sizeof chunk))) buf_add(&in, chunk, (size_t)got);
+      pl_put(v.c, "HTTP/1.1 100 Continue\r\n\r\n", 25);
+    while (!bad && in.n - from < size && (got = pl_get(v.c, &in, QUIET))) {}
     if (!bad && in.n - from < size)
       bad = "Its body was shorter than its Content-Length";
     else if (!bad && !utf8_ok(in.s + from, size))
@@ -8483,7 +8484,7 @@ static void visitor(void *arg) {
         body ? body->t.len : 0);
     buf_free(&to.response);
   }
-  pl_hang_up(v.c);
+  pl_drop(v.c);
   buf_free(&in);
   buf_free(&v.from);
   arena_free(a);
@@ -8491,9 +8492,9 @@ static void visitor(void *arg) {
 
 // The port, on every address this computer has when the policy lets anyone else in, else on this computer alone, so
 // nothing asks to be let through its firewall until something is shared. NULL when it can't be, said when say is set.
-static pl_socket *listen_(int everywhere, int loud) {
+static pl_conn *listen_(int everywhere, int loud) {
   buf error = { 0 };
-  pl_socket *p = pl_listen(port, everywhere, &error);
+  pl_conn *p = pl_bind("tcp", port, everywhere, &error);
   if (p)
     core_say("Answering web requests on port %d, %s", port,
         everywhere ? "from other computers too" : "from this computer only");
@@ -8506,14 +8507,14 @@ static pl_socket *listen_(int everywhere, int loud) {
 // Takes each connection to the port, and reads it on a thread of its own. When the policy changes who it lets in, the
 // port is opened again to fit, within a second of main's look, and tried again each second while it can't be.
 static void listener(void *arg) {
-  pl_socket *p = arg;
+  pl_conn *p = arg;
   int wide = outside;
   for (;;) {
     pl_enter(host_gate);
     int want = outside;
     pl_leave(host_gate);
     if (want != wide || !p) {
-      if (p) pl_hang_up(p);
+      if (p) pl_drop(p);
       p = listen_(want, want != wide);
       wide = want;
       if (!p) {
@@ -8522,7 +8523,7 @@ static void listener(void *arg) {
       }
     }
     visit *v = calloc(1, sizeof *v);
-    if ((v->c = pl_accept(p, &v->from)))
+    if ((v->c = pl_next(p, &v->from, 1)))
       pl_thread(visitor, v);
     else {
       buf_free(&v->from);
@@ -8621,8 +8622,7 @@ int main(int argc, char **argv) {
 // 3. Links     connect, send, receive, close and free
 // 4. Files and device, and loading a native lingo
 // 5. Web       http.send, one request through WinHTTP
-// 6. Port      web requests coming in, through Winsock
-// 7. Connections  tcp and udp, out and in, through Winsock
+// 6. Connections  tcp and udp, out and in, through Winsock: the port's web requests too
 #define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -9179,99 +9179,18 @@ val *pl_http(arena *a, const char *method, const char *url, val *headers, const 
   return out;
 }
 
-////////// 6. PORT //////////
-
-struct pl_socket {
-  SOCKET s;
-};
-
-// Everywhere: IPv6 and IPv4 on one socket, or IPv4 alone on a computer without IPv6. Else 127.0.0.1 alone, which
-// Windows' firewall never asks about.
-pl_socket *pl_listen(int port, int everywhere, buf *error) {
-  WSADATA w;
-  struct sockaddr_in four = { 0 };
-  struct sockaddr_in6 six = { 0 };   // its address all zeros: every one, IPv4 too once V6ONLY is off
-  DWORD no = 0;
-  DWORD yes = 1;
-  four.sin_family = AF_INET;
-  four.sin_port = htons((u_short)port);
-  four.sin_addr.s_addr = htonl(everywhere ? INADDR_ANY : INADDR_LOOPBACK);
-  six.sin6_family = AF_INET6;
-  six.sin6_port = htons((u_short)port);
-  SOCKET s = WSAStartup(MAKEWORD(2, 2), &w) || !everywhere ? INVALID_SOCKET
-                                                           : socket(AF_INET6, SOCK_STREAM, IPPROTO_TCP);
-  int v6 = s != INVALID_SOCKET;
-  if (!v6) s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-  if (s != INVALID_SOCKET) {
-    setsockopt(
-        s, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (char *)&yes, sizeof yes);   // so no other program can listen on it too
-    if (v6) setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY, (char *)&no, sizeof no);
-  }
-  if (s == INVALID_SOCKET ||
-      bind(s, v6 ? (struct sockaddr *)&six : (struct sockaddr *)&four, v6 ? sizeof six : sizeof four) ||
-      listen(s, SOMAXCONN)) {
-    int code = WSAGetLastError();
-    buf_fmt(error, "Port %d couldn't be opened: %s (%d)", port,
-        code == WSAEADDRINUSE || code == WSAEACCES ? "another program is using it" : "Windows error", code);
-    if (s != INVALID_SOCKET) closesocket(s);
-    return NULL;
-  }
-  pl_socket *p = malloc(sizeof *p);
-  p->s = s;
-  return p;
-}
-
-// An IPv4 address as IPv6 writes it, ::ffff:1.2.3.4, is written 1.2.3.4.
-pl_socket *pl_accept(pl_socket *port, buf *from) {
-  struct sockaddr_storage at;
-  struct timeval second = { 1, 0 };
-  fd_set ready;
-  int n = sizeof at;
-  FD_ZERO(&ready);
-  FD_SET(port->s, &ready);
-  if (select(0, &ready, NULL, NULL, &second) != 1) return NULL;
-  SOCKET c = accept(port->s, (struct sockaddr *)&at, &n);
-  if (c == INVALID_SOCKET) return NULL;
-  DWORD ms = 10000;
-  setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, (char *)&ms, sizeof ms);
-  setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, (char *)&ms, sizeof ms);
-  char text[64] = "";
-  inet_ntop(at.ss_family,
-      at.ss_family == AF_INET ? (void *)&((struct sockaddr_in *)&at)->sin_addr
-                              : (void *)&((struct sockaddr_in6 *)&at)->sin6_addr,
-      text, sizeof text);
-  buf_str(from, strncmp(text, "::ffff:", 7) || !strchr(text, '.') ? text : text + 7);
-  pl_socket *s = malloc(sizeof *s);
-  s->s = c;
-  return s;
-}
-
-int pl_take(pl_socket *c, char *to, size_t n) {
-  int got = recv(c->s, to, (int)n, 0);
-  return got > 0 ? got : 0;
-}
-
-int pl_give(pl_socket *c, const char *data, size_t n) {
-  for (int sent; n; data += sent, n -= (size_t)sent)
-    if ((sent = send(c->s, data, (int)n, 0)) <= 0) return 0;
-  return 1;
-}
-
-void pl_hang_up(pl_socket *c) {
-  shutdown(c->s, SD_SEND);
-  closesocket(c->s);
-  free(c);
-}
-
-////////// 7. CONNECTIONS //////////
+////////// 6. CONNECTIONS //////////
 
 struct pl_conn {
   SOCKET s;
   int udp;
 };
 
+// A connection kept: nothing it sends may wait more than 10 seconds to be taken.
 static pl_conn *conn(SOCKET s, int udp) {
   pl_conn *c = malloc(sizeof *c);
+  DWORD ms = 10000;
+  setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, (char *)&ms, sizeof ms);
   c->s = s;
   c->udp = udp;
   return c;
@@ -9308,37 +9227,62 @@ pl_conn *pl_dial(const char *kind, const char *host, int port, buf *error) {
   return conn(s, udp);
 }
 
-// On 127.0.0.1 alone: what comes from elsewhere comes through the port, where the policies stand.
-pl_conn *pl_bind(const char *kind, int port, buf *error) {
-  struct sockaddr_in here = { 0 };
+// Everywhere: IPv6 and IPv4 on one socket, or IPv4 alone on a computer without IPv6. Else 127.0.0.1 alone, which
+// Windows' firewall never asks about.
+pl_conn *pl_bind(const char *kind, int port, int everywhere, buf *error) {
+  WSADATA w;
+  struct sockaddr_in four = { 0 };
+  struct sockaddr_in6 six = { 0 };   // its address all zeros: every one, IPv4 too once V6ONLY is off
+  DWORD no = 0;
+  DWORD yes = 1;
   if (strcmp(kind, "tcp")) {
     buf_fmt(error, "only tcp connections can come in so far");
     return NULL;
   }
-  here.sin_family = AF_INET;
-  here.sin_port = htons((unsigned short)port);
-  here.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-  WSADATA w;
-  WSAStartup(MAKEWORD(2, 2), &w);
-  SOCKET s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-  if (s == INVALID_SOCKET || bind(s, (struct sockaddr *)&here, sizeof here) || listen(s, 16)) {
-    buf_fmt(error, "port %d couldn't be opened: another program may be using it", port);
+  four.sin_family = AF_INET;
+  four.sin_port = htons((u_short)port);
+  four.sin_addr.s_addr = htonl(everywhere ? INADDR_ANY : INADDR_LOOPBACK);
+  six.sin6_family = AF_INET6;
+  six.sin6_port = htons((u_short)port);
+  SOCKET s = WSAStartup(MAKEWORD(2, 2), &w) || !everywhere ? INVALID_SOCKET
+                                                           : socket(AF_INET6, SOCK_STREAM, IPPROTO_TCP);
+  int v6 = s != INVALID_SOCKET;
+  if (!v6) s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  if (s != INVALID_SOCKET) {
+    setsockopt(
+        s, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (char *)&yes, sizeof yes);   // so no other program can listen on it too
+    if (v6) setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY, (char *)&no, sizeof no);
+  }
+  if (s == INVALID_SOCKET ||
+      bind(s, v6 ? (struct sockaddr *)&six : (struct sockaddr *)&four, v6 ? sizeof six : sizeof four) ||
+      listen(s, SOMAXCONN)) {
+    int code = WSAGetLastError();
+    buf_fmt(error, "Port %d couldn't be opened: %s (%d)", port,
+        code == WSAEADDRINUSE || code == WSAEACCES ? "another program is using it" : "Windows error", code);
     if (s != INVALID_SOCKET) closesocket(s);
     return NULL;
   }
   return conn(s, 0);
 }
 
+// An IPv4 address as IPv6 writes it, ::ffff:1.2.3.4, is written 1.2.3.4.
 pl_conn *pl_next(pl_conn *listener, buf *from, double seconds) {
+  struct sockaddr_storage at;
   struct timeval wait = { (long)seconds, (long)((seconds - (long)seconds) * 1e6) };
   fd_set ready;
+  int n = sizeof at;
   FD_ZERO(&ready);
   FD_SET(listener->s, &ready);
-  if (select((int)listener->s + 1, &ready, NULL, NULL, &wait) != 1) return NULL;
-  SOCKET s = accept(listener->s, NULL, NULL);
-  if (s == INVALID_SOCKET) return NULL;
-  buf_str(from, "127.0.0.1");
-  return conn(s, 0);
+  if (select(0, &ready, NULL, NULL, &wait) != 1) return NULL;
+  SOCKET c = accept(listener->s, (struct sockaddr *)&at, &n);
+  if (c == INVALID_SOCKET) return NULL;
+  char text[64] = "";
+  inet_ntop(at.ss_family,
+      at.ss_family == AF_INET ? (void *)&((struct sockaddr_in *)&at)->sin_addr
+                              : (void *)&((struct sockaddr_in6 *)&at)->sin6_addr,
+      text, sizeof text);
+  buf_str(from, strncmp(text, "::ffff:", 7) || !strchr(text, '.') ? text : text + 7);
+  return conn(c, 0);
 }
 
 int pl_put(pl_conn *c, const char *data, size_t n) {
@@ -9348,8 +9292,13 @@ int pl_put(pl_conn *c, const char *data, size_t n) {
   return 1;
 }
 
-int pl_get(pl_conn *c, buf *out) {
+int pl_get(pl_conn *c, buf *out, double seconds) {
   char chunk[65536];
+  struct timeval wait = { (long)seconds, (long)((seconds - (long)seconds) * 1e6) };
+  fd_set ready;
+  FD_ZERO(&ready);
+  FD_SET(c->s, &ready);
+  if (seconds > 0 && select(0, &ready, NULL, NULL, &wait) != 1) return 0;
   int got = recv(c->s, chunk, sizeof chunk, 0);
   if (got > 0) buf_add(out, chunk, (size_t)got);
   return got > 0;
@@ -9357,11 +9306,12 @@ int pl_get(pl_conn *c, buf *out) {
 
 void pl_shut(pl_conn *c) { shutdown(c->s, SD_BOTH); }
 
+// What was sent goes before it closes.
 void pl_drop(pl_conn *c) {
+  shutdown(c->s, SD_SEND);
   closesocket(c->s);
   free(c);
 }
-
 
 #endif
 
@@ -9376,9 +9326,8 @@ void pl_drop(pl_conn *c) {
 // 3. Links              a WebSocket written here on a connection curl opens (TCP, TLS and proxies), RFC 6455
 // 4. Files and device, and loading a native lingo
 // 5. Web                http.send, one request through curl
-// 6. Port               web requests coming in, on plain sockets
-// 7. Connections        tcp and udp, out and in, on plain sockets
-// 8. Android            the same file built into the Android app, where the app does links, the web and what is
+// 6. Connections        tcp and udp, out and in, on plain sockets: the port's web requests too
+// 7. Android            the same file built into the Android app, where the app does links, the web and what is
 //                       around (pl_device), in place of 2, 3, 5 and the context
 // libcurl's own WebSocket API is left alone, since many distributions build curl without it.
 #define _GNU_SOURCE
@@ -10084,91 +10033,18 @@ val *pl_http(arena *a, const char *method, const char *url, val *headers, const 
 }
 #endif
 
-////////// 6. PORT //////////
-
-struct pl_socket {
-  int s;
-};
-
-// Everywhere: IPv6 and IPv4 on one socket, or IPv4 alone on a server without IPv6. Else 127.0.0.1 alone.
-pl_socket *pl_listen(int port, int everywhere, buf *error) {
-  struct sockaddr_in four = { 0 };
-  struct sockaddr_in6 six = { 0 };   // its address all zeros: every one, IPv4 too once V6ONLY is off
-  int no = 0;
-  int yes = 1;
-  int s = everywhere ? socket(AF_INET6, SOCK_STREAM, 0) : -1;
-  int v6 = s >= 0;
-  four.sin_family = AF_INET;
-  four.sin_port = htons((unsigned short)port);
-  four.sin_addr.s_addr = htonl(everywhere ? INADDR_ANY : INADDR_LOOPBACK);
-  six.sin6_family = AF_INET6;
-  six.sin6_port = htons((unsigned short)port);
-  if (!v6) s = socket(AF_INET, SOCK_STREAM, 0);
-  if (s >= 0) {
-    setsockopt(
-        s, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes);   // so a restart doesn't wait for the last one's connections
-    if (v6) setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY, &no, sizeof no);
-  }
-  if (s < 0 || bind(s, v6 ? (struct sockaddr *)&six : (struct sockaddr *)&four, v6 ? sizeof six : sizeof four) ||
-      listen(s, SOMAXCONN)) {
-    buf_fmt(error, "Port %d couldn't be opened: %s", port,
-        errno == EADDRINUSE ? "another program is using it" : strerror(errno));
-    if (s >= 0) close(s);
-    return NULL;
-  }
-  pl_socket *p = malloc(sizeof *p);
-  p->s = s;
-  return p;
-}
-
-// An IPv4 address as IPv6 writes it, ::ffff:1.2.3.4, is written 1.2.3.4.
-pl_socket *pl_accept(pl_socket *port, buf *from) {
-  struct sockaddr_storage at;
-  socklen_t n = sizeof at;
-  struct pollfd link_ready = { port->s, POLLIN, 0 };
-  if (poll(&link_ready, 1, 1000) != 1) return NULL;
-  int c = accept(port->s, (struct sockaddr *)&at, &n);
-  if (c < 0) return NULL;
-  struct timeval quiet = { 10, 0 };
-  setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, &quiet, sizeof quiet);
-  setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, &quiet, sizeof quiet);
-  char text[64] = "";
-  inet_ntop(at.ss_family,
-      at.ss_family == AF_INET ? (void *)&((struct sockaddr_in *)&at)->sin_addr
-                              : (void *)&((struct sockaddr_in6 *)&at)->sin6_addr,
-      text, sizeof text);
-  buf_str(from, strncmp(text, "::ffff:", 7) || !strchr(text, '.') ? text : text + 7);
-  pl_socket *s = malloc(sizeof *s);
-  s->s = c;
-  return s;
-}
-
-int pl_take(pl_socket *c, char *to, size_t n) {
-  ssize_t got = recv(c->s, to, n, 0);
-  return got > 0 ? (int)got : 0;
-}
-
-int pl_give(pl_socket *c, const char *data, size_t n) {
-  for (ssize_t sent; n; data += sent, n -= (size_t)sent)
-    if ((sent = send(c->s, data, n, MSG_NOSIGNAL)) <= 0) return 0;
-  return 1;
-}
-
-void pl_hang_up(pl_socket *c) {
-  shutdown(c->s, SHUT_WR);
-  close(c->s);
-  free(c);
-}
-
-////////// 7. CONNECTIONS //////////
+////////// 6. CONNECTIONS //////////
 
 struct pl_conn {
   int s;
   int udp;
 };
 
+// A connection kept: nothing it sends may wait more than 10 seconds to be taken.
 static pl_conn *conn(int s, int udp) {
   pl_conn *c = malloc(sizeof *c);
+  struct timeval quiet = { 10, 0 };
+  setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &quiet, sizeof quiet);
   c->s = s;
   c->udp = udp;
   return c;
@@ -10203,59 +10079,83 @@ pl_conn *pl_dial(const char *kind, const char *host, int port, buf *error) {
   return conn(s, udp);
 }
 
-// On 127.0.0.1 alone: what comes from elsewhere comes through the port, where the policies stand.
-pl_conn *pl_bind(const char *kind, int port, buf *error) {
-  struct sockaddr_in here = { 0 };
+// Everywhere: IPv6 and IPv4 on one socket, or IPv4 alone on a server without IPv6. Else 127.0.0.1 alone.
+pl_conn *pl_bind(const char *kind, int port, int everywhere, buf *error) {
+  struct sockaddr_in four = { 0 };
+  struct sockaddr_in6 six = { 0 };   // its address all zeros: every one, IPv4 too once V6ONLY is off
+  int no = 0;
+  int yes = 1;
   if (strcmp(kind, "tcp")) {
     buf_fmt(error, "only tcp connections can come in so far");
     return NULL;
   }
-  here.sin_family = AF_INET;
-  here.sin_port = htons((unsigned short)port);
-  here.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-  int s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-  if (s == -1 || bind(s, (struct sockaddr *)&here, sizeof here) || listen(s, 16)) {
-    buf_fmt(error, "port %d couldn't be opened: another program may be using it", port);
-    if (s != -1) close(s);
+  int s = everywhere ? socket(AF_INET6, SOCK_STREAM, 0) : -1;
+  int v6 = s >= 0;
+  four.sin_family = AF_INET;
+  four.sin_port = htons((unsigned short)port);
+  four.sin_addr.s_addr = htonl(everywhere ? INADDR_ANY : INADDR_LOOPBACK);
+  six.sin6_family = AF_INET6;
+  six.sin6_port = htons((unsigned short)port);
+  if (!v6) s = socket(AF_INET, SOCK_STREAM, 0);
+  if (s >= 0) {
+    setsockopt(
+        s, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes);   // so a restart doesn't wait for the last one's connections
+    if (v6) setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY, &no, sizeof no);
+  }
+  if (s < 0 || bind(s, v6 ? (struct sockaddr *)&six : (struct sockaddr *)&four, v6 ? sizeof six : sizeof four) ||
+      listen(s, SOMAXCONN)) {
+    buf_fmt(error, "Port %d couldn't be opened: %s", port,
+        errno == EADDRINUSE ? "another program is using it" : strerror(errno));
+    if (s >= 0) close(s);
     return NULL;
   }
   return conn(s, 0);
 }
 
+// An IPv4 address as IPv6 writes it, ::ffff:1.2.3.4, is written 1.2.3.4.
 pl_conn *pl_next(pl_conn *listener, buf *from, double seconds) {
-  struct timeval wait = { (long)seconds, (long)((seconds - (long)seconds) * 1e6) };
-  fd_set link_ready;
-  FD_ZERO(&link_ready);
-  FD_SET(listener->s, &link_ready);
-  if (select((int)listener->s + 1, &link_ready, NULL, NULL, &wait) != 1) return NULL;
-  int s = accept(listener->s, NULL, NULL);
-  if (s == -1) return NULL;
-  buf_str(from, "127.0.0.1");
-  return conn(s, 0);
+  struct sockaddr_storage at;
+  socklen_t n = sizeof at;
+  struct pollfd ready = { listener->s, POLLIN, 0 };
+  if (poll(&ready, 1, (int)(seconds * 1000)) != 1) return NULL;
+  int c = accept(listener->s, (struct sockaddr *)&at, &n);
+  if (c < 0) return NULL;
+  char text[64] = "";
+  inet_ntop(at.ss_family,
+      at.ss_family == AF_INET ? (void *)&((struct sockaddr_in *)&at)->sin_addr
+                              : (void *)&((struct sockaddr_in6 *)&at)->sin6_addr,
+      text, sizeof text);
+  buf_str(from, strncmp(text, "::ffff:", 7) || !strchr(text, '.') ? text : text + 7);
+  return conn(c, 0);
 }
 
+// MSG_NOSIGNAL: a connection the other side closed is a 0, never a signal that ends the program.
 int pl_put(pl_conn *c, const char *data, size_t n) {
-  if (c->udp) return send(c->s, data, (int)n, 0) == (int)n;
-  for (int sent; n; data += sent, n -= (size_t)sent)
-    if ((sent = send(c->s, data, (int)n, 0)) <= 0) return 0;
+  if (c->udp) return send(c->s, data, n, MSG_NOSIGNAL) == (ssize_t)n;
+  for (ssize_t sent; n; data += sent, n -= (size_t)sent)
+    if ((sent = send(c->s, data, n, MSG_NOSIGNAL)) <= 0) return 0;
   return 1;
 }
 
-int pl_get(pl_conn *c, buf *out) {
+int pl_get(pl_conn *c, buf *out, double seconds) {
   char chunk[65536];
-  int got = recv(c->s, chunk, sizeof chunk, 0);
+  struct pollfd ready = { c->s, POLLIN, 0 };
+  if (seconds > 0 && poll(&ready, 1, (int)(seconds * 1000)) != 1) return 0;
+  ssize_t got = recv(c->s, chunk, sizeof chunk, 0);
   if (got > 0) buf_add(out, chunk, (size_t)got);
   return got > 0;
 }
 
 void pl_shut(pl_conn *c) { shutdown(c->s, SHUT_RDWR); }
 
+// What was sent goes before it closes.
 void pl_drop(pl_conn *c) {
+  shutdown(c->s, SHUT_WR);
   close(c->s);
   free(c);
 }
 
-////////// 8. ANDROID //////////
+////////// 7. ANDROID //////////
 
 #ifdef __ANDROID__
 // An app on Android has no curl, and Android's own does the web, so the app around the core reaches it, holds the links
