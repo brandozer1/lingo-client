@@ -998,6 +998,38 @@ val *type_schema(arena *a, const char *words) {
   return one_or_other(a, &words);
 }
 
+// Whether x is of the JSON Schema type a type's words make: its type or any of them, its items and its parts.
+static int fits_schema(val *x, val *schema) {
+  val *any = rec_get(schema, "anyOf");
+  val *type = rec_get(schema, "type");
+  for (size_t i = 0; any && any->k == V_LIST && i < any->l.n; i++)
+    if (fits_schema(x, any->l.v[i])) return 1;
+  if (any) return 0;
+  int ok = !type;
+  for (size_t i = 0; type && !ok && i < (type->k == V_LIST ? type->l.n : 1); i++) {
+    const char *t = (type->k == V_LIST ? type->l.v[i] : type)->t.s;
+    ok = (!strcmp(t, "string") && x->k == V_TEXT) || (!strcmp(t, "number") && x->k == V_NUM) ||
+        (!strcmp(t, "integer") && x->k == V_NUM && x->n == floor(x->n)) || (!strcmp(t, "boolean") && x->k == V_BOOL) ||
+        (!strcmp(t, "array") && (x->k == V_LIST || x->k == V_BYTES)) || (!strcmp(t, "object") && x->k == V_REC) ||
+        (!strcmp(t, "null") && x->k == V_NOTHING);
+  }
+  val *items = rec_get(schema, "items");
+  for (size_t i = 0; ok && items && x->k == V_LIST && i < x->l.n; i++) ok = fits_schema(x->l.v[i], items);
+  val *parts = rec_get(schema, "properties");
+  val *required = rec_get(schema, "required");
+  for (size_t i = 0; ok && required && x->k == V_REC && i < required->l.n; i++) ok = rec_get(x, required->l.v[i]->t.s) != NULL;
+  for (size_t i = 0; ok && parts && x->k == V_REC && i < parts->r.n; i++) {
+    val *v = rec_get(x, parts->r.key[i]);
+    ok = !v || fits_schema(v, parts->r.v[i]);
+  }
+  return ok;
+}
+
+// Whether x is of the type its words say, like text, [number] or {name: text, age?: whole}.
+static int fits(arena *a, val *x, const char *words) {
+  return fits_schema(x, type_schema(a, words));
+}
+
 //////////////////// 3. COMPILING ////////////////////
 
 // Lingo code to the tree the runner runs: every lingo in the lingos folder, read, listed and compiled, and a
@@ -1012,10 +1044,10 @@ val *type_schema(arena *a, const char *words) {
 // 5. lingo_load(a, natives, stacked)    -> every lingo a computer has, each compiled against all of them, with what each
 //                                          function needs and how many lingo(...) calls it makes
 
-static const char *KEYWORDS[] = { "if", "else", "while", "for", "in", "break", "continue", "fn", "return", "tool",
-  "try", "catch", "fail", "and", "or", "not", "true", "false", "nothing", "null", NULL };
-static const char *SYMBOLS[] = { "..", "+=", "-=", "*=", "/=", "==", "!=", "<=", ">=", "??", "&&", "||", "=", "+", "-",
-  "*", "/", "%", "<", ">", "!", "?", ":", "(", ")", "[", "]", "{", "}", ",", ".", ";", NULL };
+static const char *KEYWORDS[] = { "if", "else", "while", "for", "in", "break", "continue", "fn", "return", "try",
+  "catch", "fail", "and", "or", "not", "true", "false", "nothing", "null", NULL };
+static const char *SYMBOLS[] = { "..", "->", "+=", "-=", "*=", "/=", "==", "!=", "<=", ">=", "??", "&&", "||", "=", "+",
+  "-", "*", "/", "%", "<", ">", "!", "?", ":", "(", ")", "[", "]", "{", "}", ",", ".", ";", "|", NULL };
 
 ////////// HELPERS //////////
 
@@ -1080,7 +1112,6 @@ typedef struct {
   const char *own;   // the name of the lingo whose code it is, like agent, for setting(...)
   int scan;   // only read for its listing: calls aren't checked, since what they reach isn't known yet
   val *settings;   // the names of its own settings it reads, setting("key"), in order
-  val *fn_lines;   // each fn's name -> the line it starts on, for the comments above it
   site *calls;   // calls with no dot, settled once every function is known
   size_t ncalls, room;
   val **marks;   // statement -> its line, a small table keyed by the statement itself
@@ -1137,7 +1168,6 @@ static cx *context(arena *a, val *phrases) {
   c->a = a;
   c->phrases = v_rec(a);
   c->settings = v_list(a);
-  c->fn_lines = v_rec(a);
   for (size_t i = 0; phrases && i < phrases->l.n; i++)
     rec_set(a, c->phrases, rec_get(phrases->l.v[i], "id")->t.s, phrases->l.v[i]);
   return c;
@@ -1396,7 +1426,63 @@ static val *expr(ps *p);
 static val *statement(ps *p);
 
 // (a, b=10). A default is any expression, worked out when the value is missing.
-static val *params(ps *p) {
+/* Plain text, with no {} in it, saying what something is: its words, or NULL when the next token isn't one. */
+static const char *says(ps *p) {
+  token *t = peek(p, 0);
+  if (!t || t->k != STR || t->count > 1 || (t->count == 1 && t->parts[0].code)) return NULL;
+  p->i++;
+  return t->count ? compile_dup(p->c->a, t->parts[0].s, t->parts[0].n) : "";
+}
+
+static int type_words(ps *p, buf *out);
+
+// One type in a signature, written into out as its words: a word like text or path, [type], {part: type, maybe?: type},
+// each with a ? after it when it may be nothing. 0 with the problem kept when it isn't one.
+static int type_one(ps *p, buf *out) {
+  token *t;
+  if (parse_accept(p, "[")) {
+    buf_chr(out, '[');
+    if (!type_words(p, out) || !expect(p, "]", "a ] to end the list's type")) return 0;
+    buf_chr(out, ']');
+  } else if (parse_accept(p, "{")) {
+    buf_chr(out, '{');
+    for (int first = 1; !parse_accept(p, "}"); first = 0) {
+      if (!first && !expect(p, ",", "a , between the parts")) return 0;
+      if (!first) buf_str(out, ", ");
+      t = peek(p, 0);
+      if (!t || (t->k != ID && t->k != KW)) return expected(p, "a part's name, like {name: text}") != NULL;
+      p->i++;
+      buf_str(out, t->v);
+      if (parse_accept(p, "?")) buf_chr(out, '?');
+      if (!expect(p, ":", "a : before the part's type")) return 0;
+      buf_str(out, ": ");
+      if (!type_words(p, out)) return 0;
+    }
+    buf_chr(out, '}');
+  } else {
+    t = peek(p, 0);
+    if (!t || (t->k != ID && t->k != KW)) return expected(p, "a type, like text, number, [text] or {name: text}") != NULL;
+    p->i++;
+    buf_str(out, t->v);
+  }
+  if (parse_accept(p, "?")) buf_chr(out, '?');
+  return 1;
+}
+
+// A type, or several joined by |, either of them.
+static int type_words(ps *p, buf *out) {
+  if (!type_one(p, out)) return 0;
+  while (parse_accept(p, "|")) {
+    buf_chr(out, '|');
+    if (!type_one(p, out)) return 0;
+  }
+  return 1;
+}
+
+/* A function's values: each a name, then as its maker wants its type, its words and its default, like
+   (city: text "a city's name", days: whole = 1). Each is [name, default?] in the tree, and its type and words go in types
+   and words, by name. */
+static val *params(ps *p, val *types, val *words) {
   arena *a = p->c->a;
   if (!expect(p, "(", NULL)) return NULL;
   val *out = v_list(a);
@@ -1405,6 +1491,15 @@ static val *params(ps *p) {
     GET(n, name(p, "the name of a value it takes"));
     val *one = v_list(a);
     list_push(a, one, n);
+    if (parse_accept(p, ":")) {
+      buf t = { 0 };
+      int ok = type_words(p, &t);
+      if (ok) rec_set(a, types, n->t.s, v_text(a, t.s, t.n));
+      buf_free(&t);
+      if (!ok) return NULL;
+    }
+    const char *w = says(p);
+    if (w) rec_set(a, words, n->t.s, v_cstr(a, w));
     if (parse_accept(p, "=")) {
       GET(d, expr(p));
       list_push(a, one, d);
@@ -1497,8 +1592,7 @@ static val *bare(ps *p) {
     GET(caught, block(p));
     return mk(a, "try", 3, body, n, caught);
   }
-  if (is(p, "tool", 0) || is(p, "fn", 0))
-    return problem(c, line_now(p), arena_fmt(a, "\"%s\" goes at the top level, not inside a block", peek(p, 0)->v));
+  if (is(p, "fn", 0)) return problem(c, line_now(p), "\"fn\" goes at the top level, not inside a block");
   if (is(p, "else", 0)) return problem(c, line_now(p), "\"else\" needs an if block just before it");
 
   GET(e, expr(p));
@@ -1894,55 +1988,55 @@ static val *expr(ps *p) {
   return mk(p->c->a, "pick", 3, c, a, b);
 }
 
-// tool and fn may come in any order. Steps with no tool around them are a one-off tool of their own.
+/* fn blocks in any order, and steps outside them, which are the program's tool. A fn is
+   fn name(values) -> type "what it does" {...}, its type and words as its maker wants them. Text before the first fn is
+   what the lingo is, its about. */
 static val *program(ps *p) {
   cx *c = p->c;
   arena *a = c->a;
   val *fns = v_rec(a);
   val *loose = v_list(a);
-  val *tool = NULL;
+  val *tool = v_rec(a);
+  val *out = v_rec(a);
+  token *next = peek(p, 1);
+  if (next && next->k == KW && !strcmp(next->v, "fn")) {
+    const char *about = says(p);
+    if (about) rec_set(a, out, "about", v_cstr(a, about));
+  }
   while (!end(p)) {
     if (parse_accept(p, ";")) continue;
-    if (is(p, "tool", 0)) {
-      int line = line_now(p);
-      p->i++;
-      if (tool) return problem(c, line, "A program has one tool. Make the other one a fn");
-      GET(n, name(p, "the name of the tool"));
-      GET(ps_, params(p));
-      GET(body, block(p));
-      tool = v_rec(a);
-      rec_set(a, tool, "name", n);
-      rec_set(a, tool, "params", ps_);
-      rec_set(a, tool, "body", body);
-    } else if (is(p, "fn", 0)) {
-      int line = line_now(p);
+    if (is(p, "fn", 0)) {
       p->i++;
       GET(n, name(p, "the name of the function"));
       if (rec_get(fns, n->t.s))
         return problem(c, line_now(p), arena_fmt(a, "There are two functions called %s", n->t.s));
-      GET(ps_, params(p));
-      GET(body, block(p));
       val *f = v_rec(a);
+      val *types = v_rec(a);
+      val *words = v_rec(a);
+      GET(ps_, params(p, types, words));
+      if (parse_accept(p, "->")) {
+        buf t = { 0 };
+        int ok = type_words(p, &t);
+        if (ok) rec_set(a, f, "gives", v_text(a, t.s, t.n));
+        buf_free(&t);
+        if (!ok) return NULL;
+      }
+      const char *does = says(p);
+      GET(body, block(p));
       rec_set(a, f, "params", ps_);
       rec_set(a, f, "body", body);
+      rec_set(a, f, "types", types);
+      rec_set(a, f, "words", words);
+      if (does) rec_set(a, f, "does", v_cstr(a, does));
       rec_set(a, fns, n->t.s, f);
-      rec_set(a, c->fn_lines, n->t.s, v_num(a, line));
     } else {
       GET(s, statement(p));
       list_push(a, loose, s);
     }
   }
-  if (tool && loose->l.n) {
-    int line = line_of_mark(c, loose->l.v[0]);
-    return problem(c, line ? line : 1, "Steps outside the tool. Put them inside it, or inside a fn");
-  }
-  if (!tool) {
-    tool = v_rec(a);
-    rec_set(a, tool, "name", T(a, "steps"));
-    rec_set(a, tool, "params", v_list(a));
-    rec_set(a, tool, "body", loose);
-  }
-  val *out = v_rec(a);
+  rec_set(a, tool, "name", T(a, "steps"));
+  rec_set(a, tool, "params", v_list(a));
+  rec_set(a, tool, "body", loose);
   rec_set(a, out, "tool", tool);
   rec_set(a, out, "fns", fns);
   return out;
@@ -2066,60 +2160,14 @@ static val *parse_with(cx *c, const char *code, size_t n) {
 
 ////////// 3. LISTING //////////
 
-typedef struct {
-  const char *s;
-  size_t n;
-} span;
-
-// One line of code without the spaces around it.
-static span compile_trimmed(span l) {
-  while (l.n && (*l.s == ' ' || *l.s == '\t')) {
-    l.s++;
-    l.n--;
-  }
-  while (l.n && (l.s[l.n - 1] == ' ' || l.s[l.n - 1] == '\t' || l.s[l.n - 1] == '\r')) l.n--;
-  return l;
-}
-
-// A line's words as a comment, without its //: 0 when the line isn't only a comment, is an empty //, or is a section's bar.
-static int comment(span l, span *words) {
-  l = compile_trimmed(l);
-  if (l.n < 2 || memcmp(l.s, "//", 2) || (l.n >= 10 && !memcmp(l.s, "//////////", 10))) return 0;
-  *words = compile_trimmed((span){ l.s + 2, l.n - 2 });
-  return words->n > 0;
-}
-
-// The words of the comment lines from first to last, joined by spaces, with a number like 1. or 1-6. at the start, a
-// legend's, left off.
-static val *words_of(arena *a, span *lines, size_t first, size_t last) {
-  buf b = { 0 };
-  span w;
-  for (size_t i = first; i <= last; i++)
-    if (comment(lines[i], &w)) {
-      if (b.n) buf_chr(&b, ' ');
-      buf_add(&b, w.s, w.n);
-    }
-  size_t k = 0;
-  while (k < b.n && digit(b.s[k])) k++;
-  if (k && k < b.n && b.s[k] == '-') {
-    size_t m = k + 1;
-    while (m < b.n && digit(b.s[m])) m++;
-    if (m > k + 1) k = m;
-  }
-  size_t skip = k && k < b.n && b.s[k] == '.' && (k + 1 == b.n || b.s[k + 1] == ' ') ? k + 1 : 0;
-  while (skip && skip < b.n && b.s[skip] == ' ') skip++;
-  val *out = v_text(a, b.s ? b.s + skip : "", b.n - skip);
-  buf_free(&b);
-  return out;
-}
-
 /* 3. A lingo written in Lingo is its code, <name>.ls, and its listing is made from it, never written by hand:
-     each fn        a function it shares, called at its route, like /memo/recall, its values and their defaults its fn's own
-     the comments   right above a fn, what it does. The first lines of the file, when they are comments, up to a blank
-                    line or an empty //, are what the lingo is, its about, "memo - " or "memo.ls - " at their start left
-                    off, and never a fn's too
+     each fn        a function it shares, called at its route, like /memo/recall, with its values, each its default,
+                    type and words, its type, and the text after its signature, what it does. One whose name starts with
+                    _ is the lingo's own, internal, never listed by Onsay
+     its about      the text before its first fn, what the lingo is
      settings       the names of its own settings it reads with setting("key")
-   Gives {name, about, phrases: [{id, params, does}], settings}, or NULL with the problem, starting with the file. */
+   Comments are only comments. Gives {name, about, phrases: [{id, params, does, gives, internal}], settings}, or NULL with
+   the problem, starting with the file. */
 static val *listing(arena *a, const char *file, val *code, const char **why) {
   size_t fl = strlen(file);
   size_t n = fl > 3 && !strcmp(file + fl - 3, ".ls") ? fl - 3 : 0;
@@ -2141,40 +2189,18 @@ static val *listing(arena *a, const char *file, val *code, const char **why) {
   if (!read) return compile_failed(why, arena_fmt(a, "%s line %d: %s", file, c->line, c->message));
   val *tool = rec_get(read, "tool");
   val *fns = rec_get(read, "fns");
-  if (!is_text(rec_get(tool, "name"), "steps") || rec_get(tool, "body")->l.n)
-    return compile_failed(why, arena_fmt(a, "%s: only fn blocks belong in it, with no tool and no steps outside them", file));
+  if (rec_get(tool, "body")->l.n)
+    return compile_failed(why, arena_fmt(a, "%s: only fn blocks belong in it, with no steps outside them", file));
   if (!fns->r.n) return compile_failed(why, arena_fmt(a, "%s: a lingo shares its fn blocks, and it has none", file));
 
-  size_t count = 1;
-  for (size_t i = 0; i < code->t.len; i++)
-    if (code->t.s[i] == '\n') count++;
-  span *lines = arena_get(a, count * sizeof *lines);
-  span w;
-  for (size_t i = 0, from = 0, l = 0; i <= code->t.len; i++)
-    if (i == code->t.len || code->t.s[i] == '\n') {
-      lines[l++] = (span){ code->t.s + from, i - from };
-      from = i + 1;
-    }
-  size_t top = 0;
-  size_t end;
-  while (top < count && !compile_trimmed(lines[top]).n) top++;
-  for (end = top; end < count && comment(lines[end], &w);) end++;
   val *out = v_rec(a);
   val *phrases = v_list(a);
   rec_set(a, out, "name", name);
-  if (end > top) {
-    const char *s = words_of(a, lines, top, end - 1)->t.s;
-    const char *lead[] = { arena_fmt(a, "%s - ", file), arena_fmt(a, "%s - ", name->t.s) };
-    for (int k = 0; k < 2; k++)
-      if (!strncmp(s, lead[k], strlen(lead[k]))) s += strlen(lead[k]);
-    rec_set(a, out, "about", T(a, s));
-  }
+  if (rec_get(read, "about")) rec_set(a, out, "about", rec_get(read, "about"));
   for (size_t i = 0; i < fns->r.n; i++) {
     const char *fname = fns->r.key[i];
-    size_t here = (size_t)rec_get(c->fn_lines, fname)->n - 1;
-    size_t first = here;
-    while (first > 0 && comment(lines[first - 1], &w)) first--;
-    val *given = rec_get(fns->r.v[i], "params");
+    val *fn = fns->r.v[i];
+    val *given = rec_get(fn, "params");
     val *params = v_list(a);
     val *ph = v_rec(a);
     for (size_t k = 0; k < given->l.n; k++) {
@@ -2185,13 +2211,18 @@ static val *listing(arena *a, const char *file, val *code, const char **why) {
         d = v_num(a, -at(d, 1)->n);
       else if (d && d->k == V_LIST)
         d = NOTHING;
+      const char *pname = given->l.v[k]->l.v[0]->t.s;
       rec_set(a, p, "name", given->l.v[k]->l.v[0]);
       if (d) rec_set(a, p, "default", d);
+      if (rec_get(rec_get(fn, "types"), pname)) rec_set(a, p, "type", rec_get(rec_get(fn, "types"), pname));
+      if (rec_get(rec_get(fn, "words"), pname)) rec_set(a, p, "words", rec_get(rec_get(fn, "words"), pname));
       list_push(a, params, p);
     }
     rec_set(a, ph, "id", T(a, arena_fmt(a, "%s.%s", name->t.s, fname)));
     rec_set(a, ph, "params", params);
-    rec_set(a, ph, "does", first < here && first != top ? words_of(a, lines, first, here - 1) : T(a, ""));
+    rec_set(a, ph, "does", rec_get(fn, "does") ? rec_get(fn, "does") : T(a, ""));
+    if (rec_get(fn, "gives")) rec_set(a, ph, "gives", rec_get(fn, "gives"));
+    if (fname[0] == '_') rec_set(a, ph, "internal", VBOOL(1));
     list_push(a, phrases, ph);
   }
   rec_set(a, out, "phrases", phrases);
@@ -2388,13 +2419,20 @@ val *lingo_call(arena *a, val *inst, const char *fn) {
   val *args = v_rec(a);
   val *step = v_list(a);
   val *tool = v_rec(a);
+  val *checks = v_list(a);   // [name, type] for each value with a type, checked as the call comes in
   for (size_t i = 0; i < given->l.n; i++) {
     val *name = T(a, arena_fmt(a, "a%zu", i));
     val *p = v_list(a);
+    val *type = rec_get(given->l.v[i], "type");
     list_push(a, p, name);
     list_push(a, params, p);
     rec_set(a, args, rec_get(given->l.v[i], "name")->t.s, mk(a, "var", 1, name));
+    val *check = v_list(a);
+    list_push(a, check, rec_get(given->l.v[i], "name"));
+    list_push(a, check, type ? type : NOTHING);
+    list_push(a, checks, check);
   }
+  rec_set(a, tool, "checks", checks);
   linking l = { stack, v_list(a) };
   rw r = { a, link_say, link_call, &l };
   list_push(a, step, mk(a, "return", 1, mk(a, "say", 2, T(a, fn), args)));
@@ -2524,6 +2562,8 @@ val *lingo_load(arena *a, val *natives, val *stacked, const char **message) {
         val *one = given ? type_schema(a, given->t.s) : v_rec(a);
         val *d = rec_get(params->l.v[m], "default");
         val *pn = rec_get(params->l.v[m], "name");
+        val *said = rec_get(params->l.v[m], "words");
+        if (said) rec_set(a, one, "description", said);
         if (d)
           rec_set(a, one, "default", d);
         else
@@ -3223,6 +3263,14 @@ val *run_program(arena *a, val *program, val *input, limits l, const char **code
     val *frame = v_rec(a);
     buf_str(&r->at, "tool");
     bind_args(r, rec_get(tool, "params"), input, 1, frame);
+    // A value given from outside must be of the type its function says, when it says one and the value is there.
+    val *checks = rec_get(tool, "checks");
+    for (size_t i = 0; checks && i < checks->l.n; i++) {
+      val *type = checks->l.v[i]->l.v[1];
+      val *v = rec_get(frame, arena_fmt(a, "a%zu", i));
+      if (type->k == V_TEXT && v && v->k != V_NOTHING && !fits(a, v, type->t.s))
+        fail(r, "type", "%s is %s, but this is %s", checks->l.v[i]->l.v[0]->t.s, type->t.s, kind_name(v));
+    }
     out = exec(r, rec_get(tool, "body"), frame, &back) == BACK ? back : NOTHING;
   } else {
     const char *line = text_or(rec_get(program, "lines"), r->at_error.s ? r->at_error.s : "", NULL);

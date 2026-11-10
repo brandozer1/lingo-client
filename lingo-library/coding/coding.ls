@@ -1,6 +1,4 @@
-// coding - Coding Agent: an AI software engineer for a project on this computer. It reads, searches, writes and edits
-// code, runs commands and checks its work, the way the best coding agents do, and finds its AI on the network.
-//
+"Coding Agent: an AI software engineer for a project on this computer. It reads, searches, writes and edits code, runs commands and checks its work, the way the best coding agents do, and finds its AI on the network."
 // 1. ask(task, folder, messages=nothing, mode="build") -> text; with messages, {text, messages, work, todos}: its reply,
 //                                  after at most 40 steps or 8 minutes, then it says how far it got so it can go on.
 //                                  folder is the project's. messages is the conversation so far as chat messages, OpenAI's
@@ -13,7 +11,7 @@
 //
 // Its tools, as its model sees them: read (a file with line numbers, or a folder), edit (exact text replaced, then looser
 // matches when exact fails: ignoring spaces at line ends, spacing, indentation, or by first and last lines, each only
-// when it matches one place), write, glob (files by name), grep (a regular expression in files), shell (a command, its
+// when it matches one place), write, _glob(files by name), _grep(a regular expression in files), _shell(a command, its
 // exit code and the end of its output), todowrite (its task list) and webfetch (a web page). It must read a file before
 // changing it, and three identical calls in a row are refused. When the conversation grows past about 100,000 tokens, the
 // older part is summed up by the same AI, and the newest kept as it is. On Windows, read, edit and grep run in
@@ -21,14 +19,9 @@
 
 ////////// 1. ASKING //////////
 
-// 1. A coding agent: does a software task in a project folder on this computer, like fix a bug, add a feature, refactor,
-// explain or review code, or write tests, by reading and searching the code, editing files, running commands and tests,
-// and checking its work, then says what it did. task is what to do, with everything it needs. folder is the project's
-// folder. messages is the conversation so far, oldest first, ending with task, given to go on from earlier work. mode is
-// build, the default, or plan, which only looks and plans, changing nothing.
-fn ask(task, folder, messages=nothing, mode="build") {
+fn ask(task, folder, messages=nothing, mode="build") "A coding agent: does a software task in a project folder on this computer, like fix a bug, add a feature, refactor, explain or review code, or write tests, by reading and searching the code, editing files, running commands and tests, and checking its work, then says what it did. task is what to do, with everything it needs. folder is the project's folder. messages is the conversation so far, oldest first, ending with task, given to go on from earlier work. mode is build, the default, or plan, which only looks and plans, changing nothing." {
   if folder == nothing or folder == "" {fail "Say which folder the project is in, as folder"}
-  place = placed(folder, mode)
+  place = _placed(folder, mode)
   said = []
   for m in messages ?? [] {
     if std.length(said) > 0 or m.role == "user" {said += [m]}
@@ -36,32 +29,29 @@ fn ask(task, folder, messages=nothing, mode="build") {
   n = std.length(said)
   if n == 0 or said[n - 1].role != "user" or said[n - 1].content != task {said += [{role: "user", content: task}]}
   added = []
-  state = {seen: read_before(said, place), todos: [], calls: []}
+  state = {seen: _read_before(said, place), todos: [], calls: []}
   began = compute.now()
   for step in 1..40 {
-    said = compacted(said)
+    said = _compacted(said)
     last = step == 40 or compute.now() - began > 480
-    m = think(place, said, last ? nothing : tools(mode), last)
+    m = _think(place, said, last ? nothing : _tools(mode), last)
     said += [m]
     added += [m]
-    if m.tool_calls == nothing {return ended(m.content, messages, added, state)}
+    if m.tool_calls == nothing {return _ended(m.content, messages, added, state)}
     for c in m.tool_calls {
-      r = acted(place, state, c)
+      r = _acted(place, state, c)
       state = r.state
       got = r.said
       said += [{role: "tool", tool_call_id: c.id, content: got}]
       added += [{role: "tool", tool_call_id: c.id, content: std.slice(got, 0, 4000)}]
     }
   }
-  return ended("It stopped after 40 steps.", messages, added, state)
+  return _ended("It stopped after 40 steps.", messages, added, state)
 }
 
 ////////// 2. ITS AI //////////
 
-// For coding's own use: the model's next message for the conversation, from the AI it uses: the one kept, else the
-// first the lingo function finds. One that fails, or answers in another shape, is forgotten and the next found is tried,
-// then the first again, with a pause between. last asks it to stop and say how far it got.
-fn think(place, said, given, last) {
+fn _think(place, said, given, last) "The model's next message for the conversation, from the AI it uses: the one kept, else the first the lingo function finds. One that fails, or answers in another shape, is forgotten and the next found is tried, then the first again, with a pause between. last asks it to stop and say how far it got." {
   body = {messages: [{role: "system", content: place.guide}] + said + (last ? [{role: "user", content: "You have used every step you may take in one go. Use no tools now. Say what is done, what is left, and what should happen next, briefly, so the work can go on when the person asks."}] : [])}
   if given != nothing {body.tools = given}
   address = store.get("coding/ai")
@@ -70,7 +60,7 @@ fn think(place, said, given, last) {
   why = ""
   for attempt in 1..4 {
     if address == nothing or address in tried {
-      if ways == nothing {ways = found_ais()}
+      if ways == nothing {ways = _found_ais()}
       address = ways[0]
       for w in ways {
         if not (w in tried) {
@@ -80,7 +70,7 @@ fn think(place, said, given, last) {
       }
     }
     try {
-      got = heard(use(address, body))
+      got = _heard(use(address, body))
       if store.get("coding/ai") != address {store.put("coding/ai", address)}
       return got
     } catch e {
@@ -93,8 +83,7 @@ fn think(place, said, given, last) {
   fail "Coding Agent couldn't get an answer from an AI: {why}"
 }
 
-// For coding's own use: the addresses of the AIs the lingo function finds for it, best first.
-fn found_ais() {
+fn _found_ais() {
   ways = lingo.ways("An AI model for a lingo's own agent: the model's next message for a conversation of chat messages in OpenAI's format, which may call the tools it is given", {})
   out = []
   for w in ways ?? [] {out += [w.address]}
@@ -102,9 +91,7 @@ fn found_ais() {
   return out
 }
 
-// For coding's own use: an AI's answer as the next message, from OpenAI's whole answer or the message alone, or a
-// failure when it is in another shape.
-fn heard(a) {
+fn _heard(a) {
   m = a.choices != nothing ? a.choices[0].message : a
   if m.content == nothing and m.tool_calls == nothing {fail "that AI didn't answer with a chat message"}
   out = {role: "assistant", content: m.content ?? ""}
@@ -117,9 +104,7 @@ fn heard(a) {
   return out
 }
 
-// For coding's own use: the conversation summed up when it is past about 100,000 tokens, its newest 60,000 characters
-// kept as they are from a message of the model's, and the rest written out and summed up by the AI.
-fn compacted(said) {
+fn _compacted(said) {
   if std.length(std.to_json(said)) < 400000 {return said}
   kept = 0
   cut = std.length(said)
@@ -137,14 +122,13 @@ fn compacted(said) {
     for c in m.tool_calls ?? [] {told += "[Tool call]: {c.function.name} {std.slice(std.text(c.function.arguments), 0, 2000)}\n"}
     if m.role == "tool" {told += "[Tool result]: {std.slice(std.text(m.content), 0, 2000)}\n"}
   }
-  summary = think({guide: "Sum up the coding session below so another coding agent can carry on with no other context. Keep exact paths, names, commands and error messages. Use terse bullets, and these headings in this order, each kept even when empty with \"(none)\":\n## Objective\n## Important details\n## Done\n## In progress\n## Blocked\n## Next\n## Relevant files\nDon't continue the work or answer anything in it. Only write the summary."}, [{role: "user", content: "<conversation>\n" + told + "</conversation>"}], nothing, false).content
+  summary = _think({guide: "Sum up the coding session below so another coding agent can carry on with no other context. Keep exact paths, names, commands and error messages. Use terse bullets, and these headings in this order, each kept even when empty with \"(none)\":\n## Objective\n## Important details\n## Done\n## In progress\n## Blocked\n## Next\n## Relevant files\nDon't continue the work or answer anything in it. Only write the summary."}, [{role: "user", content: "<conversation>\n" + told + "</conversation>"}], nothing, false).content
   return [{role: "user", content: "What have we done so far?"}, {role: "assistant", content: summary}] + std.slice(said, cut)
 }
 
 ////////// 3. ITS TOOLS //////////
 
-// For coding's own use: its tools as OpenAI writes them, plan mode's without those that change files.
-fn tools(mode) {
+fn _tools(mode) {
   s = {type: "string"}
   n = {type: "integer"}
   all = [
@@ -168,9 +152,7 @@ fn tools(mode) {
   return out
 }
 
-// For coding's own use: what one tool call gave, {said, state}: its result as text, or what went wrong, for the model
-// to act on, and the state after it, since a function changes only its own copy: the files read and the calls made.
-fn acted(place, state, c) {
+fn _acted(place, state, c) {
   name = text.lower(std.text(c.function.name))
   a = {}
   try {
@@ -184,32 +166,30 @@ fn acted(place, state, c) {
   if n >= 3 and state.calls[n - 2] == key and state.calls[n - 3] == key {
     return {said: "You have made this same call three times in a row, and it gives the same answer. Try something else.", state: state}
   }
-  try {chat.step(said_step(name, a))} catch e {}
+  try {chat.step(_said_step(name, a))} catch e {}
   if name == "todowrite" {state.todos = a.todos ?? []}
-  got = done_by(place, state, name, a)
-  if (name == "read" or name == "write" or name == "edit") and not text.starts_with(got, "Error") {state.seen[whole(place, a.filePath ?? a.path)] = true}
+  got = _done_by(place, state, name, a)
+  if (name == "read" or name == "write" or name == "edit") and not text.starts_with(got, "Error") {state.seen[_whole(place, a.filePath ?? a.path)] = true}
   return {said: got, state: state}
 }
 
-// For coding's own use: what a tool gave, as text, or what went wrong.
-fn done_by(place, state, name, a) {
+fn _done_by(place, state, name, a) {
   try {
-    if name == "read" {return read_file(place, a)}
-    if name == "edit" {return edit_file(place, state, a)}
-    if name == "write" {return write_file(place, state, a)}
-    if name == "glob" {return glob(place, a)}
-    if name == "grep" {return grep(place, a)}
-    if name == "shell" or name == "bash" {return shell(place, a)}
+    if name == "read" {return _read_file(place, a)}
+    if name == "edit" {return _edit_file(place, state, a)}
+    if name == "write" {return _write_file(place, state, a)}
+    if name == "glob" {return _glob(place, a)}
+    if name == "grep" {return _grep(place, a)}
+    if name == "shell" or name == "bash" {return _shell(place, a)}
     if name == "todowrite" {return std.to_json(a.todos ?? [])}
-    if name == "webfetch" {return fetched(a)}
+    if name == "webfetch" {return _fetched(a)}
     return "There's no tool called {name}. Use read, edit, write, glob, grep, shell, todowrite or webfetch."
   } catch e {
     return "Error: {e}"
   }
 }
 
-// For coding's own use: what a call is doing, in a few words, for the person's chat.
-fn said_step(name, a) {
+fn _said_step(name, a) {
   if name == "read" {return "Reading {a.filePath}"}
   if name == "edit" or name == "write" {return "Changing {a.filePath}"}
   if name == "glob" or name == "grep" {return "Searching for {a.pattern}"}
@@ -218,45 +198,39 @@ fn said_step(name, a) {
   return "Working"
 }
 
-// For coding's own use: a path the model gave, made whole: absolute as it is, else under the project folder.
-fn whole(place, p) {
+fn _whole(place, p) {
   if p == nothing or p == "" {return place.folder}
   p = text.replace(std.text(p), "\\", "/")
   if text.starts_with(p, "/") or text.starts_with(p, "~") or std.slice(p, 1, 2) == ":" {return p}
   return place.folder + "/" + p
 }
 
-// For coding's own use: text as a PowerShell here-string, which needs no escaping, kept to one line.
-fn literal(words) {
+fn _literal(words) {
   return "@'\n" + text.replace(text.replace(std.text(words), std.from_bytes([13]), " "), "\n", " ") + "\n'@"
 }
 
-// For coding's own use: text as one sh word in single quotes.
-fn quoted(words) {
+fn _quoted(words) {
   return "'" + text.replace(std.text(words), "'", "'\\''") + "'"
 }
 
-// For coding's own use: a PowerShell script given its values as $a, from JSON, and its output, or its words as a failure.
-fn powershell(values, script) {
-  done = commands.run("$a = " + literal(std.to_json(values)) + " | ConvertFrom-Json\n" + script)
+fn _powershell(values, script) {
+  done = commands.run("$a = " + _literal(std.to_json(values)) + " | ConvertFrom-Json\n" + script)
   if done.code != 0 {fail done.out}
   return done.out
 }
 
-// For coding's own use.
-fn read_file(place, a) {
-  p = whole(place, a.filePath ?? a.path)
-  if place.windows {return powershell({path: p, offset: a.offset ?? 1, limit: a.limit ?? 2000}, "$ErrorActionPreference='Stop'\ntrap \{[Console]::Out.Write($_.Exception.GetBaseException().Message);exit 1\}\n$p=$a.path\nif(-not (Test-Path -LiteralPath $p))\{\n  $dir=Split-Path -Parent $p; $leaf=Split-Path -Leaf $p; $near=@()\n  if($dir -and (Test-Path -LiteralPath $dir))\{$near=@(Get-ChildItem -LiteralPath $dir -Force | Where-Object \{$_.Name -like \"*$leaf*\" -or $leaf -like \"*$($_.Name)*\"\} | Select-Object -First 3 | ForEach-Object \{$_.FullName\})\}\n  $m=\"File not found: $p\"; if($near.Count)\{$m+=\"`n`nDid you mean one of these?`n\"+($near -join \"`n\")\}\n  [Console]::Out.Write($m); exit 1\n\}\n$from=[Math]::Max(1,[int]$a.offset); $take=2000; if($a.limit)\{$take=[int]$a.limit\}\nif(Test-Path -LiteralPath $p -PathType Container)\{\n  $all=@(Get-ChildItem -LiteralPath $p -Force | Sort-Object Name | ForEach-Object \{if($_.PSIsContainer)\{$_.Name+'/'\}else\{$_.Name\}\})\n  $page=@($all | Select-Object -Skip ($from-1) -First $take); $last=$from-1+$page.Count\n  $out=\"$p (a folder)`n\"+($page -join \"`n\")\n  if($last -lt $all.Count)\{$out+=\"`n(Showing $from-$last of $($all.Count). Use offset=$($last+1) for more.)\"\}else\{$out+=\"`n($($all.Count) entries)\"\}\n  [Console]::Out.Write($out); exit 0\n\}\n$binary=' .zip .tar .gz .7z .exe .dll .so .dylib .class .jar .war .doc .docx .xls .xlsx .ppt .pptx .odt .ods .odp .bin .dat .obj .o .a .lib .wasm .pyc .pyo .png .jpg .jpeg .gif .webp .ico .pdf .mp3 .mp4 '\n$ext=[IO.Path]::GetExtension($p).ToLower()\nif($ext -and $binary.Contains(\" $ext \"))\{[Console]::Out.Write(\"Cannot read binary file: $p\"); exit 1\}\n$fs=[IO.File]::OpenRead($p); $head=New-Object byte[] 4096; $got=$fs.Read($head,0,4096); $fs.Close()\nfor($i=0;$i -lt $got;$i++)\{if($head[$i] -eq 0)\{[Console]::Out.Write(\"Cannot read binary file: $p\"); exit 1\}\}\n$lines=[IO.File]::ReadAllLines($p)\nif($lines.Count -eq 0)\{[Console]::Out.Write(\"$p is empty\"); exit 0\}\nif($from -gt $lines.Count)\{[Console]::Out.Write(\"Offset $from is past the end of the file, which has $($lines.Count) lines\"); exit 1\}\n$sb=New-Object Text.StringBuilder; $last=$from-1; $capped=$false\nfor($i=$from-1;$i -lt [Math]::Min($lines.Count,$from-1+$take);$i++)\{\n  $l=$lines[$i]; if($l.Length -gt 2000)\{$l=$l.Substring(0,2000)+'... (line cut at 2000 characters)'\}\n  if($sb.Length+$l.Length -gt 51200)\{$capped=$true; break\}\n  [void]$sb.Append($i+1).Append(': ').Append($l).Append(\"`n\"); $last=$i+1\n\}\nif($capped)\{[void]$sb.Append(\"`n(Cut at 50 KB: lines $from-$last shown. Use offset=$($last+1) to go on.)\")\}\nelseif($last -lt $lines.Count)\{[void]$sb.Append(\"`n(Lines $from-$last of $($lines.Count). Use offset=$($last+1) to go on.)\")\}\nelse\{[void]$sb.Append(\"`n(End of file, $($lines.Count) lines)\")\}\n[Console]::Out.Write($sb.ToString())")}
+fn _read_file(place, a) {
+  p = _whole(place, a.filePath ?? a.path)
+  if place.windows {return _powershell({path: p, offset: a.offset ?? 1, limit: a.limit ?? 2000}, "$ErrorActionPreference='Stop'\ntrap \{[Console]::Out.Write($_.Exception.GetBaseException().Message);exit 1\}\n$p=$a.path\nif(-not (Test-Path -LiteralPath $p))\{\n  $dir=Split-Path -Parent $p; $leaf=Split-Path -Leaf $p; $near=@()\n  if($dir -and (Test-Path -LiteralPath $dir))\{$near=@(Get-ChildItem -LiteralPath $dir -Force | Where-Object \{$_.Name -like \"*$leaf*\" -or $leaf -like \"*$($_.Name)*\"\} | Select-Object -First 3 | ForEach-Object \{$_.FullName\})\}\n  $m=\"File not found: $p\"; if($near.Count)\{$m+=\"`n`nDid you mean one of these?`n\"+($near -join \"`n\")\}\n  [Console]::Out.Write($m); exit 1\n\}\n$from=[Math]::Max(1,[int]$a.offset); $take=2000; if($a.limit)\{$take=[int]$a.limit\}\nif(Test-Path -LiteralPath $p -PathType Container)\{\n  $all=@(Get-ChildItem -LiteralPath $p -Force | Sort-Object Name | ForEach-Object \{if($_.PSIsContainer)\{$_.Name+'/'\}else\{$_.Name\}\})\n  $page=@($all | Select-Object -Skip ($from-1) -First $take); $last=$from-1+$page.Count\n  $out=\"$p (a folder)`n\"+($page -join \"`n\")\n  if($last -lt $all.Count)\{$out+=\"`n(Showing $from-$last of $($all.Count). Use offset=$($last+1) for more.)\"\}else\{$out+=\"`n($($all.Count) entries)\"\}\n  [Console]::Out.Write($out); exit 0\n\}\n$binary=' .zip .tar .gz .7z .exe .dll .so .dylib .class .jar .war .doc .docx .xls .xlsx .ppt .pptx .odt .ods .odp .bin .dat .obj .o .a .lib .wasm .pyc .pyo .png .jpg .jpeg .gif .webp .ico .pdf .mp3 .mp4 '\n$ext=[IO.Path]::GetExtension($p).ToLower()\nif($ext -and $binary.Contains(\" $ext \"))\{[Console]::Out.Write(\"Cannot read binary file: $p\"); exit 1\}\n$fs=[IO.File]::OpenRead($p); $head=New-Object byte[] 4096; $got=$fs.Read($head,0,4096); $fs.Close()\nfor($i=0;$i -lt $got;$i++)\{if($head[$i] -eq 0)\{[Console]::Out.Write(\"Cannot read binary file: $p\"); exit 1\}\}\n$lines=[IO.File]::ReadAllLines($p)\nif($lines.Count -eq 0)\{[Console]::Out.Write(\"$p is empty\"); exit 0\}\nif($from -gt $lines.Count)\{[Console]::Out.Write(\"Offset $from is past the end of the file, which has $($lines.Count) lines\"); exit 1\}\n$sb=New-Object Text.StringBuilder; $last=$from-1; $capped=$false\nfor($i=$from-1;$i -lt [Math]::Min($lines.Count,$from-1+$take);$i++)\{\n  $l=$lines[$i]; if($l.Length -gt 2000)\{$l=$l.Substring(0,2000)+'... (line cut at 2000 characters)'\}\n  if($sb.Length+$l.Length -gt 51200)\{$capped=$true; break\}\n  [void]$sb.Append($i+1).Append(': ').Append($l).Append(\"`n\"); $last=$i+1\n\}\nif($capped)\{[void]$sb.Append(\"`n(Cut at 50 KB: lines $from-$last shown. Use offset=$($last+1) to go on.)\")\}\nelseif($last -lt $lines.Count)\{[void]$sb.Append(\"`n(Lines $from-$last of $($lines.Count). Use offset=$($last+1) to go on.)\")\}\nelse\{[void]$sb.Append(\"`n(End of file, $($lines.Count) lines)\")\}\n[Console]::Out.Write($sb.ToString())")}
   from = a.offset ?? 1
   to = from - 1 + (a.limit ?? 2000)
-  done = commands.run("if [ -d " + quoted(p) + " ]; then ls -1Ap " + quoted(p) + "; elif [ -f " + quoted(p) + " ]; then awk -v s={from} -v e={to} 'NR>=s && NR<=e \{l=$0; if (length(l)>2000) l=substr(l,1,2000) \"... (line cut)\"; print NR \": \" l\} END \{print \"(\" NR \" lines)\"\}' " + quoted(p) + "; else echo \"File not found: " + p + "\"; exit 1; fi")
+  done = commands.run("if [ -d " + _quoted(p) + " ]; then ls -1Ap " + _quoted(p) + "; elif [ -f " + _quoted(p) + " ]; then awk -v s={from} -v e={to} 'NR>=s && NR<=e \{l=$0; if (length(l)>2000) l=substr(l,1,2000) \"... (line cut)\"; print NR \": \" l\} END \{print \"(\" NR \" lines)\"\}' " + _quoted(p) + "; else echo \"File not found: " + p + "\"; exit 1; fi")
   if done.code != 0 {fail done.out}
   return std.slice(done.out, 0, 51200)
 }
 
-// For coding's own use.
-fn edit_file(place, state, a) {
-  p = whole(place, a.filePath)
+fn _edit_file(place, state, a) {
+  p = _whole(place, a.filePath)
   old = a.oldString ?? ""
   if old == (a.newString ?? "") {return "No change: oldString and newString are the same."}
   if not files.exists(p) {
@@ -266,22 +240,19 @@ fn edit_file(place, state, a) {
   }
   if old == "" {return "oldString can't be empty for a file that exists. Give the text to replace, or use write to replace the whole file."}
   if state.seen[p] == nothing {return "Read {p} before editing it."}
-  if place.windows {return powershell({path: p, old: old, new: a.newString ?? "", all: a.replaceAll ?? false}, "$ErrorActionPreference='Stop'\ntrap \{[Console]::Out.Write($_.Exception.GetBaseException().Message);exit 1\}\n$bytes=[IO.File]::ReadAllBytes($a.path)\n$bom=$bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF\n$raw=[Text.Encoding]::UTF8.GetString($bytes); if($bom)\{$raw=$raw.Substring(1)\}\n$crlf=$raw.Contains(\"`r`n\")\n$t=$raw.Replace(\"`r`n\",\"`n\"); $old=([string]$a.old).Replace(\"`r`n\",\"`n\"); $new=([string]$a.new).Replace(\"`r`n\",\"`n\")\n$lines=$t.Split(\"`n\"); $ol=$old.Split(\"`n\")\nif($ol.Length -gt 1 -and $ol[-1] -eq '')\{$ol=$ol[0..($ol.Length-2)]\}\n$n=$ol.Length\nfunction Window($i,$k)\{@($lines[$i..($i+$k-1)])\}\nfunction Flat($s)\{($s -replace '\\s+',' ').Trim()\}\nfunction Dedent($rows)\{\n  $m=($rows | Where-Object \{$_.Trim()\} | ForEach-Object \{$_.Length-$_.TrimStart().Length\} | Measure-Object -Minimum).Minimum\n  if(-not $m)\{$m=0\}\n  ($rows | ForEach-Object \{if($_.Length -ge $m)\{$_.Substring($m)\}else\{$_.TrimStart()\}\}) -join \"`n\"\n\}\n$found=New-Object System.Collections.Generic.List[object]\n$found.Add(@('exact',$old))\n$flatOld=Flat ($ol -join \"`n\"); $dedentOld=Dedent $ol\nforeach($how in 'ignoring spaces at line ends','ignoring spacing','ignoring indentation')\{\n  for($i=0;$i -le $lines.Length-$n;$i++)\{\n    $w=Window $i $n; $same=$false\n    if($how -eq 'ignoring spaces at line ends')\{$same=$true; for($j=0;$j -lt $n;$j++)\{if($w[$j].Trim() -ne $ol[$j].Trim())\{$same=$false;break\}\}\}\n    elseif($how -eq 'ignoring spacing')\{$same=(Flat ($w -join \"`n\")) -eq $flatOld\}\n    else\{$same=(Dedent $w) -eq $dedentOld\}\n    if($same)\{$found.Add(@($how,($w -join \"`n\")))\}\n  \}\n\}\nif($n -ge 3)\{\n  $spread=[Math]::Max(1,[Math]::Floor($n*0.25)); $anchored=@()\n  for($i=0;$i -lt $lines.Length;$i++)\{\n    if($lines[$i].Trim() -ne $ol[0].Trim())\{continue\}\n    for($k=[Math]::Max(3,$n-$spread);$k -le $n+$spread;$k++)\{\n      $e=$i+$k-1; if($e -ge $lines.Length)\{break\}\n      if($lines[$e].Trim() -ne $ol[-1].Trim())\{continue\}\n      $w=Window $i $k; $mid=[Math]::Min($k,$n)-2; $alike=0\n      for($j=1;$j -le $mid;$j++)\{if($w[$j].Trim() -eq $ol[$j].Trim())\{$alike++\}\}\n      $score=1; if($mid -gt 0)\{$score=$alike/$mid\}\n      if($score -ge 0.5)\{$anchored+=,@($score,($w -join \"`n\"))\}\n      break\n    \}\n  \}\n  if($anchored.Count)\{foreach($c in @($anchored | Sort-Object \{$_[0]\} -Descending))\{$found.Add(@('by its first and last lines',$c[1]))\}\}\n\}\n$how=$null; $several=$false\nforeach($c in $found)\{\n  $s=$c[1]; if(-not $s)\{continue\}\n  $at=$t.IndexOf($s,[StringComparison]::Ordinal); if($at -lt 0)\{continue\}\n  if($c[0] -ne 'exact' -and $s.Split(\"`n\").Length -ge [Math]::Max($n+3,$n*2))\{continue\}\n  if($a.all)\{$out=$t.Replace($s,$new); $how=$c[0]; break\}\n  if($at -ne $t.LastIndexOf($s,[StringComparison]::Ordinal))\{$several=$true; continue\}\n  $out=$t.Substring(0,$at)+$new+$t.Substring($at+$s.Length); $how=$c[0]; break\n\}\nif(-not $how)\{\n  if($several)\{[Console]::Out.Write('oldString matches more than one place. Include more of the lines around it so it matches one, or set replaceAll to change every one.'); exit 1\}\n  [Console]::Out.Write('Could not find oldString in the file. It must match the file, indentation included. Read the file again and copy the lines exactly, without line numbers.'); exit 1\n\}\nif($crlf)\{$out=$out.Replace(\"`n\",\"`r`n\")\}\n[IO.File]::WriteAllText($a.path,$out,(New-Object Text.UTF8Encoding($bom)))\n$said='Edit applied.'; if($how -ne 'exact')\{$said+=\" It matched $how.\"\}\n[Console]::Out.Write($said)")}
+  if place.windows {return _powershell({path: p, old: old, new: a.newString ?? "", all: a.replaceAll ?? false}, "$ErrorActionPreference='Stop'\ntrap \{[Console]::Out.Write($_.Exception.GetBaseException().Message);exit 1\}\n$bytes=[IO.File]::ReadAllBytes($a.path)\n$bom=$bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF\n$raw=[Text.Encoding]::UTF8.GetString($bytes); if($bom)\{$raw=$raw.Substring(1)\}\n$crlf=$raw.Contains(\"`r`n\")\n$t=$raw.Replace(\"`r`n\",\"`n\"); $old=([string]$a.old).Replace(\"`r`n\",\"`n\"); $new=([string]$a.new).Replace(\"`r`n\",\"`n\")\n$lines=$t.Split(\"`n\"); $ol=$old.Split(\"`n\")\nif($ol.Length -gt 1 -and $ol[-1] -eq '')\{$ol=$ol[0..($ol.Length-2)]\}\n$n=$ol.Length\nfunction Window($i,$k)\{@($lines[$i..($i+$k-1)])\}\nfunction Flat($s)\{($s -replace '\\s+',' ').Trim()\}\nfunction Dedent($rows)\{\n  $m=($rows | Where-Object \{$_.Trim()\} | ForEach-Object \{$_.Length-$_.TrimStart().Length\} | Measure-Object -Minimum).Minimum\n  if(-not $m)\{$m=0\}\n  ($rows | ForEach-Object \{if($_.Length -ge $m)\{$_.Substring($m)\}else\{$_.TrimStart()\}\}) -join \"`n\"\n\}\n$found=New-Object System.Collections.Generic.List[object]\n$found.Add(@('exact',$old))\n$flatOld=Flat ($ol -join \"`n\"); $dedentOld=Dedent $ol\nforeach($how in 'ignoring spaces at line ends','ignoring spacing','ignoring indentation')\{\n  for($i=0;$i -le $lines.Length-$n;$i++)\{\n    $w=Window $i $n; $same=$false\n    if($how -eq 'ignoring spaces at line ends')\{$same=$true; for($j=0;$j -lt $n;$j++)\{if($w[$j].Trim() -ne $ol[$j].Trim())\{$same=$false;break\}\}\}\n    elseif($how -eq 'ignoring spacing')\{$same=(Flat ($w -join \"`n\")) -eq $flatOld\}\n    else\{$same=(Dedent $w) -eq $dedentOld\}\n    if($same)\{$found.Add(@($how,($w -join \"`n\")))\}\n  \}\n\}\nif($n -ge 3)\{\n  $spread=[Math]::Max(1,[Math]::Floor($n*0.25)); $anchored=@()\n  for($i=0;$i -lt $lines.Length;$i++)\{\n    if($lines[$i].Trim() -ne $ol[0].Trim())\{continue\}\n    for($k=[Math]::Max(3,$n-$spread);$k -le $n+$spread;$k++)\{\n      $e=$i+$k-1; if($e -ge $lines.Length)\{break\}\n      if($lines[$e].Trim() -ne $ol[-1].Trim())\{continue\}\n      $w=Window $i $k; $mid=[Math]::Min($k,$n)-2; $alike=0\n      for($j=1;$j -le $mid;$j++)\{if($w[$j].Trim() -eq $ol[$j].Trim())\{$alike++\}\}\n      $score=1; if($mid -gt 0)\{$score=$alike/$mid\}\n      if($score -ge 0.5)\{$anchored+=,@($score,($w -join \"`n\"))\}\n      break\n    \}\n  \}\n  if($anchored.Count)\{foreach($c in @($anchored | Sort-Object \{$_[0]\} -Descending))\{$found.Add(@('by its first and last lines',$c[1]))\}\}\n\}\n$how=$null; $several=$false\nforeach($c in $found)\{\n  $s=$c[1]; if(-not $s)\{continue\}\n  $at=$t.IndexOf($s,[StringComparison]::Ordinal); if($at -lt 0)\{continue\}\n  if($c[0] -ne 'exact' -and $s.Split(\"`n\").Length -ge [Math]::Max($n+3,$n*2))\{continue\}\n  if($a.all)\{$out=$t.Replace($s,$new); $how=$c[0]; break\}\n  if($at -ne $t.LastIndexOf($s,[StringComparison]::Ordinal))\{$several=$true; continue\}\n  $out=$t.Substring(0,$at)+$new+$t.Substring($at+$s.Length); $how=$c[0]; break\n\}\nif(-not $how)\{\n  if($several)\{[Console]::Out.Write('oldString matches more than one place. Include more of the lines around it so it matches one, or set replaceAll to change every one.'); exit 1\}\n  [Console]::Out.Write('Could not find oldString in the file. It must match the file, indentation included. Read the file again and copy the lines exactly, without line numbers.'); exit 1\n\}\nif($crlf)\{$out=$out.Replace(\"`n\",\"`r`n\")\}\n[IO.File]::WriteAllText($a.path,$out,(New-Object Text.UTF8Encoding($bom)))\n$said='Edit applied.'; if($how -ne 'exact')\{$said+=\" It matched $how.\"\}\n[Console]::Out.Write($said)")}
   done = files.edit(p, old, a.newString ?? "", a.replaceAll ?? false)
   return "Edit applied, {done.replaced} replaced."
 }
 
-// For coding's own use.
-fn write_file(place, state, a) {
-  p = whole(place, a.filePath)
+fn _write_file(place, state, a) {
+  p = _whole(place, a.filePath)
   if files.exists(p) and state.seen[p] == nothing {return "Read {p} before writing over it."}
   files.write(p, a.content ?? "")
   return "Wrote {p}."
 }
 
-// For coding's own use: files by name pattern, the last part of the pattern matched by name and any folders before it
-// by path, noise left out, at most 100.
-fn glob(place, a) {
+fn _glob(place, a) {
   pattern = text.replace(std.text(a.pattern), "\\", "/")
   parts = text.split(pattern, "/")
   name = parts[-1]
@@ -291,9 +262,9 @@ fn glob(place, a) {
   }
   out = []
   more = false
-  for f in files.find(whole(place, a.path), name) {
+  for f in files.find(_whole(place, a.path), name) {
     path = text.replace(f.path, "\\", "/")
-    if f.folder or noise(path) {continue}
+    if f.folder or _noise(path) {continue}
     ok = true
     for x in inside {
       if not (x in path) {ok = false}
@@ -309,28 +280,25 @@ fn glob(place, a) {
   return text.join(out, "\n") + (more ? "\n(Cut at 100. Use a more specific path or pattern.)" : "")
 }
 
-// For coding's own use: whether a path is inside a folder no one searches, like node_modules or .git.
-fn noise(path) {
+fn _noise(path) "Whether a path is inside a folder no one searches, like node_modules or .git." {
   for x in ["/node_modules/", "/.git/", "/dist/", "/build/", "/bin/", "/obj/", "/target/", "/vendor/", "/.venv/", "/venv/", "/__pycache__/", "/.next/", "/coverage/"] {
     if x in path {return true}
   }
   return false
 }
 
-// For coding's own use.
-fn grep(place, a) {
-  where = whole(place, a.path)
-  if place.windows {return powershell({path: where, pattern: a.pattern, include: a.include}, "$ErrorActionPreference='Stop'\ntrap \{[Console]::Out.Write($_.Exception.GetBaseException().Message);exit 1\}\n$skip='[\\\\/](node_modules|\\.git|dist|build|bin|obj|target|vendor|\\.venv|venv|__pycache__|\\.next|coverage)([\\\\/]|$)'\n$files=@(Get-ChildItem -LiteralPath $a.path -Recurse -File -Force -ErrorAction SilentlyContinue | Where-Object \{$_.FullName -notmatch $skip\})\nif($a.include)\{\n  $inc=[string]$a.include; $pats=@($inc)\n  if($inc -match '^(.*)\\\{(.+)\\\}(.*)$')\{$pre=$Matches[1]; $alts=$Matches[2]; $post=$Matches[3]; $pats=@($alts.Split(',') | ForEach-Object \{$pre+$_.Trim()+$post\})\}\n  $files=@($files | Where-Object \{$name=$_.Name; @($pats | Where-Object \{$name -like $_\}).Count -gt 0\})\n\}\n$hits=@($files | Select-String -Pattern $a.pattern -ErrorAction SilentlyContinue | Select-Object -First 101)\nif(-not $hits.Count)\{[Console]::Out.Write('No files found'); exit 0\}\n$more=$hits.Count -gt 100; $hits=@($hits | Select-Object -First 100)\n$sb=New-Object Text.StringBuilder; [void]$sb.Append(\"Found $($hits.Count) matches\"); if($more)\{[void]$sb.Append(' (more not shown)')\}\n$was=''\nforeach($h in $hits)\{\n  if($h.Path -ne $was)\{[void]$sb.Append(\"`n`n\"+$h.Path+':'); $was=$h.Path\}\n  $l=$h.Line; if($l.Length -gt 300)\{$l=$l.Substring(0,300)+'...'\}\n  [void]$sb.Append(\"`n  Line $($h.LineNumber): $l\")\n\}\nif($more)\{[void]$sb.Append(\"`n`n(Cut at 100 matches. Narrow the path, include or pattern.)\")\}\n[Console]::Out.Write($sb.ToString())")}
-  include = a.include == nothing ? "" : " --include=" + quoted(a.include)
-  done = commands.run("grep -rnIE --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=dist --exclude-dir=build" + include + " -e " + quoted(a.pattern) + " " + quoted(where) + " | head -100")
+fn _grep(place, a) {
+  where = _whole(place, a.path)
+  if place.windows {return _powershell({path: where, pattern: a.pattern, include: a.include}, "$ErrorActionPreference='Stop'\ntrap \{[Console]::Out.Write($_.Exception.GetBaseException().Message);exit 1\}\n$skip='[\\\\/](node_modules|\\.git|dist|build|bin|obj|target|vendor|\\.venv|venv|__pycache__|\\.next|coverage)([\\\\/]|$)'\n$files=@(Get-ChildItem -LiteralPath $a.path -Recurse -File -Force -ErrorAction SilentlyContinue | Where-Object \{$_.FullName -notmatch $skip\})\nif($a.include)\{\n  $inc=[string]$a.include; $pats=@($inc)\n  if($inc -match '^(.*)\\\{(.+)\\\}(.*)$')\{$pre=$Matches[1]; $alts=$Matches[2]; $post=$Matches[3]; $pats=@($alts.Split(',') | ForEach-Object \{$pre+$_.Trim()+$post\})\}\n  $files=@($files | Where-Object \{$name=$_.Name; @($pats | Where-Object \{$name -like $_\}).Count -gt 0\})\n\}\n$hits=@($files | Select-String -Pattern $a.pattern -ErrorAction SilentlyContinue | Select-Object -First 101)\nif(-not $hits.Count)\{[Console]::Out.Write('No files found'); exit 0\}\n$more=$hits.Count -gt 100; $hits=@($hits | Select-Object -First 100)\n$sb=New-Object Text.StringBuilder; [void]$sb.Append(\"Found $($hits.Count) matches\"); if($more)\{[void]$sb.Append(' (more not shown)')\}\n$was=''\nforeach($h in $hits)\{\n  if($h.Path -ne $was)\{[void]$sb.Append(\"`n`n\"+$h.Path+':'); $was=$h.Path\}\n  $l=$h.Line; if($l.Length -gt 300)\{$l=$l.Substring(0,300)+'...'\}\n  [void]$sb.Append(\"`n  Line $($h.LineNumber): $l\")\n\}\nif($more)\{[void]$sb.Append(\"`n`n(Cut at 100 matches. Narrow the path, include or pattern.)\")\}\n[Console]::Out.Write($sb.ToString())")}
+  include = a.include == nothing ? "" : " --include=" + _quoted(a.include)
+  done = commands.run("grep -rnIE --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=dist --exclude-dir=build" + include + " -e " + _quoted(a.pattern) + " " + _quoted(where) + " | head -100")
   if done.out == "" {return "No files found"}
   return done.out
 }
 
-// For coding's own use: a command in the project folder, or workdir, with its exit code and the end of its output.
-fn shell(place, a) {
-  where = whole(place, a.workdir)
-  command = place.windows ? "Set-Location -LiteralPath " + literal(where) + "\n" + std.text(a.command) : "cd " + quoted(where) + " && " + std.text(a.command)
+fn _shell(place, a) {
+  where = _whole(place, a.workdir)
+  command = place.windows ? "Set-Location -LiteralPath " + _literal(where) + "\n" + std.text(a.command) : "cd " + _quoted(where) + " && " + std.text(a.command)
   done = commands.run(command)
   out = done.out
   size = std.length(out)
@@ -338,8 +306,7 @@ fn shell(place, a) {
   return "Exit code {done.code}\n" + (out == "" ? "(no output)" : out)
 }
 
-// For coding's own use.
-fn fetched(a) {
+fn _fetched(a) {
   url = std.text(a.url)
   if not (text.starts_with(url, "http://") or text.starts_with(url, "https://")) {return "The address must start with http:// or https://"}
   r = http.send("GET", url, {"user-agent": "Mozilla/5.0 Coding Agent"}, nothing, 30)
@@ -349,9 +316,7 @@ fn fetched(a) {
 
 ////////// 4. ITS SETTING //////////
 
-// For coding's own use: the project folder and what the model is told: its guide, this computer and project, and the
-// project's own instructions, AGENTS.md or CLAUDE.md in the folder or those above it, nearest first.
-fn placed(folder, mode) {
+fn _placed(folder, mode) "The project folder and what the model is told: its guide, this computer and project, and the project's own instructions, AGENTS.md or CLAUDE.md in the folder or those above it, nearest first." {
   f = text.replace(std.text(folder), "\\", "/")
   if text.ends_with(f, "/") and std.length(f) > 3 {f = std.slice(f, 0, std.length(f) - 1)}
   windows = files.exists("C:/Windows")
@@ -377,22 +342,19 @@ fn placed(folder, mode) {
   return {folder: f, windows: windows, guide: guide}
 }
 
-// For coding's own use: the files a conversation already read, so they may be edited.
-fn read_before(said, place) {
+fn _read_before(said, place) {
   seen = {}
   for m in said {
     for c in m.tool_calls ?? [] {
       if c.function.name == "read" {
-        try {seen[whole(place, std.from_json(c.function.arguments).filePath)] = true} catch e {}
+        try {seen[_whole(place, std.from_json(c.function.arguments).filePath)] = true} catch e {}
       }
     }
   }
   return seen
 }
 
-// For coding's own use: what ask gives: the answer alone, or, given a conversation, with what it added, its work in
-// short and its task list.
-fn ended(answer, messages, added, state) {
+fn _ended(answer, messages, added, state) {
   if messages == nothing {return answer}
   steps = []
   calls = {}

@@ -1752,8 +1752,8 @@ static val *shared(arena *a, const char *name) {
 
 /* 3. A lingo's whole OpenAPI manifest, as pack writes it: what its openapi.json says, its name, program and route in
    x-lingo, and each function it shares as a path under its route, its words, its values as JSON Schema, x-lingo-function,
-   x-lingo-needs and x-lingo-calls, and x-lingo-internal on a helper whose comment says it is for the lingo's own use, like
-   "For agent's own use", which Onsay lists nowhere. /name alone is its main, and a lingo with serve(request) shares serve
+   x-lingo-needs and x-lingo-calls, and x-lingo-internal on a helper, a function whose name starts with _, which Onsay
+   lists nowhere. /name alone is its main, and a lingo with serve(request) shares serve
    alone, at its route. */
 static val *described(arena *a, val *e) {
   const char *name = text_or(e, "name", "");
@@ -1843,7 +1843,8 @@ static val *described(arena *a, val *e) {
     rec_set(a, op, "x-lingo-function", v_cstr(a, id));
     rec_set(a, op, "x-lingo-needs", rec_get(f, "needs") ? rec_get(f, "needs") : v_list(a));
     rec_set(a, op, "x-lingo-calls", rec_get(f, "lingos") ? rec_get(f, "lingos") : v_num(a, 0));
-    if (strstr(does, "'s own use") || (serve && !strcmp(name, "onsay"))) rec_set(a, op, "x-lingo-internal", VBOOL(1));
+    if (truthy(rec_get(f, "internal") ? rec_get(f, "internal") : NOTHING) || (serve && !strcmp(name, "onsay")))
+      rec_set(a, op, "x-lingo-internal", VBOOL(1));
     rec_set(a, item, serve ? "get" : "post", op);
     rec_set(a, paths, v_text(a, path.s, path.n)->t.s, item);
     buf_free(&path);

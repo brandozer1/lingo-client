@@ -1,7 +1,4 @@
-// agent.ls - Your AI helper: it talks with the person, gets things done with the lingos it finds and makes, and gives a
-// program one answer. Its AI is the ai lingo beside it, the person's one key or Onsay's own AI, so the agent never
-// handles keys. Other agents for other kinds of work are written the same way, each on ai.chat.
-//
+"Your AI helper: it talks with the person, gets things done with the lingos it finds and makes, and gives a program one answer. Its AI is the ai lingo beside it, the person's one key or Onsay's own AI, so the agent never handles keys. Other agents for other kinds of work are written the same way, each on ai.chat."
 // 1. ask(prompt, messages=nothing, model=nothing) -> text, or {questions}; with messages, {text, messages, work} or
 //                                  {questions, messages, work}: its reply, or how far it got after 60 turns or 7
 //                                  minutes, or one or two short questions back. messages is the conversation so far,
@@ -26,15 +23,8 @@
 
 ////////// 1. ASKING //////////
 
-// 1. The AI agent answers what the person said, reading the whole conversation, and does what it asks with other lingos
-// on the way, making new ones when none does it. Use it for anything said to Onsay in a chat: greetings, small talk,
-// questions, anything about the conversation like what did you just say, and tasks that need other lingos to be worked
-// out and done. prompt is what was just said or asked, with everything it needs. messages is the conversation, oldest
-// first, ending with prompt: the whole log as chat messages, with the tools used and what they gave. Give it whenever
-// there is one, and it gives back what it added to it with its reply. model is a model id of the person's AI, the one in
-// ai's settings when left out.
-fn ask(prompt, messages=nothing, model=nothing) {
-  me = {place: placed(), lingos: lingos_here(), model: model}
+fn ask(prompt, messages=nothing, model=nothing) "The AI agent answers what the person said, reading the whole conversation, and does what it asks with other lingos on the way, making new ones when none does it. Use it for anything said to Onsay in a chat: greetings, small talk, questions, anything about the conversation like what did you just say, and tasks that need other lingos to be worked out and done. prompt is what was just said or asked, with everything it needs. messages is the conversation, oldest first, ending with prompt: the whole log as chat messages, with the tools used and what they gave. Give it whenever there is one, and it gives back what it added to it with its reply. model is a model id of the person's AI, the one in ai's settings when left out." {
+  me = {place: _placed(), lingos: _lingos_here(), model: model}
   said = []
   for m in messages ?? [] {
     if std.length(said) > 0 or m.role == "user" {said += [m]}
@@ -48,43 +38,39 @@ fn ask(prompt, messages=nothing, model=nothing) {
     // Out of turns or time, about 7 of the 10 minutes a run may take, it says how far it got, so the work can go on.
     last = turn == 60 or compute.now() - began > 420
     try {
-      m = thought(me, said, picture, last)
+      m = _thought(me, said, picture, last)
     } catch e {
       if picture == nothing {fail e}
-      m = thought(me, said + [{role: "user", content: "That picture couldn't be shown: this AI may not take pictures. Read the words instead."}], nothing, last)
+      m = _thought(me, said + [{role: "user", content: "That picture couldn't be shown: this AI may not take pictures. Read the words instead."}], nothing, last)
     }
     picture = nothing
     said += [m]
-    if m.tool_calls == nothing {return ended(m.content, messages, said, start)}
+    if m.tool_calls == nothing {return _ended(m.content, messages, said, start)}
     asking = nothing
     for c in m.tool_calls {
       args = {}
       try {args = std.from_json(c.function.arguments) ?? {}} catch e {args = {}}
-      try {chat.step(stepped(c.function.name, args))} catch e {}
-      got = used(me, c.function.name, args)
+      try {chat.step(_stepped(c.function.name, args))} catch e {}
+      got = _used(me, c.function.name, args)
       if got.picture != nothing {
         picture = got.picture
         got = "Here it is, in the next message"
       }
       if got == nothing {
-        asking = asked(args.questions)
+        asking = _asked(args.questions)
         got = "Asked the person. Their answers come as their next message"
       }
       said += [{role: "tool", tool_call_id: c.id, content: got}]
     }
-    if asking != nothing {return ended({questions: asking}, messages, said, start)}
+    if asking != nothing {return _ended({questions: asking}, messages, said, start)}
   }
-  return ended("I ran out of time for this go. Ask me to go on and I'll pick up from here.", messages, said, start)
+  return _ended("I ran out of time for this go. Ask me to go on and I'll pick up from here.", messages, said, start)
 }
 
 ////////// HELPERS //////////
 
-// The model's next message, from the person's AI with the agent's guide and tools: a picture, a JPEG in base64, goes with
-// this one turn and is never kept in the conversation, and last asks it to stop and say how far it got. Asked once more
-// when it fails for any reason but the key or the account, since a slow or busy model often answers the second time. A
-// picture that fails is left to ask to go on without it. For the agent's own use.
-fn thought(me, said, picture, last) {
-  told = [{role: "system", content: guide(me)}] + said
+fn _thought(me, said, picture, last) "The model's next message, from the person's AI with the agent's guide and tools: a picture, a JPEG in base64, goes with this one turn and is never kept in the conversation, and last asks it to stop and say how far it got. Asked once more when it fails for any reason but the key or the account, since a slow or busy model often answers the second time. A picture that fails is left to ask to go on without it." {
+  told = [{role: "system", content: _guide(me)}] + said
   if picture != nothing {
     told += [{role: "user", content: [
       {type: "text", text: "The picture you asked to see:"},
@@ -95,18 +81,17 @@ fn thought(me, said, picture, last) {
     told += [{role: "user", content: "You are out of time for this go. Use no more tools. Say briefly what is done, what is left and what comes next, so the work can go on when asked."}]
   }
   try {
-    return ai.chat(told, described(), me.model)
+    return ai.chat(told, _described(), me.model)
   } catch e {
     why = std.text(e)
     if picture != nothing or "key" in why or "Sign in" in why or "subscri" in why {fail e}
     try {chat.step("The AI was slow to answer, so I'm asking again")} catch x {}
     compute.wait(2)
-    return ai.chat(told, described(), me.model)
+    return ai.chat(told, _described(), me.model)
   }
 }
 
-// What a tool call is doing, in a few plain words, for the person's chat. For the agent's own use.
-fn stepped(name, a) {
+fn _stepped(name, a) "What a tool call is doing, in a few plain words, for the person's chat." {
   if name == "run" or name == "start" {return "Running {std.slice(std.text(a.command), 0, 80)}"}
   if name == "read" {return "Reading {a.path}"}
   if name == "write" or name == "edit" {return "Changing {a.path}"}
@@ -130,9 +115,7 @@ fn stepped(name, a) {
   return "Working"
 }
 
-// What ask gives: the answer alone, or, given a conversation, with the messages it added to it, as chat messages with
-// nothing of Claude's own thinking. For the agent's own use.
-fn ended(answer, messages, said, start) {
+fn _ended(answer, messages, said, start) "What ask gives: the answer alone, or, given a conversation, with the messages it added to it, as chat messages with nothing of Claude's own thinking." {
   if messages == nothing {return answer}
   added = []
   for m in std.slice(said, start) {
@@ -144,14 +127,12 @@ fn ended(answer, messages, said, start) {
     added += [m]
   }
   out = answer.questions != nothing ? {questions: answer.questions, messages: added} : {text: answer, messages: added}
-  work = worked(added)
+  work = _worked(added)
   if work != nothing {out.work = work}
   return out
 }
 
-// The steps among those messages in short, newest first and at most 6000 characters, so whoever goes on knows how far it
-// got and what it saw, or nothing when it took none. For the agent's own use.
-fn worked(added) {
+fn _worked(added) "The steps among those messages in short, newest first and at most 6000 characters, so whoever goes on knows how far it got and what it saw, or nothing when it took none." {
   calls = {}
   steps = []
   for m in added {
@@ -162,9 +143,7 @@ fn worked(added) {
   return std.slice(text.join(list.reverse(steps), "\n"), 0, 6000)
 }
 
-// Which computer this is and the person's others, as {me, computers}, me its address like laptop.brandon and computers
-// a line each, or nothing where it isn't signed in to Onsay. For the agent's own use.
-fn placed() {
+fn _placed() "Which computer this is and the person's others, as \{me, computers}, me its address like laptop.brandon and computers a line each, or nothing where it isn't signed in to Onsay." {
   try {
     s = onsay.status()
     if not s.signed_in or s.device == nothing {return nothing}
@@ -180,9 +159,7 @@ fn placed() {
   }
 }
 
-// The lingos running on this computer, a few lines each: its name and what it is, then each function and what it does,
-// but ai and the agent itself, which it never calls. For the agent's own use.
-fn lingos_here() {
+fn _lingos_here() "The lingos running on this computer, a few lines each: its name and what it is, then each function and what it does, but ai and the agent itself, which it never calls." {
   out = ""
   for l in lingo.list() {
     if l.name != "ai" and l.name != "agent" {
@@ -193,9 +170,7 @@ fn lingos_here() {
   return out == "" ? "\nNone yet." : out
 }
 
-// What the agent's model is told it is, how it works, the lingos here and the person's computers. For the agent's own
-// use.
-fn guide(me) {
+fn _guide(me) "What the agent's model is told it is, how it works, the lingos here and the person's computers." {
   at = me.place == nothing ? "this computer" : me.place.me
   lines = [
     "You are Onsay's AI agent. A person talks to you in Onsay's chat, or a program asks you for one answer. You run as a lingo, an app that lets Onsay work with one of their computers. You get things done for them, quickly and well.",
@@ -229,21 +204,17 @@ fn guide(me) {
     "",
     "# Lingo in short",
     "A lingo is one .ls file of functions and nothing else, like this:",
-    "// chess-site - Plays chess on chess.com in the browser.",
-    "//",
-    "// 1. read_board(tab=nothing) -> \{fen, turn\}: the position on the page",
+    "\"Plays chess on chess.com in the browser.\"",
     "",
-    "// 1. The position on the chess.com page as \{fen, turn\}, turn white or black. tab is the browser tab, the open one when left out.",
-    "fn read_board(tab=nothing) \{",
-    "  found = browser.run(script(), tab)",
+    "fn read_board(tab: whole? \"the browser tab, the open one when left out\" = nothing) -> \{fen: text, turn: text\} \"The position on the chess.com page, turn white or black.\" \{",
+    "  found = browser.run(_script(), tab)",
     "  return \{fen: found.fen, turn: found.turn\}",
     "\}",
     "",
-    "// For chess-site's own use: the script that reads the board from the page.",
-    "fn script() \{",
+    "fn _script() \{",
     "  return \"...\"",
     "\}",
-    "- The comment right above a function says what it does and what its values are, for anyone choosing it. A helper's starts For <lingo>'s own use, which keeps it out of the list.",
+    "- The text before the first function says what the lingo is. The text after a function's signature says what it does, and text after a value says what it is, for anyone choosing it. A type after a value's name, like city: text, and -> type after the values say what it takes and gives, and are optional: text, number, whole, bool, list, record, any, a list's [type], a record's \{name: type, maybe?: type\}, one|other, and type? for one that may be nothing. A function whose name starts with _ is the lingo's own and kept out of the list. Comments are only comments.",
     "- Values: nothing, true, false, numbers, \"text\" with \{name\} inside for a value, lists [1, 2] and records \{a: 1\}. Names need no declaring. x.part and x[i] give nothing when it isn't there.",
     "- Statements: x = e, x += e, if c \{...\} else \{...\}, while c \{...\}, for x in list \{...\}, for k, v in record \{...\}, return e, fail \"why\", try \{...\} catch e \{...\}. Blocks always in braces, conditions need no parentheses.",
     "- Operators: + - * / %, == != < > <= >=, and or not, a ?? b for b when a is nothing, c ? a : b, a in b.",
@@ -268,11 +239,9 @@ fn guide(me) {
   return text.join(lines, "\n")
 }
 
-// The agent's tools, as OpenAI writes them. Each needs the values its needs names, else its first. For the agent's own
-// use.
-fn described() {
+fn _described() "The agent's tools, as OpenAI writes them. Each needs the values its needs names, else its first." {
   text = {type: "string"}
-  all = here() + [
+  all = _here() + [
     {name: "read_lingo", does: "Gives back a lingo's code and its openapi.json, its settings and such, to change it or learn from it", takes: {name: text}},
     {name: "save_lingo", does: "Writes a lingo, or changes one, on this computer, and starts it at once. Give its whole code, every function it keeps. It gives back its functions, or the first mistake in the code to fix. openapi only when it has settings, as read_lingo gives it", takes: {
       name: {type: "string", description: "Its name, lower case with dashes, for the one thing it is about, like chess-site"},
@@ -304,9 +273,7 @@ fn described() {
   return out
 }
 
-// The tools that run right here. Every computer has the same calls, but one with no screen can't use those that need it,
-// which input.cursor, needing nothing, tells. For the agent's own use.
-fn here() {
+fn _here() "The tools that run right here. Every computer has the same calls, but one with no screen can't use those that need it, which input.cursor, needing nothing, tells." {
   text = {type: "string"}
   all = [
     {name: "run", does: "Runs a command in this computer's shell and gives back its exit code and output. Waits for it to end, 10 minutes at most", takes: {command: text}},
@@ -329,9 +296,7 @@ fn here() {
   ]
 }
 
-// Types words where the cursor is, a long text pasted, which is exact and quick, then reads back what the field with the
-// keyboard holds, so the model knows whether it came out right, and fixes it when it didn't. For the agent's own use.
-fn typed(words) {
+fn _typed(words) "Types words where the cursor is, a long text pasted, which is exact and quick, then reads back what the field with the keyboard holds, so the model knows whether it came out right, and fixes it when it didn't." {
   words = std.text(words)
   if std.length(words) > 200 {
     input.paste(words)
@@ -350,8 +315,7 @@ fn typed(words) {
   return "Typed, but it didn't come out right. The field now holds:\n{shown}\nFix it before going on: select what is wrong and type it again, or clear the field and type it all again."
 }
 
-// A picture file as a JPEG in base64, at most 1280 across, small enough to send a model. For the agent's own use.
-fn pictured(path) {
+fn _pictured(path) "A picture file as a JPEG in base64, at most 1280 across, small enough to send a model." {
   script = text.join([
     "$ErrorActionPreference='Stop'",
     "trap \{[Console]::Out.Write($_.Exception.GetBaseException().Message);exit 1\}",
@@ -372,16 +336,13 @@ fn pictured(path) {
   return done.out
 }
 
-// Text a tool gave, cut to what a model can sensibly read. For the agent's own use.
-fn cut(text) {
+fn _cut(text) "Text a tool gave, cut to what a model can sensibly read." {
   most = 30000
   if std.length(text) <= most {return text}
   return std.slice(text, 0, most) + "\n(cut here: {std.length(text) - most} more characters)"
 }
 
-// The questions the model asks, at most two, in the questions format: {question, why, choices}, why and choices when it
-// gave them, else its words alone. The app adds Something else and Skip. For the agent's own use.
-fn asked(list) {
+fn _asked(list) "The questions the model asks, at most two, in the questions format: \{question, why, choices}, why and choices when it gave them, else its words alone. The app adds Something else and Skip." {
   out = []
   for q in list ?? [] {
     words = std.text(q.question ?? q)
@@ -399,14 +360,9 @@ fn asked(list) {
   return out
 }
 
-// What a tool the model asked for gave, as text, or what went wrong, in plain words. Questions are asked in the person's
-// chat here and their answers given, each after its question, or nothing when there is no chat here to ask them in. It
-// never reaches itself: its lingo tool never picks the agent on this computer, since a lingo(...) never picks the
-// function asking where it runs, and its use tool refuses an address of it. An agent on another computer it may ask. For
-// the agent's own use.
-fn used(me, name, a) {
+fn _used(me, name, a) "What a tool the model asked for gave, as text, or what went wrong, in plain words. Questions are asked in the person's chat here and their answers given, each after its question, or nothing when there is no chat here to ask them in. It never reaches itself: its lingo tool never picks the agent on this computer, since a lingo(...) never picks the function asking where it runs, and its use tool refuses an address of it. An agent on another computer it may ask." {
   if name == "questions" {
-    q = asked(a.questions)
+    q = _asked(a.questions)
     try {got = chat.ask(q)} catch e {return nothing}
     if got == nothing {return "Nobody answered in time"}
     out = ""
@@ -457,16 +413,16 @@ fn used(me, name, a) {
       input.click_text(a.words)
       got = "Clicked"
     } else if name == "type" {
-      got = typed(a.text)
+      got = _typed(a.text)
     } else if name == "press" {
       input.shortcut(a.keys)
       got = "Pressed"
     } else if name == "see" {
-      return {picture: pictured(a.path)}
+      return {picture: _pictured(a.path)}
     } else {
       return "There's no tool called {name}"
     }
-    return cut(std.text(got ?? "It gave nothing back"))
+    return _cut(std.text(got ?? "It gave nothing back"))
   } catch e {
     return "That didn't work: {e}"
   }

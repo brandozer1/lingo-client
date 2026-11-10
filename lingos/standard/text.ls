@@ -1,7 +1,4 @@
-// text.ls - Text work for a program: splitting and joining, replacing, trimming, lower and upper case, padding,
-// cutting short, slugs, cases like title, camel and snake, templates like "Hi {name}", words and lines, repeating, and
-// starts with and ends with. Whether text holds a part is the operator in: part in text.
-//
+"Text work for a program: splitting and joining, replacing, trimming, lower and upper case, padding, cutting short, slugs, cases like title, camel and snake, templates like \"Hi \{name}\", words and lines, repeating, and starts with and ends with. Whether text holds a part is the operator in: part in text."
 // 1. split(text, sep=",")                        -> [text]: parted at every sep, into characters when sep is ""
 // 2. join(list, sep="")                          -> text: each item as text, sep between
 // 3. replace(text, find, with)                   -> text: every find
@@ -21,9 +18,7 @@
 
 ////////// 1-6. PARTS AND CASES //////////
 
-// 1. Text parted at every sep, like "a,b" into ["a", "b"], or into its characters when sep is "". sep is what to part
-// it at.
-fn split(text, sep=",") {
+fn split(text, sep=",") "Text parted at every sep, like \"a,b\" into [\"a\", \"b\"], or into its characters when sep is \"\". sep is what to part it at." {
   out = []
   s = std.bytes(sep)
   if s == [] {
@@ -46,21 +41,16 @@ fn split(text, sep=",") {
   return out
 }
 
-// 2. A list's items as one text, with sep between them, like ["a", "b"] joined by "-" as a-b. nothing is empty, and a
-// list or record is written as JSON.
-fn join(list, sep="") {
+fn join(list, sep="") "A list's items as one text, with sep between them, like [\"a\", \"b\"] joined by \"-\" as a-b. nothing is empty, and a list or record is written as JSON." {
   n = std.length(list)
   if n < 2 {return std.text(list[0])}
   h = (n - n % 2) / 2
   return join(std.slice(list, 0, h), sep) + std.text(sep) + join(std.slice(list, h), sep)
 }
 
-// 3. Text with every find in it replaced by with, like replace("a-b-c", "-", " "). find is what to replace, with what
-// goes in its place.
-fn replace(text, find, with) {return join(split(text, find), with)}
+fn replace(text, find, with) "Text with every find in it replaced by with, like replace(\"a-b-c\", \"-\", \" \"). find is what to replace, with what goes in its place." {return join(split(text, find), with)}
 
-// 4. Text without the spaces, tabs and line ends at its start and end.
-fn trim(text) {
+fn trim(text) "Text without the spaces, tabs and line ends at its start and end." {
   b = std.bytes(text)
   from = 0
   to = std.length(b)
@@ -69,44 +59,33 @@ fn trim(text) {
   return std.from_bytes(std.slice(b, from, to))
 }
 
-// 5. Text in lower case: Latin letters with their accents, Greek and Cyrillic. A letter whose other case is longer stays
-// as it is.
-fn lower(text) {return cased(text, false)}
+fn lower(text) "Text in lower case: Latin letters with their accents, Greek and Cyrillic. A letter whose other case is longer stays as it is." {return _cased(text, false)}
 
-// 6. Text in upper case, the same letters as lower, so German ß stays ß.
-fn upper(text) {return cased(text, true)}
+fn upper(text) "Text in upper case, the same letters as lower, so German ß stays ß." {return _cased(text, true)}
 
 ////////// 7-9. SHAPING //////////
 
-// 7. Text filled out to a width with fill, at the end, the start or both, like 7 as 007. Text already that long stays
-// as it is. width is how many characters it should be. fill is what to fill with. at is start, end or both.
-fn pad(text, width, fill=" ", at="end") {
+fn pad(text, width, fill=" ", at="end") "Text filled out to a width with fill, at the end, the start or both, like 7 as 007. Text already that long stays as it is. width is how many characters it should be. fill is what to fill with. at is start, end or both." {
   t = std.text(text)
   n = width - std.length(t)
   if n <= 0 or fill == "" {return t}
   half = (n - n % 2) / 2
-  if at == "both" {return filled(fill, half) + t + filled(fill, n - half)}
-  return at == "start" ? filled(fill, n) + t : t + filled(fill, n)
+  if at == "both" {return _filled(fill, half) + t + _filled(fill, n - half)}
+  return at == "start" ? _filled(fill, n) + t : t + _filled(fill, n)
 }
 
-// 8. Text cut to at most most characters, ending with the ending when it was cut. ending is what a cut text ends with.
-fn truncate(text, most, ending="...") {
+fn truncate(text, most, ending="...") "Text cut to at most most characters, ending with the ending when it was cut. ending is what a cut text ends with." {
   t = std.text(text)
   if std.length(t) <= most {return t}
   keep = most - std.length(ending)
   return std.slice(t, 0, keep < 0 ? 0 : keep) + ending
 }
 
-// 9. Text as a slug for a web address or file name: lower case words joined by -, accents dropped. "Café au Lait!" is
-// cafe-au-lait.
-fn slug(text) {return join(words(plain(lower(text))), "-")}
+fn slug(text) "Text as a slug for a web address or file name: lower case words joined by -, accents dropped. \"Café au Lait!\" is cafe-au-lait." {return join(words(_plain(lower(text))), "-")}
 
 ////////// 10-11. CASES AND TEMPLATES //////////
 
-// 10. Text in a case: title (Hello World), sentence (Hello world), camel (helloWorld), pascal (HelloWorld), snake
-// (hello_world), kebab (hello-world) or constant (HELLO_WORLD). style is title, sentence, camel, pascal, snake, kebab
-// or constant.
-fn case(text, style) {
+fn case(text, style) "Text in a case: title (Hello World), sentence (Hello world), camel (helloWorld), pascal (HelloWorld), snake (hello_world), kebab (hello-world) or constant (HELLO_WORLD). style is title, sentence, camel, pascal, snake, kebab or constant." {
   joins = {title: " ", sentence: " ", camel: "", pascal: "", snake: "_", kebab: "-", constant: "_"}
   if not (style in joins) {fail "style is title, sentence, camel, pascal, snake, kebab or constant"}
   out = []
@@ -118,9 +97,7 @@ fn case(text, style) {
   return join(out, joins[style])
 }
 
-// 11. A template with each {name} filled from a record, and {a.b} from a part inside one, like "Hi {name}, you have
-// {count} new". A part the record hasn't got is left empty, and a { with no } after it stays as it is.
-fn template(text, values) {
+fn template(text, values) "A template with each \{name} filled from a record, and \{a.b} from a part inside one, like \"Hi \{name}, you have \{count} new\". A part the record hasn't got is left empty, and a \{ with no } after it stays as it is." {
   parts = split(text, "\{")
   out = [parts[0]]
   for part in std.slice(parts, 1) {
@@ -138,8 +115,7 @@ fn template(text, values) {
 
 ////////// 12-14. WORDS, LINES, REPEATING //////////
 
-// 12. The words in text, parted at spaces and punctuation, and at a capital after a small letter, so helloWorld is two.
-fn words(text) {
+fn words(text) "The words in text, parted at spaces and punctuation, and at a capital after a small letter, so helloWorld is two." {
   out = []
   w = ""
   for c in std.text(text) {
@@ -159,11 +135,9 @@ fn words(text) {
   return out
 }
 
-// 13. The lines in text, Windows line ends too.
-fn lines(text) {return split(replace(text, std.from_bytes([13, 10]), "\n"), "\n")}
+fn lines(text) "The lines in text, Windows line ends too." {return split(replace(text, std.from_bytes([13, 10]), "\n"), "\n")}
 
-// 14. Text repeated a number of times, with sep between.
-fn repeat(text, times, sep="") {
+fn repeat(text, times, sep="") "Text repeated a number of times, with sep between." {
   out = []
   for i in 1..times {out += [std.text(text)]}
   return join(out, sep)
@@ -171,32 +145,27 @@ fn repeat(text, times, sep="") {
 
 ////////// 15-16. CHECKS //////////
 
-// 15. Whether text starts with part. part is what it may start with. ignore_case is whether case doesn't matter.
-fn starts_with(text, part, ignore_case=false) {
-  p = same(part, ignore_case)
-  return std.slice(same(text, ignore_case), 0, std.length(p)) == p
+fn starts_with(text, part, ignore_case=false) "Whether text starts with part. part is what it may start with. ignore_case is whether case doesn't matter." {
+  p = _same(part, ignore_case)
+  return std.slice(_same(text, ignore_case), 0, std.length(p)) == p
 }
 
-// 16. Whether text ends with part. part is what it may end with. ignore_case is whether case doesn't matter.
-fn ends_with(text, part, ignore_case=false) {
-  p = same(part, ignore_case)
-  return p == "" or std.slice(same(text, ignore_case), -std.length(p)) == p
+fn ends_with(text, part, ignore_case=false) "Whether text ends with part. part is what it may end with. ignore_case is whether case doesn't matter." {
+  p = _same(part, ignore_case)
+  return p == "" or std.slice(_same(text, ignore_case), -std.length(p)) == p
 }
 
 ////////// HELPERS //////////
 
-// Text as it is, or in lower case when case doesn't matter. For text's own use.
-fn same(text, ignore_case) {return ignore_case ? lower(text) : std.text(text)}
+fn _same(text, ignore_case) "Text as it is, or in lower case when case doesn't matter." {return ignore_case ? lower(text) : std.text(text)}
 
-// fill repeated to exactly n characters. For text's own use.
-fn filled(fill, n) {
+fn _filled(fill, n) "fill repeated to exactly n characters." {
   t = std.text(fill)
   while std.length(t) < n {t += t}
   return std.slice(t, 0, n)
 }
 
-// Latin letters with accents as the plain letters, in lower case: é is e and ß is ss. For text's own use.
-fn plain(text) {
+fn _plain(text) "Latin letters with accents as the plain letters, in lower case: é is e and ß is ss." {
   out = std.text(text)
   for p in [["àáâãäåā", "a"], ["çćč", "c"], ["èéêëēė", "e"], ["ìíîïī", "i"], ["ñń", "n"], ["òóôõöøō", "o"], ["ùúûüū", "u"], ["ýÿ", "y"], ["śš", "s"], ["žźż", "z"],
     ["ł", "l"], ["ß", "ss"], ["æ", "ae"], ["œ", "oe"]] {
@@ -205,9 +174,7 @@ fn plain(text) {
   return out
 }
 
-// Text in upper case when up, else lower, by each letter's code: one byte for a to z, two for the other alphabets, and
-// longer characters kept as they are. For text's own use.
-fn cased(text, up) {
+fn _cased(text, up) "Text in upper case when up, else lower, by each letter's code: one byte for a to z, two for the other alphabets, and longer characters kept as they are." {
   b = std.bytes(text)
   n = std.length(b)
   out = []
@@ -218,7 +185,7 @@ fn cased(text, up) {
       out += [up and x >= 97 and x <= 122 ? x - 32 : not up and x >= 65 and x <= 90 ? x + 32 : x]
       i += 1
     } else if x >= 192 and x < 224 and i + 1 < n {
-      c = other((x - 192) * 64 + b[i + 1] - 128, up)
+      c = _other((x - 192) * 64 + b[i + 1] - 128, up)
       out += [192 + (c - c % 64) / 64, 128 + c % 64]
       i += 2
     } else {
@@ -229,9 +196,7 @@ fn cased(text, up) {
   return std.from_bytes(out)
 }
 
-// A two byte letter's other case by its code: Latin with its accents, Greek and Cyrillic, or the same code when it has
-// none. For text's own use.
-fn other(c, up) {
+fn _other(c, up) "A two byte letter's other case by its code: Latin with its accents, Greek and Cyrillic, or the same code when it has none." {
   odd = c % 2 == 1
   pairs = (c >= 256 and c <= 311) or (c >= 330 and c <= 375)
   shifted = (c >= 313 and c <= 328) or (c >= 377 and c <= 382)

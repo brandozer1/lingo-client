@@ -1,6 +1,4 @@
-// url.ls - Web addresses for a program: one taken apart into its scheme, host, port, path, query and hash, and built
-// again, paths joined, and queries to and from records, their parts encoded and decoded.
-//
+"Web addresses for a program: one taken apart into its scheme, host, port, path, query and hash, and built again, paths joined, and queries to and from records, their parts encoded and decoded."
 // 1. parse(address)    -> {scheme, user, host, port, path, query, hash}: query a record, port a number, missing parts nothing
 // 2. build(parts)      -> text: those parts as an address again, query a record or text
 // 3. join(base, path)  -> text: one / between them, or path itself when it is a whole address
@@ -9,27 +7,24 @@
 
 ////////// 1-3. ADDRESSES //////////
 
-// 1. A web address in parts: {scheme, user, host, port, path, query, hash}, the query a record of text, the port a
-// number, and any part it has not got nothing. The path and hash are kept as they are written, and the host in lower
-// case.
-fn parse(address) {
+fn parse(address) "A web address in parts: \{scheme, user, host, port, path, query, hash}, the query a record of text, the port a number, and any part it has not got nothing. The path and hash are kept as they are written, and the host in lower case." {
   out = {scheme: nothing, user: nothing, host: nothing, port: nothing, path: "", query: {}, hash: nothing}
-  rest = cut(text.trim(std.text(address)), "#")
+  rest = _cut(text.trim(std.text(address)), "#")
   out.hash = rest[1]
-  rest = cut(rest[0], "?")
+  rest = _cut(rest[0], "?")
   out.query = from_query(rest[1] ?? "")
-  rest = cut(rest[0], "://")
+  rest = _cut(rest[0], "://")
   if rest[1] == nothing {
     out.path = rest[0]
     return out
   }
   out.scheme = text.lower(rest[0])
-  rest = cut(rest[1], "/")
+  rest = _cut(rest[1], "/")
   out.path = rest[1] == nothing ? "" : "/" + rest[1]
-  host = cut(rest[0], "@")
+  host = _cut(rest[0], "@")
   if host[1] != nothing {out.user = host[0]}
   host = host[1] ?? host[0]
-  port = cut_last(host, ":")
+  port = _cut_last(host, ":")
   n = std.number(port[1] ?? "")
   if n != nothing and std.text(n) == port[1] {
     host = port[0]
@@ -39,9 +34,7 @@ fn parse(address) {
   return out
 }
 
-// 2. A web address from its parts, as parse gives them: {scheme, user, host, port, path, query, hash}, query a record
-// or text.
-fn build(parts) {
+fn build(parts) "A web address from its parts, as parse gives them: \{scheme, user, host, port, path, query, hash}, query a record or text." {
   p = parts ?? {}
   out = [p.scheme == nothing ? "" : p.scheme + "://", p.user == nothing ? "" : p.user + "@", p.host ?? "", p.port == nothing ? "" : ":" + std.text(p.port)]
   path = p.path ?? ""
@@ -52,8 +45,7 @@ fn build(parts) {
   return text.join(out)
 }
 
-// 3. A base address and a path joined with one / between them, or the path itself when it is a whole address.
-fn join(base, path) {
+fn join(base, path) "A base address and a path joined with one / between them, or the path itself when it is a whole address." {
   b = std.text(base)
   p = std.text(path)
   if "://" in p {return p}
@@ -64,9 +56,7 @@ fn join(base, path) {
 
 ////////// 4-5. QUERIES //////////
 
-// 4. A record as a query: a=1&b=two%20words. A list gives its name once for each item, a part that is nothing is left
-// out, and any other that isn't text is written as text.
-fn to_query(values) {
+fn to_query(values) "A record as a query: a=1&b=two%20words. A list gives its name once for each item, a part that is nothing is left out, and any other that isn't text is written as text." {
   out = []
   for k, v in values ?? {} {
     for x in std.slice(std.to_json(v), 0, 1) == "[" ? v : [v] {
@@ -76,15 +66,13 @@ fn to_query(values) {
   return text.join(out, "&")
 }
 
-// 5. A query as a record of text, a list for a name given more than once. A + is a space, as forms send one, and a ? at
-// the start is skipped.
-fn from_query(text) {
+fn from_query(text) "A query as a record of text, a list for a name given more than once. A + is a space, as forms send one, and a ? at the start is skipped." {
   out = {}
   t = std.text(text)
   if std.slice(t, 0, 1) == "?" {t = std.slice(t, 1)}
   for pair in text.split(t, "&") {
     if pair == "" {continue}
-    kv = cut(text.replace(pair, "+", " "), "=")
+    kv = _cut(text.replace(pair, "+", " "), "=")
     k = encode.from_url(kv[0])
     v = encode.from_url(kv[1] ?? "")
     had = out[k]
@@ -95,14 +83,12 @@ fn from_query(text) {
 
 ////////// HELPERS //////////
 
-// Text in two at the first sep: [before, after], after nothing when sep isn't in it. For url's own use.
-fn cut(text, sep) {
+fn _cut(text, sep) "Text in two at the first sep: [before, after], after nothing when sep isn't in it." {
   parts = text.split(text, sep)
   return std.length(parts) == 1 ? [text, nothing] : [parts[0], text.join(std.slice(parts, 1), sep)]
 }
 
-// Text in two at the last sep: [before, after], after nothing when sep isn't in it. For url's own use.
-fn cut_last(text, sep) {
+fn _cut_last(text, sep) "Text in two at the last sep: [before, after], after nothing when sep isn't in it." {
   parts = text.split(text, sep)
   return std.length(parts) == 1 ? [text, nothing] : [text.join(std.slice(parts, 0, -1), sep), parts[-1]]
 }

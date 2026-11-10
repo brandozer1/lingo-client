@@ -238,6 +238,7 @@ const CASES = [
   // memo, a Lingo lingo on the core's own storage, loaded from the .lingo file pack made of it, called by its routes.
   { path: '/memo/remember', values: { k: 'milk', v: '2 litres' }, check: gives(null) },
   { path: '/memo/remember', values: ['eggs', '6'], check: gives(null) },
+  { name: 'types: a value of the wrong type, from outside, is refused with what it should be', path: '/memo/remember', values: { k: 5, v: 'x' }, check: fails(500, /k is text, but this is number/) },
   { path: '/memo/recall?k=milk', check: gives('2 litres') },
   { path: '/memo/all', check: gives(['eggs', 'milk']) },
   { name: '/name alone is its main', path: '/asker', check: gives("asker's main") },
@@ -347,7 +348,7 @@ const CASES = [
   { lingo: 'onsay', windows: true, name: 'input: the pointer mode', path: '/desk/cursor_modes', check: gives(['virtual', 'real', 'virtual']) },
   { lingo: 'onsay', windows: true, name: 'input: a mode it has not', path: '/onsay/input/cursor', values: { how: 'ghost' }, check: fails(500, /virtual or real/) },
   { lingo: 'onsay', windows: true, name: 'input: how input acts, changed and back', path: '/desk/input_modes', check: gives([{ headless: true, no_follow: true }, { headless: false, no_follow: false }, { headless: true, no_follow: true }]) },
-  { lingo: 'onsay', windows: true, name: 'input: how input acts is true or false', path: '/onsay/input/modes', values: { headless: 'yes' }, check: fails(500, /headless is true or false/) },
+  { lingo: 'onsay', windows: true, name: 'input: how input acts is true or false', path: '/onsay/input/modes', values: { headless: 'yes' }, check: fails(500, /headless is bool, but this is text/) },
   { lingo: 'onsay', windows: true, name: 'input: point at words on screen', path: '/desk/point_at_words', check: gives([true, true, true]) },
   { lingo: 'onsay', windows: true, name: 'input: point at a box, then stop', path: '/onsay/input/point_at', values: [10, 10, 60, 20, 'here', 1], check: (r) => gives(null)(r) },
   { lingo: 'onsay', windows: true, path: '/onsay/input/stop_pointing', check: gives(null) },
@@ -758,7 +759,7 @@ const WEB_CASES = [
     return seen && before.status === 404 && gives('late')(await web('/late'))
   }],
   ['lingo.save: a lingo written by another runs at once, with its functions given back, and lingo.code reads it as written', async () => {
-    const code = '// made - for the tests: written by maker.\n\n// Says hello.\nfn hello() {return "hello"}\n'
+    const code = '"for the tests: written by maker."\n\nfn hello() "Says hello." {return "hello"}\n'
     const made = await post('/maker/make', { name: 'made', code })
     const read = await post('/maker/read', { name: 'made' })
     return made.status === 200 && same(made.json, [{ name: 'hello', does: 'Says hello.' }]) && gives('hello')(await web('/made/hello')) &&
@@ -768,11 +769,11 @@ const WEB_CASES = [
     const all = (await post('/maker/here', {})).json ?? []
     const made = all.find((l) => l.name === 'made')
     return made?.about === 'for the tests: written by maker.' && same(made.functions, [{ name: 'hello', does: 'Says hello.' }]) && !all.some((l) => l.name === 'onsay') &&
-      !all.find((l) => l.name === 'agent')?.functions.some((f) => f.name === 'described')
+      !all.find((l) => l.name === 'agent')?.functions.some((f) => f.name === '_described')
   }],
   ["lingo.save: code that can't run says why, and saving it again fixed runs it", async () => {
-    const broken = await post('/maker/make', { name: 'made', code: '// made - broken.\n\n// Breaks.\nfn hello() {return 1 +}\n' })
-    await post('/maker/make', { name: 'made', code: '// made - fixed.\n\n// Says hi.\nfn hi() {return "hi"}\n' })
+    const broken = await post('/maker/make', { name: 'made', code: '"broken."\n\nfn hello() "Breaks." {return 1 +}\n' })
+    await post('/maker/make', { name: 'made', code: '"fixed."\n\nfn hi() "Says hi." {return "hi"}\n' })
     return broken.status >= 400 && /made was saved, but it can't run: /.test(broken.json?.error) && gives('hi')(await web('/made/hi'))
   }],
   ['pack: a folder made into its .lingo file, its paths made from its code, with what each needs', async () => {
@@ -1389,8 +1390,13 @@ const session = (link) => {
     report('catalog: settings are named in its manifest', same(entry('prefs')?.openapi['x-lingo'].settings.map((x) => x.name ?? x), ['units', 'name']) &&
       !entry('memo')?.openapi['x-lingo'].settings)
     report('catalog: ai is the AI for every lingo, with prompt and chat, and agent asks it, with one function to ask the agent', has('ai') && phrase('ai', 'ai.prompt') && phrase('ai', 'ai.chat') && has('agent') && phrase('agent', 'agent.ask') && !phrase('agent', 'agent.chat') && !entry('openrouter'))
-    report("catalog: a helper whose comment says it is for its lingo's own use is marked x-lingo-internal, and nothing else", phrase('agent', 'agent.described')?.['x-lingo-internal'] === true &&
+    report('catalog: a helper, a function whose name starts with _, is marked x-lingo-internal, and nothing else', phrase('agent', 'agent._described')?.['x-lingo-internal'] === true &&
       !('x-lingo-internal' in phrase('agent', 'agent.ask')) && !ops('memo').some((o) => 'x-lingo-internal' in o))
+    report("catalog: a function's words, its values' types and words, and what it gives, from the text and types in its signature", (() => {
+      const o = phrase('memo', 'memo.remember'), p = schema(o)?.properties ?? {}
+      return o?.summary === 'Keeps it under that name.' && p.k?.type === 'string' && p.k?.description === 'the name to keep it under' && p.v?.description === 'what to keep' &&
+        o.responses?.['200']?.content?.['application/json']?.schema?.type === 'null' && about('memo') === "things to remember, kept in Onsay's own storage on this device."
+    })())
     report('catalog: native is ready, one phrase that calls into the system', phrase('onsay', 'native.call') !== undefined)
     report('catalog: a native without its library', /nolibrary\.dll/.test(entry('nolibrary').error))
     report('catalog: a lingo calling what this computer has not got, or spelled wrong, still loads', entry('broken') && !entry('broken').error && entry('typo') && !entry('typo').error)

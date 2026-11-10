@@ -44,16 +44,16 @@ anywhere, which is only needed when the boundary would otherwise be unclear.
 fn f(n){if n<2{return n}return f(n-1)+f(n-2)}return f(15)
 ```
 
-**Comments** start with `//` and run to the end of the line.
+**Comments** start with `//` and run to the end of the line. They are only comments: what a lingo or a function is and does is plain text in its code (section 2), so it keeps its place however the code is laid out.
 
 **Names** are letters, digits and `_`, not starting with a digit: `total`, `row_2`, `_tmp`. Case matters.
 
-**Keywords** (19 words, plus `null`, which means the same as `nothing`):
+**Keywords** (18 words, plus `null`, which means the same as `nothing`):
 
 | Kind      | Words                                          |
 |-----------|------------------------------------------------|
 | Control   | `if` `else` `while` `for` `in` `break` `continue` |
-| Functions | `fn` `return` `tool`                           |
+| Functions | `fn` `return`                                  |
 | Errors    | `try` `catch` `fail`                           |
 | Logic     | `and` `or` `not`                               |
 | Values    | `true` `false` `nothing`                       |
@@ -62,7 +62,7 @@ A keyword can't be a name, except after a `.`: `row.in`, `dev.fail(...)` and `{i
 
 `lingo(...)`, `use(...)` and `setting(...)` aren't keywords, but they are part of the language too (sections 6 and 7).
 
-**Symbols:** `= += -= *= /=`, `+ - * / %`, `== != < > <= >=`, `&& || !`, `?? ? :`, `..`, `( ) [ ] { }`, `, . ;`
+**Symbols:** `= += -= *= /=`, `+ - * / %`, `== != < > <= >=`, `&& || !`, `?? ? :`, `..`, `( ) [ ] { }`, `, . ;`, and `->` and `|` in signatures
 
 **Numbers** are digits with an optional fraction: `3`, `0.5`, `1048576`. A minus sign is the operator, so `-3` is minus
 three.
@@ -74,17 +74,35 @@ three.
 
 ## 2. Functions
 
-A lingo's code is a list of functions, in any order, each name once, and nothing else (section 11):
+A lingo's code is a list of functions, in any order, each name once, and nothing else, with the text before the first
+saying what the lingo is (section 11):
 
 ```
-fn name(param, param=default, ...){ ...steps... }
+"what the lingo is"
+fn name(value: type "what it is" = default, ...) -> type "what it does" { ...steps... }
 ```
 
-- **Functions** are called by name, before or after where they are written. Their params are given in order. Called
+- **Functions** are called by name, before or after where they are written. Their values are given in order. Called
   at the lingo's route, from outside it, they are given by name or in order (section 11).
 - **Defaults** are expressions, worked out when the value is missing or `nothing`, left to right, so a default can use
-  an earlier param: `fn f(a, b=a*2)`. A value with no default that is missing is `nothing`.
-- `tool` is a keyword with no use in a lingo, whose file holds `fn` blocks only.
+  an earlier value: `fn f(a, b=a*2)`. A value with no default that is missing is `nothing`.
+- **Types** are optional, the same words every computer's own calls are written with: `text`, `number`, `whole`,
+  `bool`, `list`, `record`, `bytes`, `any`, `nothing`, a meaning like `path` or `url`, a list's `[type]`, a record's
+  `{name: type, maybe?: type}`, `one|other` for either, and `type?` for one that may be `nothing`. `-> type` after the
+  values is what it gives. A value given from outside, at the lingo's route, must be of its type, else the call fails:
+  `k is text, but this is number`.
+- **Text after the values,** or after `-> type`, is what the function does, and text after a value's name and type is
+  what that value is: plain text, with no `{}` in it. They are what people and the lingo search read (section 11).
+- **A function whose name starts with `_`** is the lingo's own: its other functions call it, but it is never shared,
+  and Onsay lists it nowhere.
+
+```
+"The weather, from the open forecast."
+fn now(city: text "a city's name, like Rome", days: whole = 1) -> text "The weather in a city now, in words." {
+  return _ask(city, days)
+}
+fn _ask(city, days) {return http.send("GET", "https://example.com/{city}?days={days}").text}
+```
 
 Functions are not values. They can't be stored in a name, passed, returned or built while running. That is what keeps
 every program fully known before it runs.
@@ -123,7 +141,7 @@ every program fully known before it runs.
 | `for k, v in e {...}`                      | The same, with the position or part name in `k` and the value in `v` |
 | `break`                                    | Leaves the innermost loop                                |
 | `continue`                                 | Skips to the next turn of the innermost loop             |
-| `return e`, `return`                       | Ends the function or tool with a value, or with nothing  |
+| `return e`, `return`                       | Ends the function or script with a value, or with nothing |
 | `fail e`                                   | Stops with an error whose message is `e` as text         |
 | `try{...}catch e{...}`                     | Runs the first block, and the second if it fails, with the error's message in `e` |
 | `f(...)`, `group.phrase(...)`              | A call, run for what it does                             |
@@ -151,7 +169,7 @@ every program fully known before it runs.
 
 Anything else is an error. A range in a `for` is counted, never built into a list first.
 
-**Names** belong to the function or tool they are set in. Blocks don't make new ones: a name set inside a loop or an
+**Names** belong to the function or script they are set in. Blocks don't make new ones: a name set inside a loop or an
 `if` is still there after it. Reading a name that was never set gives `nothing`.
 
 ## 5. Expressions
@@ -412,13 +430,12 @@ A lingo is a `.lingo` file in a computer's lingos folder: a zip of two files, it
 itself, like its settings. Its listing, what it shares, is made from the code by the compiler (`listing` in
 `core/lingo.c`, Compiling):
 
-- **Every `fn`** is a function it shares, called at its route, like `/memo/recall`, or by its dotted name,
-  `memo.recall(k)`, from a lingo in the same folder. Its values and their plain defaults are its `fn`'s own. A default
-  worked out as it runs, like `o={a: 1}`, shows as `nothing`.
-- **The comment lines right above a `fn`** say what it does: what it gives, when to use it and when not to, in the
-  words a person would ask with. A number at their start, like `1.`, a legend's, is left off.
-- **The first comment lines of the file,** up to a blank line or an empty `//`, are what the lingo is, its about, with
-  `memo - ` or `memo.ls - ` at their start left off. They are never a `fn`'s too, so a blank line goes after them.
+- **Every `fn`** but those whose names start with `_` is a function it shares, called at its route, like `/memo/recall`,
+  or by its dotted name, `memo.recall(k)`, from a lingo in the same folder. Its values and their plain defaults are its
+  `fn`'s own, with their types and words. A default worked out as it runs, like `o={a: 1}`, shows as `nothing`.
+- **The text after a `fn`'s values** says what it does: what it gives, when to use it and when not to, in the words a
+  person would ask with.
+- **The text before the first `fn`** is what the lingo is, its about.
 - **Its settings** are those its `openapi.json` lists, below, then any other its code reads with `setting("key")`.
 - **Its name** is its file's: lower case letters, digits, `_` and `-`, not starting or ending with `-` or `_`. `lingo` is
   never one.
@@ -426,28 +443,22 @@ itself, like its settings. Its listing, what it shares, is made from the code by
 The test lingo `memo` (`core/test/lingos/memo/memo.ls`, shortened here):
 
 ```
-// memo - things to remember, kept in Onsay's own storage on this device.
-//
-// 1. recall(k)         -> text?: what was kept under k
-// 2. all(prefix="")    -> [text]: every name kept
+"things to remember, kept in Onsay's own storage on this device."
 
-// 1. What was kept under that name.
-fn recall(k) {
-  return store.get(key(k))
+fn recall(k: text "the name it was kept under") -> text? "What was kept under that name." {
+  return store.get(_key(k))
 }
 
-// 2. Every name kept, only those that start with prefix when it is given.
-fn all(prefix="") {
+fn all(prefix: text = "") -> [text] "Every name kept, only those that start with prefix when it is given." {
   out = []
-  for k in store.keys(key(prefix)) {out += [std.slice(k, 5)]}
+  for k in store.keys(_key(prefix)) {out += [std.slice(k, 5)]}
   return out
 }
 
-// Where a name is kept in Onsay's own storage.
-fn key(k) {return "memo/" + k}
+fn _key(k) "Where a name is kept in Onsay's own storage." {return "memo/" + k}
 ```
 
-A file holds only `fn` blocks: no `tool`, and no steps outside them. Its code may call its own functions, the phrases of
+A file holds only `fn` blocks and the text before them, with no steps outside them. Its code may call its own functions, the phrases of
 the core and the computer's native lingos, the functions of every lingo in the same folder by their dotted names,
 `lingo(...)`, `use(...)` and `setting(...)`, and nothing else.
 
@@ -483,13 +494,13 @@ a `.lingo` file whose files are deflated, as most zip programs make them, loads 
   native lingo `/<route>/<group>/<function>`, like `/onsay/window/list`. Each is a `post`, its values a JSON record by
   name as its `requestBody`, and `GET` with them in the query works too. A lingo with `serve(request)`, below, shares
   `serve` alone, a `get` at its route itself, which answers every method and every path under it.
-- **`summary` and `description`** are the comment above the function, its first sentence and all of it.
+- **`summary` and `description`** are the text after the function's values, its first sentence and all of it, and
+  each value's text is its schema's `description`.
 - **`x-lingo-function`** is the function the path calls, like `memo.recall`, or a native's phrase, like `window.list`.
 - **`x-lingo-needs`** is everything it needs on the computer (section 10), through every function it reaches.
 - **`x-lingo-calls`** is how many `lingo(...)` calls it makes, through every function it reaches.
-- **`x-lingo-internal`**, `true` on a helper whose comment says it is for the lingo's own use, like "For memo's own
-  use". It is still called the same way, but Onsay lists it nowhere: not in its index, its searches or any list a person
-  sees. A native lingo's phrase says it the same way in its words.
+- **`x-lingo-internal`**, `true` on a helper, a function whose name starts with `_`. Onsay lists it nowhere: not in
+  its index, its searches or any list a person sees.
 - **`x-lingo`** is the lingo's own: its `name`, its `program`, its `route`, and its `settings` and `keep` when it has
   them, below.
 

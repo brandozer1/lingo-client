@@ -1,28 +1,22 @@
-// prefs - for the tests: settings answered on this device, from the file kept for it, its openapi.json's defaults, and
-// another lingo's.
+"for the tests: settings answered on this device, from the file kept for it, its openapi.json's defaults, and another lingo's."
 
-// Its units, metric unless set.
-fn units() {
+fn units() "Its units, metric unless set." {
   return setting("units")
 }
 
-// Its name, which has no default.
-fn name() {
+fn name() "Its name, which has no default." {
   return setting("name") ?? "no name"
 }
 
-// Its color, a setting only its code reads.
-fn color() {
+fn color() "Its color, a setting only its code reads." {
   return setting("color") ?? "blue"
 }
 
-// github's token, another lingo's setting.
-fn token() {
+fn token() "github's token, another lingo's setting." {
   return setting("token", "github")
 }
 
-// settings.set of its own, then settings.get.
-fn set_units() {
+fn set_units() "settings.set of its own, then settings.get." {
   settings.set("prefs", "units", "kelvin")
   return [units(), settings.get("prefs")]
 }

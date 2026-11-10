@@ -12,6 +12,9 @@
 // 6. key_of(name), key_sign(name), key_forget -> this computer's own keys, kept sealed in home/keys
 // 7. header_names(a, h)                       -> headers as a record by lower case name
 
+// Each lingo client uses the part it needs, so one that goes unused in one of them is no mistake.
+#pragma clang diagnostic ignored "-Wunused-function"
+
 static val *keyed(arena *a, const char *keyid);
 static int covers(const char *address, const char *here, const char *path, int listing);
 

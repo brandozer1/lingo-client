@@ -1,7 +1,4 @@
-// time.ls - Dates and times: the date and time now in words for a person, and reading, formatting, adding to and
-// comparing times, how long ago, the start of a day and the day of the week. A time is seconds since 1970, as
-// compute.now() gives the time now.
-//
+"Dates and times: the date and time now in words for a person, and reading, formatting, adding to and comparing times, how long ago, the start of a day and the day of the week. A time is seconds since 1970, as compute.now() gives the time now."
 // 1. parse(text)                                              -> number?: 2026-10-18, or 2026-10-18T14:05:00Z, +02:00 or none
 // 2. format(time, pattern="YYYY-MM-DDTHH:mm:ssZ", offset=0)   -> text: by the letters below
 // 3. add(time, amount, unit="seconds")                        -> number: seconds to years, back when amount is below 0
@@ -15,17 +12,15 @@
 
 ////////// 1-2. READING AND WRITING //////////
 
-// 1. An ISO date or time, like 2026-10-18 or 2026-10-18T14:05:00+02:00, as seconds since 1970, or nothing when it is
-// not one. One with no zone is UTC. Its clock may have seconds, with a fraction, and a zone is Z or like +02:00.
-fn parse(text) {
+fn parse(text) "An ISO date or time, like 2026-10-18 or 2026-10-18T14:05:00+02:00, as seconds since 1970, or nothing when it is not one. One with no zone is UTC. Its clock may have seconds, with a fraction, and a zone is Z or like +02:00." {
   t = std.text(text)
   if std.length(t) < 10 or t[4] != "-" or t[7] != "-" {return nothing}
-  date = [digits(std.slice(t, 0, 4)), digits(std.slice(t, 5, 7)), digits(std.slice(t, 8, 10))]
+  date = [_digits(std.slice(t, 0, 4)), _digits(std.slice(t, 5, 7)), _digits(std.slice(t, 8, 10))]
   rest = std.slice(t, 10)
   clock = [0, 0, 0]
   if rest != "" and (rest[0] == "T" or rest[0] == " ") {
     if rest[3] != ":" {return nothing}
-    clock = [digits(std.slice(rest, 1, 3)), digits(std.slice(rest, 4, 6)), 0]
+    clock = [_digits(std.slice(rest, 1, 3)), _digits(std.slice(rest, 4, 6)), 0]
     rest = std.slice(rest, 6)
     if rest != "" and rest[0] == ":" {
       n = 1
@@ -37,28 +32,25 @@ fn parse(text) {
   zone = 0
   if rest == "Z" {rest = ""}
   if std.length(rest) == 6 and (rest[0] == "+" or rest[0] == "-") and rest[3] == ":" {
-    h = digits(std.slice(rest, 1, 3))
-    m = digits(std.slice(rest, 4, 6))
+    h = _digits(std.slice(rest, 1, 3))
+    m = _digits(std.slice(rest, 4, 6))
     zone = h == nothing or m == nothing ? nothing : (rest[0] == "-" ? -1 : 1) * (h * 60 + m)
     rest = ""
   }
   if rest != "" or nothing in date or nothing in clock or zone == nothing or date[1] < 1 or date[1] > 12 or date[2] < 1 or date[2] > 31 {return nothing}
-  return ((days_of(date[0], date[1], date[2]) * 24 + clock[0]) * 60 + clock[1] - zone) * 60 + clock[2]
+  return ((_days_of(date[0], date[1], date[2]) * 24 + clock[0]) * 60 + clock[1] - zone) * 60 + clock[2]
 }
 
-// 2. A time written by a pattern, like dddd D MMMM YYYY, h:mm a: YYYY 2026, YY 26, MMMM October, MMM Oct, MM 01, M 1,
-// DD 08, D 8, dddd Sunday, ddd Sun, HH 14, H 14, hh 02, h 2, mm 05, ss 09, A PM, a pm, Z +02:00 (Z in UTC), and [words]
-// as they are. time is seconds since 1970, or ISO text like 2026-10-18T14:05:00Z, and offset hours from UTC, like -5.
-fn format(time, pattern="YYYY-MM-DDTHH:mm:ssZ", offset=0) {
-  c = parts(at(time) + offset * 3600)
+fn format(time, pattern="YYYY-MM-DDTHH:mm:ssZ", offset=0) "A time written by a pattern, like dddd D MMMM YYYY, h:mm a: YYYY 2026, YY 26, MMMM October, MMM Oct, MM 01, M 1, DD 08, D 8, dddd Sunday, ddd Sun, HH 14, H 14, hh 02, h 2, mm 05, ss 09, A PM, a pm, Z +02:00 (Z in UTC), and [words] as they are. time is seconds since 1970, or ISO text like 2026-10-18T14:05:00Z, and offset hours from UTC, like -5." {
+  c = _parts(_at(time) + offset * 3600)
   h = c.hour % 12 == 0 ? 12 : c.hour % 12
   hours = math.max(offset, -offset)
   month = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"][c.month - 1]
   day = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][c.weekday]
-  says = {YYYY: std.text(c.year), YY: two(c.year % 100), MMMM: month, MMM: std.slice(month, 0, 3), MM: two(c.month), M: std.text(c.month),
-    DD: two(c.day), D: std.text(c.day), dddd: day, ddd: std.slice(day, 0, 3), HH: two(c.hour), H: std.text(c.hour), hh: two(h), h: std.text(h),
-    mm: two(c.minute), ss: two(c.second), A: c.hour < 12 ? "AM" : "PM", a: c.hour < 12 ? "am" : "pm",
-    Z: offset == 0 ? "Z" : (offset < 0 ? "-" : "+") + two(math.round(hours, 0, "down")) + ":" + two(math.round(hours * 60) % 60)}
+  says = {YYYY: std.text(c.year), YY: _two(c.year % 100), MMMM: month, MMM: std.slice(month, 0, 3), MM: _two(c.month), M: std.text(c.month),
+    DD: _two(c.day), D: std.text(c.day), dddd: day, ddd: std.slice(day, 0, 3), HH: _two(c.hour), H: std.text(c.hour), hh: _two(h), h: std.text(h),
+    mm: _two(c.minute), ss: _two(c.second), A: c.hour < 12 ? "AM" : "PM", a: c.hour < 12 ? "am" : "pm",
+    Z: offset == 0 ? "Z" : (offset < 0 ? "-" : "+") + _two(math.round(hours, 0, "down")) + ":" + _two(math.round(hours * 60) % 60)}
   p = std.text(pattern)
   out = []
   i = 0
@@ -79,41 +71,32 @@ fn format(time, pattern="YYYY-MM-DDTHH:mm:ssZ", offset=0) {
 
 ////////// 3-5. MOVING AND COMPARING //////////
 
-// 3. A time moved by an amount of seconds, minutes, hours, days, weeks, months or years, back when the amount is below
-// 0, like a week from now or 3 months ago. Months and years go by the calendar: a month on from the 31st is the last
-// day of a shorter month. time is seconds since 1970, or ISO text like 2026-10-18T14:05:00Z.
-fn add(time, amount, unit="seconds") {
-  t = at(time)
-  u = plural(unit)
-  if u != "months" and u != "years" {return t + amount * seconds(u)}
-  c = parts(t)
+fn add(time, amount, unit="seconds") "A time moved by an amount of seconds, minutes, hours, days, weeks, months or years, back when the amount is below 0, like a week from now or 3 months ago. Months and years go by the calendar: a month on from the 31st is the last day of a shorter month. time is seconds since 1970, or ISO text like 2026-10-18T14:05:00Z." {
+  t = _at(time)
+  u = _plural(unit)
+  if u != "months" and u != "years" {return t + amount * _seconds(u)}
+  c = _parts(t)
   m = c.year * 12 + c.month - 1 + (u == "years" ? amount * 12 : amount)
   y = math.round(m / 12, 0, "down")
   month = m % 12 + 1
-  return t + (days_of(y, month, math.min(c.day, days_in(y, month))) - days_of(c.year, c.month, c.day)) * 86400
+  return t + (_days_of(y, month, math.min(c.day, _days_in(y, month))) - _days_of(c.year, c.month, c.day)) * 86400
 }
 
-// 4. How long it is from time a to time b in a unit, like the days between two dates, below 0 when b is first. Months
-// and years are whole ones by the calendar: a month isn't whole until b's day and clock have passed a's. a and b are
-// seconds since 1970, or ISO text like 2026-10-18T14:05:00Z, so the days from one ISO date to another are
-// difference(a, b, "days").
-fn difference(a, b, unit="seconds") {
-  x = at(a)
-  y = at(b)
-  u = plural(unit)
-  if u != "months" and u != "years" {return (y - x) / seconds(u)}
-  p = parts(x)
-  q = parts(y)
+fn difference(a, b, unit="seconds") "How long it is from time a to time b in a unit, like the days between two dates, below 0 when b is first. Months and years are whole ones by the calendar: a month isn't whole until b's day and clock have passed a's. a and b are seconds since 1970, or ISO text like 2026-10-18T14:05:00Z, so the days from one ISO date to another are difference(a, b, \"days\")." {
+  x = _at(a)
+  y = _at(b)
+  u = _plural(unit)
+  if u != "months" and u != "years" {return (y - x) / _seconds(u)}
+  p = _parts(x)
+  q = _parts(y)
   m = (q.year - p.year) * 12 + q.month - p.month
   if m > 0 and add(x, m, "months") > y {m -= 1}
   if m < 0 and add(x, m, "months") < y {m += 1}
   return u == "months" ? m : math.round(m / 12, 0, m >= 0 ? "down" : "up")
 }
 
-// 5. How long ago a time was, or how far off it is, in words: 3 minutes ago, in 2 hours, just now, under a minute
-// either way being just now. now is the time it is said from, now when left out.
-fn ago(time, now=nothing) {
-  d = at(now) - at(time)
+fn ago(time, now=nothing) "How long ago a time was, or how far off it is, in words: 3 minutes ago, in 2 hours, just now, under a minute either way being just now. now is the time it is said from, now when left out." {
+  d = _at(now) - _at(time)
   s = math.max(d, -d)
   if s < 60 {return "just now"}
   said = ""
@@ -126,28 +109,20 @@ fn ago(time, now=nothing) {
 
 ////////// 6-7. DAYS //////////
 
-// 6. Midnight at the start of the day a time is on, where the offset is, as seconds since 1970. offset is hours from
-// UTC, like -5.
-fn start_of_day(time, offset=0) {return math.round((at(time) + offset * 3600) / 86400, 0, "down") * 86400 - offset * 3600}
+fn start_of_day(time, offset=0) "Midnight at the start of the day a time is on, where the offset is, as seconds since 1970. offset is hours from UTC, like -5." {return math.round((_at(time) + offset * 3600) / 86400, 0, "down") * 86400 - offset * 3600}
 
-// 7. The day of the week a time is on, Monday to Sunday, where the offset is. offset is hours from UTC, like -5.
-fn day_of_week(time, offset=0) {return format(time, "dddd", offset)}
+fn day_of_week(time, offset=0) "The day of the week a time is on, Monday to Sunday, where the offset is. offset is hours from UTC, like -5." {return format(time, "dddd", offset)}
 
 ////////// 8. NOW, IN WORDS //////////
 
-// 8. The time and date now, said in words to tell a person, like Tuesday 20 October 2026, 3:42 PM. Use it for what time
-// is it, what is the time or the date, or what day is it today. zone is their time zone, hours from UTC as a number or
-// text like -4, +05:30 or UTC-4, or their local time with its offset, like 2026-10-19T16:31:07-04:00, as a device gives
-// its time. UTC, and said so, when left out.
-fn now_in_words(zone=nothing) {
-  said = format(compute.now(), "dddd D MMMM YYYY, h:mm A", zone == nothing ? 0 : hours(zone))
+fn now_in_words(zone=nothing) "The time and date now, said in words to tell a person, like Tuesday 20 October 2026, 3:42 PM. Use it for what time is it, what is the time or the date, or what day is it today. zone is their time zone, hours from UTC as a number or text like -4, +05:30 or UTC-4, or their local time with its offset, like 2026-10-19T16:31:07-04:00, as a device gives its time. UTC, and said so, when left out." {
+  said = format(compute.now(), "dddd D MMMM YYYY, h:mm A", zone == nothing ? 0 : _hours(zone))
   return zone == nothing ? said + " UTC" : said
 }
 
 ////////// HELPERS //////////
 
-// A time as seconds, from seconds or ISO text, or now when it is nothing. For time's own use.
-fn at(time) {
+fn _at(time) "A time as seconds, from seconds or ISO text, or now when it is nothing." {
   if time == nothing {return compute.now()}
   try {return time - 0} catch e {}
   t = parse(time)
@@ -155,9 +130,7 @@ fn at(time) {
   return t
 }
 
-// A time's date and clock by the civil calendar every clock counts by: its days since 1970 as a year, month and day.
-// For time's own use.
-fn parts(t) {
+fn _parts(t) "A time's date and clock by the civil calendar every clock counts by: its days since 1970 as a year, month and day." {
   s = math.round(t, 0, "down")
   days = math.round(s / 86400, 0, "down")
   clock = s - days * 86400
@@ -172,8 +145,7 @@ fn parts(t) {
     hour: math.round(clock / 3600, 0, "down"), minute: math.round(clock / 60, 0, "down") % 60, second: clock % 60, weekday: (days + 4) % 7}
 }
 
-// The days since 1970 of a date, the other way. For time's own use.
-fn days_of(year, month, day) {
+fn _days_of(year, month, day) "The days since 1970 of a date, the other way." {
   y = year - (month <= 2 ? 1 : 0)
   era = math.round(y / 400, 0, "down")
   yoe = y - era * 400
@@ -181,24 +153,20 @@ fn days_of(year, month, day) {
   return era * 146097 + yoe * 365 + math.round(yoe / 4, 0, "down") - math.round(yoe / 100, 0, "down") + doy - 719468
 }
 
-// How many days a month has. For time's own use.
-fn days_in(year, month) {return (month == 12 ? days_of(year + 1, 1, 1) : days_of(year, month + 1, 1)) - days_of(year, month, 1)}
+fn _days_in(year, month) "How many days a month has." {return (month == 12 ? _days_of(year + 1, 1, 1) : _days_of(year, month + 1, 1)) - _days_of(year, month, 1)}
 
-// Seconds in a unit that is always as long. For time's own use.
-fn seconds(unit) {
+fn _seconds(unit) "Seconds in a unit that is always as long." {
   s = {seconds: 1, minutes: 60, hours: 3600, days: 86400, weeks: 604800}[unit]
   if s == nothing {fail "a unit is seconds, minutes, hours, days, weeks, months or years"}
   return s
 }
 
-// A unit as its plural, so minute and minutes are one. For time's own use.
-fn plural(unit) {
+fn _plural(unit) "A unit as its plural, so minute and minutes are one." {
   u = text.lower(unit)
   return std.slice(u, -1) == "s" ? u : u + "s"
 }
 
-// A zone's hours from UTC, from any of the ways now_in_words takes one. For time's own use.
-fn hours(zone) {
+fn _hours(zone) "A zone's hours from UTC, from any of the ways now_in_words takes one." {
   z = text.upper(text.trim(zone))
   if "T" in z and std.length(z) > 10 {
     tail = std.slice(z, -6)
@@ -217,11 +185,9 @@ fn hours(zone) {
   return sign * (h + m / 60)
 }
 
-// A number of two digits at least. For time's own use.
-fn two(n) {return n < 10 ? "0{n}" : "{n}"}
+fn _two(n) "A number of two digits at least." {return n < 10 ? "0{n}" : "{n}"}
 
-// Text of digits only, like 08, as its whole number, or nothing when it is anything else. For time's own use.
-fn digits(t) {
+fn _digits(t) "Text of digits only, like 08, as its whole number, or nothing when it is anything else." {
   n = 0
   for c in t {
     if not (c in "0123456789") {return nothing}

@@ -1,8 +1,4 @@
-// ai - The person's AI, for every lingo: Onsay's own AI, there the moment the computer is signed in, or their own key
-// for Claude, ChatGPT, Gemini, Grok, OpenRouter, or any service that answers the way OpenAI does, like Ollama on their
-// own computer. It keeps the one key and sends each call to the service it is for, so agents and other lingos never
-// handle keys or speak to a service themselves.
-//
+"The person's AI, for every lingo: Onsay's own AI, there the moment the computer is signed in, or their own key for Claude, ChatGPT, Gemini, Grok, OpenRouter, or any service that answers the way OpenAI does, like Ollama on their own computer. It keeps the one key and sends each call to the service it is for, so agents and other lingos never handle keys or speak to a service themselves."
 // 1. prompt(prompt, system=nothing, model=nothing) -> text: the AI's one answer, no tools and nothing kept
 // 2. chat(messages, tools=nothing, model=nothing) -> {role, content, tool_calls?, thinking?}: the AI's next message for
 //                                  a conversation, OpenAI's way, for a lingo running its own loop with tools of its own,
@@ -21,24 +17,12 @@
 
 ////////// 1. ASKING //////////
 
-// 1. One answer from an AI model to a prompt, as plain text: to answer, write, summarize, translate, classify or pull
-// facts out of words, for a lingo or program that needs an AI model once. Not for a chat with the person, which an
-// agent is for. system is what the model is told it is and how to answer, like answer with one word. It uses no tools
-// and keeps nothing. model is a model id of the service it uses, the one in its settings when left out.
-fn prompt(prompt, system=nothing, model=nothing) {
+fn prompt(prompt, system=nothing, model=nothing) "One answer from an AI model to a prompt, as plain text: to answer, write, summarize, translate, classify or pull facts out of words, for a lingo or program that needs an AI model once. Not for a chat with the person, which an agent is for. system is what the model is told it is and how to answer, like answer with one word. It uses no tools and keeps nothing. model is a model id of the service it uses, the one in its settings when left out." {
   told = system == nothing ? [] : [{role: "system", content: system}]
   return chat(told + [{role: "user", content: prompt}], nothing, model).content
 }
 
-// 2. An AI model for a lingo's own agent: the model's next message for a conversation of chat messages in OpenAI's
-// format, which may call the tools it is given. Use it as the AI model of a lingo that runs its own loop and its own
-// tools, like an agent: send the conversation, run the tools it calls, add what they gave, and send it again until it
-// answers with no tool calls. messages are OpenAI's chat messages, a system message first when there is one, and a
-// message's content may hold a picture as an image_url part. tools are OpenAI's function tools, or nothing for none. It
-// gives {role: "assistant", content, tool_calls}, tool_calls only when it calls them, and thinking, which goes back
-// unchanged on that message for Claude. model is a model id of the service it uses, the one in its settings when left
-// out.
-fn chat(messages, tools=nothing, model=nothing) {
+fn chat(messages, tools=nothing, model=nothing) "An AI model for a lingo's own agent: the model's next message for a conversation of chat messages in OpenAI's format, which may call the tools it is given. Use it as the AI model of a lingo that runs its own loop and its own tools, like an agent: send the conversation, run the tools it calls, add what they gave, and send it again until it answers with no tool calls. messages are OpenAI's chat messages, a system message first when there is one, and a message's content may hold a picture as an image_url part. tools are OpenAI's function tools, or nothing for none. It gives \{role: \"assistant\", content, tool_calls}, tool_calls only when it calls them, and thinking, which goes back unchanged on that message for Claude. model is a model id of the service it uses, the one in its settings when left out." {
   system = nothing
   said = []
   for m in messages ?? [] {
@@ -48,14 +32,12 @@ fn chat(messages, tools=nothing, model=nothing) {
       said += [m]
     }
   }
-  return reply(service(model), system, said, tools ?? [])
+  return _reply(_service(model), system, said, tools ?? [])
 }
 
 ////////// HELPERS //////////
 
-// The services it can talk to with the person's own key, in the order it picks one when none is set: how it speaks to
-// each, where it answers, the setting its key is in, its default model and where a key is made. For ai's own use.
-fn services() {
+fn _services() "The services it can talk to with the person's own key, in the order it picks one when none is set: how it speaks to each, where it answers, the setting its key is in, its default model and where a key is made." {
   return {
     claude: {kind: "claude", name: "Claude", setting: "claude_key", url: "https://api.anthropic.com/v1", model: "claude-opus-5-5", keys: "console.anthropic.com"},
     chatgpt: {kind: "openai", name: "ChatGPT", setting: "openai_key", url: "https://api.openai.com/v1", model: "gpt-5-mini", keys: "platform.openai.com"},
@@ -65,27 +47,24 @@ fn services() {
   }
 }
 
-// Which AI it talks to, from its settings: {kind, name, key, url, model}, kind claude, openai or onsay, the way it is
-// spoken to. The service set wins, else the first with a key, else Onsay's AI. url, when set, is where ChatGPT, or
-// Claude with service claude, is reached instead, like Ollama's. For ai's own use.
-fn service(model) {
+fn _service(model) "Which AI it talks to, from its settings: \{kind, name, key, url, model}, kind claude, openai or onsay, the way it is spoken to. The service set wins, else the first with a key, else Onsay's AI. url, when set, is where ChatGPT, or Claude with service claude, is reached instead, like Ollama's." {
   keys = {
-    claude: given(setting("claude_key")),
-    chatgpt: given(setting("openai_key")),
-    gemini: given(setting("gemini_key")),
-    grok: given(setting("grok_key")),
-    openrouter: given(setting("openrouter_key"))
+    claude: _given(setting("claude_key")),
+    chatgpt: _given(setting("openai_key")),
+    gemini: _given(setting("gemini_key")),
+    grok: _given(setting("grok_key")),
+    openrouter: _given(setting("openrouter_key"))
   }
-  url = given(setting("url"))
-  pick = given(setting("service"))
+  url = _given(setting("url"))
+  pick = _given(setting("service"))
   if pick == nothing and url != nothing {pick = "chatgpt"}
-  for name in std.keys(services()) {
+  for name in std.keys(_services()) {
     if pick == nothing and keys[name] != nothing {pick = name}
   }
   pick = pick ?? "onsay"
-  model = model ?? given(setting("model"))
+  model = model ?? _given(setting("model"))
   if pick == "onsay" {return {kind: "onsay", name: "Onsay's AI", key: nothing, url: "https://api.onsay.dev/ai/chat", model: model}}
-  s = services()[pick]
+  s = _services()[pick]
   if s == nothing {fail "service is onsay, claude, chatgpt, gemini, grok or openrouter: set it in ai's settings, in the Onsay app or with the command line's set"}
   reached = (pick == "claude" or pick == "chatgpt") ? url : nothing
   if keys[pick] == nothing and reached == nothing {fail "{s.name} needs your API key: set {s.setting} in ai's settings, in the Onsay app. Get one at {s.keys}"}
@@ -93,17 +72,11 @@ fn service(model) {
   return {kind: s.kind, name: reached ?? s.name, key: keys[pick], url: (reached ?? s.url) + ending, model: model ?? s.model}
 }
 
-// A setting, or nothing when it is left empty. For ai's own use.
-fn given(x) {
+fn _given(x) "A setting, or nothing when it is left empty." {
   return x == "" ? nothing : x
 }
 
-// The model's next message, as OpenAI writes it: {role: "assistant", content, tool_calls}, tool_calls only when it uses
-// tools. Onsay's AI is asked with use(...) of its address, which Onsay answers for this computer's account in the same
-// shape. Claude reads the conversation in its own shape: a tool's result is the person's turn, turns of the same side
-// are one, a picture is an image block, and its own thinking goes back to it unchanged while the turn runs, kept as
-// thinking on its message. For ai's own use.
-fn reply(ai, system, said, tools) {
+fn _reply(ai, system, said, tools) "The model's next message, as OpenAI writes it: \{role: \"assistant\", content, tool_calls}, tool_calls only when it uses tools. Onsay's AI is asked with use(...) of its address, which Onsay answers for this computer's account in the same shape. Claude reads the conversation in its own shape: a tool's result is the person's turn, turns of the same side are one, a picture is an image block, and its own thinking goes back to it unchanged while the turn runs, kept as thinking on its message." {
   told = system == nothing ? [] : [{role: "system", content: system}]
   if ai.kind == "onsay" {
     body = {messages: told + said}
@@ -113,7 +86,7 @@ fn reply(ai, system, said, tools) {
       if "connected" in std.text(e) {fail "Sign in to Onsay to use its AI, or add your own key in ai's settings"}
       fail "{e}"
     }
-    return heard_openai(a)
+    return _heard_openai(a)
   }
   headers = {}
   headers["Content-Type"] = "application/json"
@@ -121,10 +94,10 @@ fn reply(ai, system, said, tools) {
     headers["x-api-key"] = ai.key
     headers["anthropic-version"] = "2023-06-01"
     headers["anthropic-beta"] = "server-side-fallback-2026-07-01"
-    body = {model: ai.model, max_tokens: 16000, messages: claude_turns(said), fallbacks: "default"}
+    body = {model: ai.model, max_tokens: 16000, messages: _claude_turns(said), fallbacks: "default"}
     if system != nothing {body.system = system}
-    if std.length(tools) > 0 {body.tools = claude_tools(tools)}
-    a = heard(ai, http.send("POST", ai.url, headers, std.to_json(body), 120))
+    if std.length(tools) > 0 {body.tools = _claude_tools(tools)}
+    a = _heard(ai, http.send("POST", ai.url, headers, std.to_json(body), 120))
     if a.stop_reason == "refusal" {return {role: "assistant", content: "Claude declined to help with that one."}}
     out = {role: "assistant", content: ""}
     thinking = []
@@ -141,19 +114,17 @@ fn reply(ai, system, said, tools) {
   if ai.key != nothing {headers["Authorization"] = "Bearer {ai.key}"}
   body = {model: ai.model, messages: told + said}
   if std.length(tools) > 0 {body.tools = tools}
-  return heard_openai(heard(ai, http.send("POST", ai.url, headers, std.to_json(body), 120)))
+  return _heard_openai(_heard(ai, http.send("POST", ai.url, headers, std.to_json(body), 120)))
 }
 
-// The conversation in Claude's shape: each message its blocks, a tool's result the person's turn, and turns of the same
-// side joined into one. For ai's own use.
-fn claude_turns(said) {
+fn _claude_turns(said) "The conversation in Claude's shape: each message its blocks, a tool's result the person's turn, and turns of the same side joined into one." {
   turns = []
   for m in said {
     blocks = m.thinking ?? []
     if m.role == "tool" {
       blocks += [{type: "tool_result", tool_use_id: m.tool_call_id, content: std.text(m.content)}]
     } else {
-      blocks += claude_blocks(m.content)
+      blocks += _claude_blocks(m.content)
     }
     for c in m.tool_calls ?? [] {
       input = {}
@@ -173,9 +144,7 @@ fn claude_turns(said) {
   return turns
 }
 
-// A message's content as Claude's blocks: its words as text, and a picture given as a data address as an image. For
-// ai's own use.
-fn claude_blocks(content) {
+fn _claude_blocks(content) "A message's content as Claude's blocks: its words as text, and a picture given as a data address as an image." {
   if content == nothing or content == "" {return []}
   if content == std.text(content) {return [{type: "text", text: content}]}
   out = []
@@ -191,8 +160,7 @@ fn claude_blocks(content) {
   return out
 }
 
-// Tools as OpenAI writes them, in the shape Claude reads. For ai's own use.
-fn claude_tools(tools) {
+fn _claude_tools(tools) "Tools as OpenAI writes them, in the shape Claude reads." {
   out = []
   for t in tools {
     out += [{name: t.function.name, description: t.function.description ?? "", input_schema: t.function.parameters ?? {type: "object", properties: {}}}]
@@ -200,8 +168,7 @@ fn claude_tools(tools) {
   return out
 }
 
-// An answer in the shape OpenAI gives, as the next message. For ai's own use.
-fn heard_openai(a) {
+fn _heard_openai(a) "An answer in the shape OpenAI gives, as the next message." {
   m = a.choices[0].message
   out = {role: "assistant", content: m.content ?? ""}
   calls = []
@@ -210,8 +177,7 @@ fn heard_openai(a) {
   return out
 }
 
-// A web answer from the AI, read as JSON, or what went wrong in plain words. For ai's own use.
-fn heard(ai, r) {
+fn _heard(ai, r) "A web answer from the AI, read as JSON, or what went wrong in plain words." {
   if r.status == 401 or r.status == 403 {fail "{ai.name} turned the key down: check it in ai's settings, in the Onsay app or with the command line's set"}
   if r.status < 200 or r.status > 299 {fail "{ai.name} answered {r.status}: {r.text}"}
   return std.from_json(r.text)
