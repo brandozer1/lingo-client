@@ -201,7 +201,7 @@ void key_forget(const char *name);
    line, and any it leaves NULL do nothing.
      running   called as it starts and each time the catalog changes, with the catalog as JSON (core/README.md), and with
                NULL as it stops. On the job thread
-     decided   each line of decisions.log as it is written, as JSON
+     decided   each decision as JSON: whether anyone but the owner may reach what they asked, and each need over the routine
      ask       lingo(...) and use(...) as a program reaches them, on the job thread: values is {"ask","values","gives",
                "context","asking","for"} or {"address","values","for"} as JSON, for the id of the request whose run asks,
                when one does, and the answer goes in answer, a record with value, or

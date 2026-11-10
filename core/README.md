@@ -39,7 +39,7 @@ What it keeps in `home`:
 | `running.json` | the lingos running, a list of their names. A lingo newly put in the lingos folder is stopped until it is started |
 | `policy.json` | the ceiling: the most any lingo may ever do here, changed only on this computer (*Who may do what*) |
 | `policy.account.json` | the account's policy, kept as a native lingo hands it in (`lingo_policy`), with `device`, this computer's name on the account |
-| `decisions.log` | every decision about who may reach what and what a lingo may do, a line of JSON each |
+| `requests.log` | every request it answered or made, and every need decided, a line of JSON each (*Who may do what*) |
 | `sent.log` | every message the onsay lingo sent Onsay, `{at, message}` a line, every token in it masked, for the person to read. Cut to its newest half past 4 MB |
 | `settings/<lingo>.json` | a lingo's settings, unless it keeps them itself (`../docs/lingo.md`, section 11). The onsay lingo's sign in is its `token` here |
 | `store/` | Onsay's own storage, the `store` phrases', one file a key |
@@ -126,13 +126,21 @@ badge the owner signed, never to a grant in the policy.
 `store` and files inside `home` are routine; anything else is logged so the person can see what an app did. A need over
 the ceiling is a 403.
 
-**`decisions.log`** has a line for each request from anyone but the owner on its port, let in or not, and each need
-over the routine, allowed or refused. Each line also goes to every running native lingo that wants it, like the onsay
-lingo, which sends it to Onsay for the account's activity feed.
+**`requests.log`** is the one log of every request, a line of JSON each, by `way`:
+
+| `way` | A line for |
+|-------|------------|
+| `in` | each request answered, the owner's too: its caller, the first signer of its badge, its lingo, route and method, its status, whether it was let in and why, and its error |
+| `out` | each request made, as `lingo_called` keeps it, every key taken out |
+| `need` | each need over the routine, allowed or refused |
+
+Whether anyone but the owner was let in, and each need, also goes to every running native lingo that wants it, like
+the onsay lingo, which sends it to Onsay for the account's activity feed. It is cut to its newest half past 4 MB.
 
 ```json
-{"at":"2026-10-28T14:00:00Z","caller":"ip 203.0.113.7","lingo":"photos","route":"/photos/share","need":null,"allowed":true,"why":"grant: public"}
-{"at":"2026-10-28T14:00:01Z","caller":"this computer","lingo":"desk","route":"/desk/tidy","need":"run","allowed":true,"why":"allowed"}
+{"at":"2026-10-28T14:00:00Z","way":"in","ms":2,"caller":"ip 203.0.113.7","lingo":"photos","route":"/photos/share","method":"GET","status":200,"allowed":true,"why":"grant: public"}
+{"at":"2026-10-28T14:00:01Z","way":"need","caller":"this computer","lingo":"desk","route":"/desk/tidy","need":"run","allowed":true,"why":"allowed"}
+{"at":"2026-10-28T14:00:02Z","way":"out","ms":180,"kind":"web","address":"https://api.example.com/v1?key=(redacted)","request":{...},"response":{...},"error":"","stopped":false}
 ```
 
 ## Command line
@@ -221,7 +229,7 @@ command line.
 | Hook | What it does |
 |------|--------------|
 | `running(catalog)` | called as it starts and each time the catalog changes, with the catalog as JSON, and with `NULL` as it stops |
-| `decided(line)` | each line of `decisions.log` as it is written |
+| `decided(line)` | each decision: whether anyone but the owner may reach what they asked, and each need over the routine |
 | `ask(values, n, stop, answer)` | answers `lingo(...)` and `use(...)`: `values` is `{ask, values, gives, context, asking, for}` or `{address, values, for}`, `for` the id of the request whose run asks, when one does, and the answer a record with `value`, or `error` and `code`. With no running lingo to ask, they are asked of the settings' `ask`, else fail with "This lingo client isn't connected to Onsay" |
 | `key(a, keyid)` | a request's signer, by its keyid like `laptop.brandon`: `{key: "ed25519:<base64>", handle, mine}`, or `NULL` |
 | `said(for, text)` | a line the run of request `for` says for the person, `chat.step` or `chat.say`: 1 when it sent it on to whoever asked, like the onsay lingo for a request Onsay sent, else 0 and it is a show line here |
@@ -239,7 +247,7 @@ What the lingo client offers it back, from any thread:
 | `lingo_push(path, text, n)` | one message for everything watching `path` on the port as a WebSocket. A GET to the port with `Upgrade: websocket` is answered like any other first, so every check applies, and on a 200 it stays open: what the lingo answered is the first message, then each push, until either side closes it. The agent loop streams `/onsay/screens` this way (`../lingos/onsay/agent.c`) |
 | `lingo_policy(a, account, device, why)` | keeps the account's policy, with its version, as the one in force, its grants, and `device`, this computer's name on the account. Refused when older than the one kept. Gives an empty record, which callers report as `clamped`: there is nothing to clamp any more |
 | `lingo_setting`, `lingo_set` | one of a lingo's settings, as this computer keeps them |
-| `lingo_called(kind, address, ask, method, url, headers, body, n, got, error, stopped, ms)` | one request made, handed to every running native lingo with `called`: each `http.send` does, each socket is kept the same way, and a native lingo calls it for a request it makes itself |
+| `lingo_called(kind, address, ask, method, url, headers, body, n, got, error, stopped, ms)` | one request made, a line of `requests.log` and handed to every running native lingo with `called`: each `http.send` does, each socket is kept the same way, and a native lingo calls it for a request it makes itself |
 | `lingo_home` | its home folder, as a whole path, for a file a native lingo keeps there, like the onsay lingo's `sent.log` |
 | `lingo_said(text)` | on the job thread, a line the running request says, handed to the running native lingo that fills `said`: 1 when it took it |
 | `key_of`, `key_sign`, `key_forget` | this computer's own key pairs, in `home/keys`, the private half never handed out |
@@ -273,7 +281,7 @@ the lingo's own functions when its `openapi.json`'s `x-lingo` says `keep` (`../d
 
 | File | Job |
 |------|-----|
-| `lingo.c` | the lingo client, whole, in sections: values and JSON, phrases, the compiler, the runner and its limits, `std`, signing, zips, the engine (where Onsay is, settings, the floor calls with `native.call`, Onsay names, `lingo(...)` and `use(...)`, lingos loaded, the catalog, the policy, callers, signatures, grants, badges and every check, the control verbs, keys, stops, requests at their routes, pack), Onsay (the link, offered to private lingos too, signing in, policy sync, the log sent), the host (the command line, the port, every request in turn on one thread), and the floor for Windows (WinHTTP, Winsock, DPAPI, `GetProcAddress`) and for Linux and Android (pthreads, POSIX files, plain sockets, `dlopen`, libcurl loaded as it starts) |
+| `lingo.c` | the lingo client, whole, in sections: values and JSON, phrases, the compiler, the runner and its limits, `std`, signing, zips, the engine (where Onsay is, settings, the floor calls with `native.call`, Onsay names, `lingo(...)` and `use(...)`, lingos loaded, the catalog, the policy, callers, signatures, grants, badges and every check, the control verbs, keys, stops, requests at their routes and their log, pack), Onsay (the link, offered to private lingos too, signing in, policy sync, the log sent), the host (the command line, the port, every request in turn on one thread), and the floor for Windows (WinHTTP, Winsock, DPAPI, `GetProcAddress`) and for Linux and Android (pthreads, POSIX files, plain sockets, `dlopen`, libcurl loaded as it starts) |
 | `lingo.h` | what a lingo attaches with: values, buffers, phrases, running and compiling, signing, the hooks, and the floor of the computer it runs on (`pl_...`). Porting is writing that floor for the new device |
 | `tlds.txt` | the web's top level domains, IANA's list, the same file Onsay keeps, made into `obj/tlds.h` by `build.ps1` for telling a name on the web from an Onsay name (*Names*) |
 | `vendor/` | code taken as it came (`../NOTICE`): Monocypher for Ed25519, zlib's puff for deflated zips, and part of libffi for `native.call`, its C the same everywhere and each chip's own part (x86-64 and arm64) |
@@ -305,7 +313,7 @@ limits and stops, settings, `lingo(...)` and `use(...)` asked of the stand-in wh
 requests to Onsay names, resolved by the stand-in, the library, the base calls for real (`test/lingos/desk/desk.ls`), which may read the screen but never act on it, the
 catalog, packing and loading, running and stopped, grants for public, a handle, a computer and a route, with except, *
 and until, badges made, handed on and refused, signatures that check out and those that don't, the account policy pushed, fetched, kept and
-refused when older, the ceiling, the root, the person's answers through an app, the decision log and its lines
+refused when older, the ceiling, the root, the person's answers through an app, `requests.log` and the decisions
 sent on, `/onsay`, its agent loop (calls run here, the step limit, a stop and Let me choose) and its sessions, `sent.log`, signing in and out from the command line and from an app, the control
 routes, every command, `call` asking `lingo(...)` and `use(...)` of its settings' `ask`, a bare core with no onsay lingo
 on port 6971, and coming back after a dropped connection and a statement that doesn't check out.

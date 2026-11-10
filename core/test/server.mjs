@@ -171,7 +171,8 @@ const command = (...args) => {
 }
 const policyFile = () => JSON.parse(readFileSync(new URL('policy.json', DATA), 'utf8'))
 const accountFile = () => JSON.parse(readFileSync(new URL('policy.account.json', DATA), 'utf8'))
-const decisions = () => readFileSync(new URL('decisions.log', DATA), 'utf8').trim().split('\n').map((l) => JSON.parse(l))
+const requests = () => readFileSync(new URL('requests.log', DATA), 'utf8').trim().split('\n').map((l) => JSON.parse(l))
+const decisions = () => requests().filter((l) => l.way !== 'out')
 // The policy the stand-in keeps: the grants at the next version, written where the core reads them, and what GET /policy
 // gives. A test that changes them puts the defaults back when it is done.
 const setGrants = (grants, device = DEVICE) => {
@@ -655,7 +656,7 @@ const WEB_CASES = [
   }],
   ['the log: each access decided, with the caller, the lingo, the route and why', async () => {
     const d = decisions()
-    return d.some((l) => l.caller === 'ip 203.0.113.8' && l.lingo === 'memo' && l.route === '/memo/all' && l.need === null && l.allowed === false && l.why === 'no grant lets them in') &&
+    return d.some((l) => l.caller === 'ip 203.0.113.8' && l.lingo === 'memo' && l.route === '/memo/all' && l.way === 'in' && l.status === 404 && l.allowed === false && l.why === 'no grant lets them in') &&
       d.some((l) => l.caller === 'ip 203.0.113.7' && l.allowed === true && l.why === 'grant: public') && d.every((l) => /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/.test(l.at))
   }],
   ['control: only the owner on its port, never through Onsay, and never by a grant in the policy', async (send) => {
@@ -1084,6 +1085,15 @@ const WEB_CASES = [
     const text = readFileSync(new URL('sent.log', DATA), 'utf8'), lines = text.trim().split('\n').map((l) => JSON.parse(l)), types = new Set(lines.map((l) => l.message.type))
     return lines.every((l) => !isNaN(Date.parse(l.at))) && ['hello', 'response', 'lingo', 'decide', 'applied', 'log', 'api'].every((t) => types.has(t)) && !types.has('ping') &&
       lines.find((l) => l.message.type === 'hello').message.token === '(hidden)' && !text.includes(`"token":"${TOKEN}"`)
+  }],
+  ['requests.log: every request answered and every one made, a line each, with whose badge and how it went, and no key', async () => {
+    const lines = requests()
+    const owner = lines.find((l) => l.way === 'in' && l.caller === 'this computer' && l.badge && l.status === 200)
+    const missing = lines.find((l) => l.way === 'in' && l.status === 404 && l.error)
+    const made = lines.find((l) => l.way === 'out' && l.kind === 'web' && l.request.url.includes('api_key=(redacted)'))
+    const asked = JSON.stringify(lines.filter((l) => l.way === 'out').map((l) => l.request))
+    return !!owner && typeof owner.ms === 'number' && !!owner.method && !!missing && !!made && !asked.includes('sekrit') &&
+      lines.some((l) => l.way === 'need') && lines.every((l) => ['in', 'out', 'need'].includes(l.way))
   }],
   ['the command line: call onsay.sign_in keeps the token Onsay gives and makes the device key, sealed; status says so; sign_out forgets the token and keeps the key', async () => {
     writeFileSync(new URL('signin.json', DATA), JSON.stringify({ home: 'test/data/signin', lingos: 'test/data/lingos', port: 6972 }))

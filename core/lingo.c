@@ -4069,9 +4069,39 @@ static const char *reached(arena *a, const char *url, int ws, buf *why) {
   return arena_fmt(a, "ws%s%s", address + 4, rest + n);   // http://x is ws://x, https://x wss://x
 }
 
-static pl_gate *core_gate;
+static pl_gate *core_gate, *log_gate;
 
 #define CALL_BODY 4096   // the most bytes of a body a call keeps (lingo_called)
+#define LOG_MOST (4 << 20)   // bytes a log in home may grow to before it is cut to its newest half
+
+// A line added to a log in home, requests.log or sent.log, cut to its newest half once it passes LOG_MOST. size is the
+// log's size as last known, -1 before it is read.
+static void log_add(const char *name, long *size, const char *line, size_t n) {
+  buf path = { 0 };
+  buf all = { 0 };
+  buf_fmt(&path, "%s/%s", set.root, name);
+  pl_enter(log_gate);
+  if (*size < 0 || *size > LOG_MOST) {
+    *size = pl_read(path.s, &all) ? (long)all.n : 0;
+    const char *half = *size > LOG_MOST ? memchr(all.s + *size / 2, '\n', *size - *size / 2) : NULL;
+    if (half && pl_write(path.s, half + 1, all.s + *size - half - 1)) *size = all.s + *size - half - 1;
+  }
+  if (pl_append(path.s, line, n)) *size += (long)n;
+  pl_leave(log_gate);
+  buf_free(&path);
+  buf_free(&all);
+}
+
+/* A line of home/requests.log, the one log of every request this lingo client answers or makes, for the person to read:
+   way is in, out, or need, a need of a lingo's decided. */
+static void requested(val *line) {
+  static long size = -1;
+  buf text = { 0 };
+  buf_json(&text, line);
+  buf_chr(&text, '\n');
+  log_add("requests.log", &size, text.s, text.n);
+  buf_free(&text);
+}
 
 // A header that carries a key, or a query value's name that says it is one: never kept in a call.
 static int secret(const char *name, int query) {
@@ -4099,7 +4129,7 @@ static val *kept_headers(arena *a, val *headers) {
   return out;
 }
 
-// lingo.h: one request made, as a line of JSON, to each running native lingo that keeps calls.
+// lingo.h: one request made, a line of requests.log, and as JSON to each running native lingo that keeps calls.
 void lingo_called(const char *kind, const char *address, const char *ask, const char *method, const char *url, val *headers,
     const char *body, size_t n, val *got, const char *error, int stopped, double ms) {
   arena *a = arena_new();
@@ -4141,6 +4171,7 @@ void lingo_called(const char *kind, const char *address, const char *ask, const 
   rec_set(a, response, "headers", kept_headers(a, got ? rec_get(got, "headers") : NULL));
   rec_set(a, response, "body", said ? said : NOTHING);
   rec_set(a, line, "at", v_cstr(a, at));
+  rec_set(a, line, "way", v_cstr(a, "out"));
   rec_set(a, line, "ms", v_num(a, ms));
   rec_set(a, line, "kind", v_cstr(a, kind));
   rec_set(a, line, "address", v_cstr(a, address ? address : safe.s));
@@ -4152,6 +4183,7 @@ void lingo_called(const char *kind, const char *address, const char *ask, const 
   buf_json(&text, line);
   for (size_t i = 1; i < 64; i++)
     if (on[i] && hooks[i].called) hooks[i].called(text.s);
+  requested(line);
   buf_free(&safe);
   buf_free(&text);
   arena_free(a);
@@ -5620,8 +5652,8 @@ void lingo_hook(const lingo_hooks *h) { hooks[loading] = *h; }
    (../../onsay/docs/lingo-function.md, Badges and grants).
    At every phrase, a need must be under the ceiling, the most this computer ever allows, and said in the lingo's
    manifest. Anything under it is allowed. net, store and files inside the root, this lingo client's home, are routine;
-   files outside it, run, screen.read, screen.act and lingos, making and changing lingos, are logged. Every decision but
-   a routine one goes in home/decisions.log. */
+   files outside it, run, screen.read, screen.act and lingos, making and changing lingos, are logged. Every request
+   answered, with who let it in, and every decision but a routine one goes in home/requests.log. */
 static const char *NEEDS[] = { "net", "store", "files.read", "files.write", "screen.read", "screen.act", "run",
   "lingos", NULL };   // the first four routine
 #define ATTACHED 10   // seconds an app counts as open after it last asked for the questions waiting
@@ -5995,17 +6027,18 @@ static const char *signer(arena *a, val *h, const char *method, const char *path
   return why;
 }
 
-// One decision in the log, home/decisions.log, a line of JSON: {at, caller, lingo, route, need, allowed, why}, and to
-// each running native lingo that wants it. need is nothing for whether the caller may reach the lingo at all.
+/* One decision, {at, caller, lingo, route, need, allowed, why}, as JSON to each running native lingo that wants it.
+   need is nothing for whether the caller may reach the lingo at all, which its request's line in requests.log says; a
+   need's is a line of its own there, way need. */
 static void core_decided(const char *need, int allowed, const char *why) {
   arena *a = arena_new();
   val *line = v_rec(a);
   buf text = { 0 };
-  buf path = { 0 };
   char at[32];
   time_t now = (time_t)pl_now();
   strftime(at, sizeof at, "%Y-%m-%dT%H:%M:%SZ", gmtime(&now));
   rec_set(a, line, "at", v_cstr(a, at));
+  if (need) rec_set(a, line, "way", v_cstr(a, "need"));
   rec_set(a, line, "caller", v_cstr(a, job.caller ? job.caller : "this computer"));
   rec_set(a, line, "lingo", job.lingo ? v_cstr(a, job.lingo) : NOTHING);
   rec_set(a, line, "route", job.path ? v_cstr(a, job.path) : NOTHING);
@@ -6015,11 +6048,8 @@ static void core_decided(const char *need, int allowed, const char *why) {
   buf_json(&text, line);
   for (size_t i = 1; i < 64; i++)
     if (on[i] && hooks[i].decided) hooks[i].decided(text.s);
-  buf_chr(&text, '\n');
-  buf_fmt(&path, "%s/decisions.log", set.home);
-  pl_append(path.s, text.s, text.n);
+  if (need) requested(line);
   buf_free(&text);
-  buf_free(&path);
   arena_free(a);
 }
 
@@ -6714,6 +6744,9 @@ void core_serve(const char *text, size_t n, const char *given, buf *out) {
   const char *refused = NULL;
   caller c = { NULL, 0, 0, NULL };
   int full;   // whether the caller reaches the control routes, and so everything here: the owner, or its badge
+  int allowed = 1;   // allowed and let, for its line in requests.log: whether it was let in, and what let it
+  const char *let = NULL;
+  double began = pl_now();
   int status = 200;
   int json = 1;   // json: the body is written as JSON
   size_t at = strcspn(p, "?");
@@ -6739,6 +6772,8 @@ void core_serve(const char *text, size_t n, const char *given, buf *out) {
   const char *badge = text_or(m, "badge", text_or(headers, "onsay-badge", NULL));
   if (!refused && badge) c.badge = badge_of(a, badge, &c.begun, &refused);
   full = !given && !refused && let_in(a, pol, &c, "/.lingo/", 0, &why);
+  if (full) let = why;
+  if (refused) allowed = 0;
   for (const char *q = p + at + (p[at] == '?'); *q;) {
     size_t len = strcspn(q, "&");
     size_t eq = strcspn(q, "=&");
@@ -6835,6 +6870,8 @@ void core_serve(const char *text, size_t n, const char *given, buf *out) {
     job.policy = pol;
     job.answers = v_list(a);
     job.id = id.s;
+    allowed = in;
+    if (!full) let = why;
     if (!full) core_decided(NULL, in, why);
     buf_fmt(&call, "%s.serve", lingo);
     if (!in) {
@@ -6939,12 +6976,33 @@ void core_serve(const char *text, size_t n, const char *given, buf *out) {
     job.id = was_id;
   }
 
+  // Its line in requests.log: who asked, with whose badge, for what, and how it was answered. Written before what a
+  // reload retired is freed, since the lingo's name is in it.
+  val *line = v_rec(a);
+  char stamp[32];
+  time_t now = (time_t)pl_now();
+  strftime(stamp, sizeof stamp, "%Y-%m-%dT%H:%M:%SZ", gmtime(&now));
+  rec_set(a, line, "at", v_cstr(a, stamp));
+  rec_set(a, line, "way", v_cstr(a, "in"));
+  rec_set(a, line, "ms", v_num(a, (pl_now() - began) * 1000));
+  rec_set(a, line, "caller", v_cstr(a, full ? "this computer" : c.name));
+  if (c.badge) rec_set(a, line, "badge", v_cstr(a, text_or(c.badge->l.v[0], "by", "")));
+  rec_set(a, line, "lingo", lingo ? v_cstr(a, lingo) : NOTHING);
+  rec_set(a, line, "route", v_text(a, p, at));
+  rec_set(a, line, "method", v_cstr(a, method));
+  rec_set(a, line, "status", v_num(a, status));
+  rec_set(a, line, "allowed", VBOOL(allowed));
+  rec_set(a, line, "why", let ? v_cstr(a, let) : NOTHING);
+  if (error.n) rec_set(a, line, "error", v_text(a, error.s, error.n));
+  requested(line);
+
   if (!--serving)
     while (retiring) arena_free(retired[--retiring]);
   if (error.n) {
     rec_set(a, got = v_rec(a), "error", v_text(a, error.s, error.n));
     json = 1;
   }
+
   buf b = { 0 };
   if (json)
     buf_json(&b, got);
@@ -6969,6 +7027,7 @@ void core_serve(const char *text, size_t n, const char *given, buf *out) {
 int core_begin(int serves) {
   live = serves;
   core_gate = pl_gate_new();
+  log_gate = pl_gate_new();
   native_begin(0);
   std_phrases();
   floor_phrases();
@@ -7041,7 +7100,6 @@ int core_pack(const char *folder, const char *to) {
 #define BEAT 20   // seconds between pings
 #define SILENT 60   // seconds without a word before the link is taken as dead
 #define FRESH 300   // seconds a signature, or a key looked up, holds
-#define LOG_MOST (4 << 20)   // bytes sent.log may grow to before it is cut to its newest half
 #define CALLS_CHUNK 100   // calls waiting before they are sent; the rest go with the next heartbeat
 
 #define say core_say
@@ -7113,12 +7171,9 @@ static double seconds_of(const char *iso) {
 
 /* Each message sent to Onsay, a line of home/sent.log, {at, message}, every token in it masked, so the person can read
    what went. Pings are left out. Cut to its newest half when it passes LOG_MOST. */
-static pl_gate *logging;
 static void sent(const char *m, size_t n) {
   static long size = -1;
   buf line = { 0 };
-  buf path = { 0 };
-  buf all = { 0 };
   char at[32];
   time_t now = (time_t)pl_now();
   strftime(at, sizeof at, "%Y-%m-%dT%H:%M:%SZ", gmtime(&now));
@@ -7131,18 +7186,8 @@ static void sent(const char *m, size_t n) {
     } else
       buf_chr(&line, m[i]);
   buf_str(&line, "}\n");
-  buf_fmt(&path, "%s/sent.log", lingo_home());
-  pl_enter(logging);
-  if (size < 0 || size > LOG_MOST) {
-    size = pl_read(path.s, &all) ? (long)all.n : 0;
-    const char *half = size > LOG_MOST ? memchr(all.s + size / 2, '\n', size - size / 2) : NULL;
-    if (half && pl_write(path.s, half + 1, all.s + size - half - 1)) size = all.s + size - half - 1;
-  }
-  if (pl_append(path.s, line.s, line.n)) size += (long)line.n;
-  pl_leave(logging);
+  log_add("sent.log", &size, line.s, line.n);
   buf_free(&line);
-  buf_free(&path);
-  buf_free(&all);
 }
 
 static int tell(pl_link *l, const char *m, size_t n) {
@@ -8061,7 +8106,6 @@ void base_calls(void);   // the calls every computer has, built for its platform
 void onsay_lingo(void) {
   static const lingo_hooks hooks = { onsay_running, onsay_decided, ask, key, said, onsay_kept };
   lock = pl_gate_new();
-  logging = pl_gate_new();
   lingo_hook(&hooks);
   phrase_add("onsay", "net, store",
       "sign_in(name: text=nothing) -> {url,code}, or {handle,key} on the command line: signs this computer in to "
