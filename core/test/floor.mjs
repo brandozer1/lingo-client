@@ -3,6 +3,7 @@
 // as anyone, and with a badge; then the floor built with the lingos a Windows computer carries, on 6976.
 //
 //   node test/floor.mjs        after build.ps1, which makes bin/test/floor.exe and bin/test/windows/floor.exe
+//   node test/floor.mjs x86    the same with the 32-bit builds, bin/test/x86/
 
 import http from 'node:http'
 import crypto from 'node:crypto'
@@ -12,8 +13,9 @@ import { mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 const ONSAY_PORT = 8788, FLOOR = 6975, WINDOWS = 6976
-const CORE = fileURLToPath(new URL('..', import.meta.url)), EXE = fileURLToPath(new URL('../bin/test/floor.exe', import.meta.url))
-const WINDOWS_EXE = fileURLToPath(new URL('../bin/test/windows/floor.exe', import.meta.url))
+const CORE = fileURLToPath(new URL('..', import.meta.url)), BUILD = process.argv[2] === 'x86' ? 'x86/' : ''
+const EXE = fileURLToPath(new URL(`../bin/test/${BUILD}floor.exe`, import.meta.url))
+const WINDOWS_EXE = fileURLToPath(new URL(`../bin/test/${BUILD}windows/floor.exe`, import.meta.url))
 const HOME = fileURLToPath(new URL('./floor-data', import.meta.url)), SETTINGS = fileURLToPath(new URL('./floor.json', import.meta.url))
 const WINDOWS_HOME = `${HOME}/windows`, WINDOWS_SETTINGS = fileURLToPath(new URL('./floor-windows.json', import.meta.url))
 

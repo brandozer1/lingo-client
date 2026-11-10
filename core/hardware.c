@@ -48,9 +48,20 @@ void win_narrow(buf *out, const wchar_t *w, int len) {
 
 ////////// 2. TIME AND THREADS //////////
 
+// The precise clock where Windows has it, 8 and later, else the ordinary one, so it starts on Windows 7 too.
 double pl_now(void) {
+  typedef VOID(WINAPI * clock_fn)(LPFILETIME);
+  static clock_fn precise;
+  static int looked;
   FILETIME ft;
-  GetSystemTimePreciseAsFileTime(&ft);
+  if (!looked) {
+    precise = (clock_fn)(void *)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "GetSystemTimePreciseAsFileTime");
+    looked = 1;
+  }
+  if (precise)
+    precise(&ft);
+  else
+    GetSystemTimeAsFileTime(&ft);
   unsigned long long t = ((unsigned long long)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
   return (double)(t - 116444736000000000ULL) / 1e7;
 }
@@ -101,9 +112,15 @@ static LONG WINAPI on_fault(EXCEPTION_POINTERS *e) {
   fault_what = what;
   fault_overflow = e->ExceptionRecord->ExceptionCode == EXCEPTION_STACK_OVERFLOW;
   CONTEXT *c = e->ContextRecord;
+#ifdef _WIN64
   c->Rsp -= 8;
   *(DWORD64 *)c->Rsp = c->Rip;
   c->Rip = (DWORD64)fault_landing;
+#else
+  c->Esp -= 4;
+  *(DWORD *)c->Esp = c->Eip;
+  c->Eip = (DWORD)fault_landing;
+#endif
   return EXCEPTION_CONTINUE_EXECUTION;
 }
 
@@ -167,9 +184,19 @@ static DWORD open_url(
   wchar_t host[256] = { 0 };
   wcsncpy(host, parts->lpszHostName, parts->dwHostNameLength < 255 ? parts->dwHostNameLength : 255);
   *step = "Connecting";
+  // The proxy as Windows finds it, from 8.1 on; before that, Windows 7's, the one its settings name.
   *session = WinHttpOpen(
       L"onsay-core", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+  if (!*session)
+    *session = WinHttpOpen(
+        L"onsay-core", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
   if (!*session) return GetLastError();
+  // TLS 1.2 and 1.3 where Windows has them, since Windows 7 leaves 1.2 off unless asked; refused when it has neither.
+  DWORD protocols = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2 | 0x00002000;   // 0x2000: TLS 1.3, in newer headers
+  if (!WinHttpSetOption(*session, WINHTTP_OPTION_SECURE_PROTOCOLS, &protocols, sizeof protocols)) {
+    protocols = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2;
+    WinHttpSetOption(*session, WINHTTP_OPTION_SECURE_PROTOCOLS, &protocols, sizeof protocols);
+  }
   WinHttpSetTimeouts(*session, 10000, 10000, 30000, 30000);
   *connection = WinHttpConnect(*session, host, parts->nPort, 0);
   return *connection ? 0 : GetLastError();

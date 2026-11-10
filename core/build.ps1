@@ -72,6 +72,13 @@ $withwin = "$lingos/windows/windows.c", "$lingos/web/web.c", "-I$lingos/onsay", 
 New-Item -ItemType Directory -Force "$here/bin/windows", "$here/bin/test/windows" | Out-Null
 build ($win + $floor + $withwin + $floorwin + $small + "-o", "$here/bin/windows/floor.exe")
 build ($win + $floor + $withwin + $floorwin + $small + "-DTEST", "-o", "$here/bin/test/windows/floor.exe")
+# The same for 32-bit Windows, 7 and later: bare, and with the lingos a Windows computer carries.
+$win32 = "-target", "x86-windows-gnu"
+New-Item -ItemType Directory -Force "$here/bin/x86/windows", "$here/bin/test/x86/windows" | Out-Null
+build ($win32 + $floor + $floorwin + $small + "-o", "$here/bin/x86/floor.exe")
+build ($win32 + $floor + $withwin + $floorwin + $small + "-o", "$here/bin/x86/windows/floor.exe")
+build ($win32 + $floor + $floorwin + $small + "-DTEST", "-o", "$here/bin/test/x86/floor.exe")
+build ($win32 + $floor + $withwin + $floorwin + $small + "-DTEST", "-o", "$here/bin/test/x86/windows/floor.exe")
 
 # Linux. -rdynamic shares the core's words with a native lingo's library, as onsay-core.lib does on Windows.
 $linux = $both + "$lingos/linux/linux.c", "$lingos/onsay/agent.c", "-I$lingos/onsay", "-DLINGO_CORE"
