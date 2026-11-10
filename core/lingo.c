@@ -3158,13 +3158,7 @@ static val *say(run *r, const char *id, val *args, val *frame, val *why) {
     for (size_t i = 0; args && args->k == V_REC && i < args->r.n; i++) list_push(r->a, given, eval(r, args->r.v[i], frame));
     return searched(r, id, given, "unknown", why ? why->t.s : arena_fmt(r->a, "This computer doesn't have the phrase %s", id));
   }
-  for (const char *n = p->needs; *n; n += strspn(n, ", ")) {   // everything it needs, like screen.act, screen.read
-    char need[32];
-    size_t len = strcspn(n, ",");
-    snprintf(need, sizeof need, "%.*s", (int)len, n);
-    if (strcmp(need, "none")) may(r, need, NULL);
-    n += len;
-  }
+  if (strcmp(p->needs, "none")) may(r, id);   // anything but pure computing is a request to this computer
   // A value left out, or nothing, takes its default, as a function's does.
   val **values = arena_get(r->a, (size_t)(p->count + 1) * sizeof *values);
   for (int i = 0; i < p->count; i++) {
@@ -3773,7 +3767,7 @@ void zip_make(buf *out, int count, const char *const *names, const buf *files) {
 //                    asked of the native lingo that answers them, or of the settings' ask
 // 3. Lingos          .lingo files and folders: read, loaded, their OpenAPI manifests, running or stopped, the catalog,
 //                    and the hooks of native lingos that run
-// 4. Policy          policy.json and the account's: callers, signatures and rules, the ceiling, the root, asks and the log
+// 4. Policy          policy.json and the account's: callers, signatures, grants and badges, asks and the log
 // 5. Stops           stopping a running request, and those running inside its wait
 // 6. Calls           one function of a lingo, run
 // 7. Lingo settings  setting(...), settings.get and settings.set, kept on this computer, never on Onsay
@@ -3791,12 +3785,12 @@ void zip_make(buf *out, int count, const char *const *names, const buf *files) {
 #define say core_say
 
 /* The request running now, for the checks at each phrase: its caller as the log names them, the lingo and function it
-   reached, like agent and agent.ask, its path, what that function's manifest says it needs, the policy in force, and
-   what the person answered this time, [{what, yes}], and its id as JSON, which each lingo(...) and use(...) it asks
-   carries as for, and the badge it came with, its grants in order. lingo is NULL outside a request, at the command line. */
+   reached, like agent and agent.ask, its path, the policy in force, and what the person answered this time,
+   [{what, yes}], and its id as JSON, which each lingo(...) and use(...) it asks carries as for, and the badge it came
+   with, its grants in order. lingo is NULL outside a request, at the command line. */
 static struct {
   const char *caller, *lingo, *fn, *path, *id;
-  val *needs, *policy, *answers, *badge;
+  val *policy, *answers, *badge;
 } job;
 
 /* What each native lingo, by its number, filled with lingo_hook as it loaded, and whether it runs in a lingo client that
@@ -5324,34 +5318,6 @@ static val *shared(arena *a, const char *name) {
   return out;
 }
 
-// What a manifest says fn needs, the x-lingo-needs of the operation whose x-lingo-function it is, or nothing listed.
-static val *said_needs(arena *a, val *m, const char *fn) {
-  val *paths = rec_get(m, "paths");
-  for (size_t i = 0; paths && paths->k == V_REC && i < paths->r.n; i++)
-    for (size_t k = 0; paths->r.v[i]->k == V_REC && k < paths->r.v[i]->r.n; k++) {
-      val *op = paths->r.v[i]->r.v[k];
-      val *needs = rec_get(op, "x-lingo-needs");
-      if (!strcmp(text_or(op, "x-lingo-function", ""), fn)) return needs && needs->k == V_LIST ? needs : v_list(a);
-    }
-  return v_list(a);
-}
-
-// Why a Lingo lingo's openapi.json says less than its code needs, or NULL when it says enough, or says no paths, which
-// are then made from its code.
-static const char *understated(arena *a, val *e) {
-  val *fns = shared(a, text_or(e, "name", ""));
-  if (!rec_get(rec_get(e, "manifest"), "paths") || rec_get(e, "fresh")) return NULL;
-  for (size_t i = 0; i < fns->l.n; i++) {
-    const char *id = text_or(fns->l.v[i], "id", "");
-    val *needs = rec_get(fns->l.v[i], "needs");
-    val *said = said_needs(a, rec_get(e, "manifest"), id);
-    for (size_t k = 0; needs && k < needs->l.n; k++)
-      if (!has(said, needs->l.v[k]->t.s))
-        return arena_fmt(a, "%s: %s needs %s, which its openapi.json doesn't say. Pack it again to say all it needs",
-            text_or(e, "file", ""), id, needs->l.v[k]->t.s);
-  }
-  return NULL;
-}
 
 /* 3. A lingo's whole OpenAPI manifest, as pack writes it: what its openapi.json says, its name, program and route in
    x-lingo, and each function it shares as a path under its route, its words, its values as JSON Schema, x-lingo-function,
@@ -5578,12 +5544,10 @@ static int load(const char *extra) {
   for (size_t i = 0; i < found->l.n; i++)
     if (!rec_get(found->l.v[i], "error") && rec_get(found->l.v[i], "code")) list_push(a, stacked, found->l.v[i]);
 
-  // Loaded together, then each checked for saying all its code needs. While one is at fault, it is set aside with its
-  // reason, and the rest load again without it.
+  // Loaded together. While one is at fault, it is set aside with its reason, and the rest load again without it.
   for (;;) {
     const char *why = NULL;
     device = lingo_load(a, offered, stacked, &why);
-    for (size_t k = 0; device && k < stacked->l.n && !why; k++) why = understated(a, stacked->l.v[k]);
     if (!why) break;
     size_t k = 0;
     for (; k < stacked->l.n; k++) {
@@ -5646,20 +5610,16 @@ void lingo_hook(const lingo_hooks *h) { hooks[loading] = *h; }
 
 ////////// 4. POLICY //////////
 
-/* Who may reach what, and what each lingo may do here. A request's caller is the owner, this computer's own, which
-   reaches everything, or whoever its proof says, a signer or Onsay, or anyone at all: they reach what a grant in the
-   policy, or the badge they came with, lets them, and anyone else gets a 404, as if it weren't there
-   (../../onsay/docs/lingo-function.md, Badges and grants).
-   At every phrase, a need must be under the ceiling, the most this computer ever allows, and said in the lingo's
-   manifest. Anything under it is allowed. net, store and files inside the root, this lingo client's home, are routine;
-   files outside it, run, screen.read, screen.act and lingos, making and changing lingos, are logged. Every request
-   answered, with who let it in, and every decision but a routine one goes in home/requests.log. */
-static const char *NEEDS[] = { "net", "store", "files.read", "files.write", "screen.read", "screen.act", "run",
-  "lingos", NULL };   // the first four routine
+/* Who may reach what: the policy alone decides. A request's caller is the owner, this computer's own, which reaches
+   everything, or whoever its proof says, a signer or Onsay, or anyone at all, or a lingo running here, by its route like
+   /weather, as each call of this computer's it makes is a request too: they reach what a grant in the policy, or the
+   badge they came with, lets them, and anyone else gets a 404, as if it weren't there
+   (../../onsay/docs/lingo-function.md, Badges and grants, and Built for low level). Every request goes in
+   home/requests.log. */
 #define ATTACHED 10   // seconds an app counts as open after it last asked for the questions waiting
 
-// The questions waiting for the person's answer, each {id, lingo, caller} and either {need, path}, whether a lingo may,
-// or {questions}, a native lingo's for the chat (lingo_ask), in the run's arena that waits.
+// The questions waiting for the person's answer, each {id, lingo, caller, questions}, a native lingo's for the chat
+// (lingo_ask), in the run's arena that waits.
 static struct {
   val *ask;
   arena *a;
@@ -5669,24 +5629,23 @@ static int waiting;   // how many wait, the last asked last
 static long questions;   // their ids
 static double polled;   // when an app last asked for them
 
+#define OWN_GRANTS "[{\"to\":\"/\",\"allow\":[\"/\"]}]"   // this computer's own grants until it has a policy.json
+
 /* 4. The policy in force, read as each request comes, so a change from the command line or by hand holds at once:
-   {ceiling, grants, device, local, account}. Its grants are the account's, home/policy.account.json, as Onsay signed
-   them, and its ceiling is this computer's, home/policy.json, the most any lingo may ever do here. local and account are
-   the two files as they are. */
+   {grants, own, device, local, account}. grants are the account's, home/policy.account.json, as Onsay keeps them; own
+   are this computer's, the grants of home/policy.json, kept only here, which with none let its own lingos reach
+   everything. local and account are the two files as they are. */
 static val *policy(arena *a) {
   val *local = home_json(a, "policy.json");
   val *account = home_json(a, "policy.account.json");
   val *out = v_rec(a);
-  val *ceiling;
+  val *own;
   if (!local || local->k != V_REC) local = v_rec(a);
   if (account && account->k != V_REC) account = NULL;
-  ceiling = rec_get(local, "ceiling");
-  if (!ceiling || ceiling->k != V_LIST) {
-    ceiling = v_list(a);
-    for (int i = 0; NEEDS[i]; i++) list_push(a, ceiling, v_cstr(a, NEEDS[i]));
-  }
-  rec_set(a, out, "ceiling", ceiling);
+  own = rec_get(local, "grants");
+  if (!own || own->k != V_LIST) own = json_parse(a, OWN_GRANTS, strlen(OWN_GRANTS), NULL);
   rec_set(a, out, "grants", account && rec_get(account, "grants") ? rec_get(account, "grants") : v_list(a));
+  rec_set(a, out, "own", own);
   rec_set(a, out, "device", v_cstr(a, account ? text_or(account, "device", "") : ""));
   rec_set(a, out, "local", local);
   rec_set(a, out, "account", account ? account : NOTHING);
@@ -5705,10 +5664,13 @@ typedef struct {
 
 static void canonical(buf *b, val *x);
 
-// Whether to, a grant's, names who: public, the very name, or a handle, every one of its computers, like brandon for
-// laptop.brandon.
+static int covers(const char *address, const char *here, const char *path, int listing);
+
+// Whether to, a grant's, names who: public, the very name, a handle, every one of its computers, like brandon for
+// laptop.brandon, or a route on this computer, every lingo running under it, like / for each of them.
 static int names(const char *to, const char *who) {
   const char *dot = strchr(who, '.');
+  if (*to == '/') return *who == '/' && covers(to, "", who, 0);
   return !strcmp(to, "public") || !strcmp(to, who) || (dot && !strcmp(to, dot + 1));
 }
 
@@ -5759,12 +5721,16 @@ static int opens(val *g, const char *here, const char *path, int listing) {
    handed on by someone a policy grant names and lets pass it on, every grant opens path, and its last is for the
    caller. The control routes, /.lingo/, take only the owner or a badge it began. why says what decided. */
 static int let_in(arena *a, val *p, const caller *c, const char *path, int listing, const char **why) {
-  val *grants = rec_get(p, "grants");
+  val *grants = v_list(a);
   int control = !strncmp(path, "/.lingo/", 8);
   buf name = { 0 };
   onsay_name(&name);
   const char *here = arena_fmt(a, "%s", name.s ? name.s : "");
   buf_free(&name);
+  for (int k = 0; k < 2; k++) {   // this computer's own grants, then the account's
+    val *some = rec_get(p, k ? "grants" : "own");
+    for (size_t i = 0; some && some->k == V_LIST && i < some->l.n; i++) list_push(a, grants, some->l.v[i]);
+  }
   if (c->owner) {
     *why = "the owner";
     return 1;
@@ -6027,10 +5993,11 @@ static const char *signer(arena *a, val *h, const char *method, const char *path
   return why;
 }
 
-/* One decision, {at, caller, lingo, route, need, allowed, why}, as JSON to each running native lingo that wants it.
-   need is nothing for whether the caller may reach the lingo at all, which its request's line in requests.log says; a
-   need's is a line of its own there, way need. */
-static void core_decided(const char *need, int allowed, const char *why) {
+/* One decision, {at, caller, lingo, route, need, allowed, why}. need is nothing for whether anyone but the owner may
+   reach what they asked, sent as JSON to each running native lingo that wants it, its request's line in requests.log
+   saying it too. need is the call, like files.read, for one of this computer's calls a lingo running here made, the
+   caller that lingo by its route: a line of requests.log each, and sent on when refused. */
+static void core_decided(const char *who, const char *route, const char *need, int allowed, const char *why) {
   arena *a = arena_new();
   val *line = v_rec(a);
   buf text = { 0 };
@@ -6038,60 +6005,36 @@ static void core_decided(const char *need, int allowed, const char *why) {
   time_t now = (time_t)pl_now();
   strftime(at, sizeof at, "%Y-%m-%dT%H:%M:%SZ", gmtime(&now));
   rec_set(a, line, "at", v_cstr(a, at));
-  if (need) rec_set(a, line, "way", v_cstr(a, "need"));
-  rec_set(a, line, "caller", v_cstr(a, job.caller ? job.caller : "this computer"));
+  if (need) rec_set(a, line, "way", v_cstr(a, "in"));
+  rec_set(a, line, "caller", v_cstr(a, who ? who : "this computer"));
   rec_set(a, line, "lingo", job.lingo ? v_cstr(a, job.lingo) : NOTHING);
-  rec_set(a, line, "route", job.path ? v_cstr(a, job.path) : NOTHING);
+  rec_set(a, line, "route", route ? v_cstr(a, route) : NOTHING);
   rec_set(a, line, "need", need ? v_cstr(a, need) : NOTHING);
   rec_set(a, line, "allowed", VBOOL(allowed));
   rec_set(a, line, "why", v_cstr(a, why));
   buf_json(&text, line);
-  for (size_t i = 1; i < 64; i++)
+  for (size_t i = 1; i < 64 && (!need || !allowed); i++)
     if (on[i] && hooks[i].decided) hooks[i].decided(text.s);
   if (need) requested(line);
   buf_free(&text);
   arena_free(a);
 }
 
-_Noreturn static void refuse(run *r, const char *need, const char *why, const char *words) {
-  core_decided(need, 0, why);
-  fail(r, "denied", "%s", words);
-}
-
-// Whether path is folder or inside it, / and \ the same, and case aside in a Windows path, like C:\Users.
-static int inside(const char *path, const char *folder) {
-  size_t n = strlen(folder);
-  int windows = folder[0] && folder[1] == ':';
-  while (n > 1 && (folder[n - 1] == '/' || folder[n - 1] == '\\') && !(windows && n == 3)) n--;
-  for (size_t i = 0; i < n; i++) {
-    char x = path[i] == '\\' ? '/' : path[i];
-    char y = folder[i] == '\\' ? '/' : folder[i];
-    if (windows) {
-      x = (char)tolower((unsigned char)x);
-      y = (char)tolower((unsigned char)y);
-    }
-    if (!x || x != y) return 0;
-  }
-  return !path[n] || path[n] == '/' || path[n] == '\\' || folder[n - 1] == '/' || folder[n - 1] == '\\';
-}
-
-/* 4. A need under the ceiling, and said in the lingo's manifest, is allowed. The ceiling is the one hard local limit:
-   net, store and files inside the root, this lingo client's home, are routine; anything else is logged so the person
-   can see it. There is no per-caller grant and no prompt. */
-void may(run *r, const char *need, const char *path) {
+/* 4. Whether the lingo running may make id, a call of this computer's like files.read, a request to its address,
+   /onsay/files/read, its caller the lingo by its route, like /weather, judged by the policy as anyone is: this
+   computer's own grants let its own lingos reach everything until they say otherwise. At the command line, outside any
+   request, it is the owner's. A refusal is a denied failure. */
+void may(run *r, const char *id) {
+  if (!job.lingo) return;
   val *p = job.policy ? job.policy : policy(r->a);
-  const char *lingo = job.lingo;
-  const char *what = path ? arena_fmt(r->a, "%s %s", need, path) : need;
-  int k = 0;
-  while (NEEDS[k] && strcmp(NEEDS[k], need)) k++;
-  if (!has(rec_get(p, "ceiling"), need))
-    refuse(r, what, "the ceiling",
-        arena_fmt(r->a, "%s needs %s, which this computer never allows", lingo ? lingo : "It", need));
-  if (!lingo) return;
-  if (!has(job.needs, need))
-    refuse(r, what, "not declared", arena_fmt(r->a, "%s needs %s, which its openapi.json doesn't say", lingo, need));
-  if (k < 2 || (k < 4 && (!path || inside(path, set.root)))) return;
-  core_decided(what, 1, "allowed");
+  const char *route = arena_fmt(r->a, "/onsay/%s", id);
+  const char *why = NULL;
+  caller c = { route_of(r->a, entry_of(job.lingo)), 0, 0, NULL };
+  for (char *x = (char *)route + 7; *x; x++)
+    if (*x == '.') *x = '/';
+  int in = let_in(r->a, p, &c, route, 0, &why);
+  core_decided(c.name, route, id, in, why);
+  if (!in) fail(r, "denied", "%s can't use %s here: no grant lets it", job.lingo, id);
 }
 
 /* 4. A question for the person, with its id, the lingo asking and its caller, and waited for in asks until an app
@@ -6245,18 +6188,15 @@ static val *core_kept(run *r, const char *lingo, const char *fn, val *values) {
   const char *was_lingo = job.lingo;
   const char *was_fn = job.fn;
   const char *id = arena_fmt(r->a, "%s.%s", lingo, fn);
-  val *was_needs = job.needs;
   keeping = lingo;
   if (job.lingo) {
     job.lingo = lingo;
     job.fn = id;
-    job.needs = said_needs(r->a, manifest_of(lingo), id);
   }
   val *got = core_call(r->a, id, values, r->stop, &code, &message);
   keeping = was;
   job.lingo = was_lingo;
   job.fn = was_fn;
-  job.needs = was_needs;
   if (!got)
     fail(r, code, "%s, which keeps %s's settings: %s", id, lingo,
         !strcmp(code, "unknown") ? "it has no function by that name" : message);
@@ -6396,7 +6336,6 @@ static val *lingo_save(run *r, val **a) {
   const char *folder = arena_fmt(ra, "%s/%s", set.lingos, name);
   val *running = home_json(ra, "running.json");
   val *e;
-  may(r, "lingos", NULL);
   if (!named(name)) fail(r, "type", "A lingo's name is lower case letters, digits, _ and -, like chess-site, and never lingo");
   if (builtin_of(name) || is_standard(name)) fail(r, "denied", "%s is built into this program, so it can't be changed", name);
   if (retiring == (int)(sizeof retired / sizeof *retired))
@@ -6428,12 +6367,11 @@ static val *lingo_save(run *r, val **a) {
    NULL with why in words.
      start, stop {lingo}             a lingo running or stopped, kept in home/running.json
      asks                            the questions waiting for the person, and the app asking counts as open to ask
-     answer {id, answer}             once, always or no to whether a lingo may, or the list of answers to questions
+     answer {id, answer}             the list of answers to questions
      settings {lingo}                its settings, each with what it is and its value now
      set {lingo, key, value}         one of them changed
      manifest {lingo}                its whole OpenAPI manifest, as the catalog has it, or why it can't load
      policy                          the policy in force, and the files it comes from
-     ceiling {needs}                 the most this computer ever allows
      call {fn, values}               a function of any lingo here, or a phrase, run as this computer, its values in order,
                                      like onsay.sign_in, its value
      badge {to, allow, except, pass, until, data, badge}
@@ -6445,10 +6383,8 @@ val *core_control(arena *a, const char *verb, val *v, const char **why) {
   const char *code = NULL;
   const char *message = NULL;
   val *out = NOTHING;
-  val *local = home_json(a, "policy.json");
   val *values = v_list(a);
   volatile int stop = 0;
-  if (!local || local->k != V_REC) local = v_rec(a);
   *why = NULL;
   if (!strcmp(verb, "start") || !strcmp(verb, "stop")) {
     val *was = home_json(a, "running.json");
@@ -6478,18 +6414,13 @@ val *core_control(arena *a, const char *verb, val *v, const char **why) {
   } else if (!strcmp(verb, "answer")) {
     val *id = rec_get(v, "id");
     val *answer = rec_get(v, "answer");
-    const char *said = text_or(v, "answer", "");
     int i = 0;
     while (i < waiting && !(id && id->k == V_NUM && rec_get(asks[i].ask, "id")->n == id->n)) i++;
     if (i == waiting) {
       *why = "That question isn't waiting any more";
       return NULL;
     }
-    if (rec_get(asks[i].ask, "need") && strcmp(said, "once") && strcmp(said, "always") && strcmp(said, "no")) {
-      *why = "The answer is once, always or no";
-      return NULL;
-    }
-    if (!rec_get(asks[i].ask, "need") && (!answer || answer->k != V_LIST)) {
+    if (!answer || answer->k != V_LIST) {
       *why = "The answer is a list, one for each question, in order";
       return NULL;
     }
@@ -6523,25 +6454,7 @@ val *core_control(arena *a, const char *verb, val *v, const char **why) {
     out = rec_get(e, "manifest");
   } else if (!strcmp(verb, "policy"))
     out = policy(a);
-  else if (!strcmp(verb, "ceiling")) {
-    val *needs = rec_get(v, "needs");
-    int good = needs && needs->k == V_LIST;
-    for (size_t i = 0; good && i < needs->l.n; i++) {
-      int k = 0;
-      while (NEEDS[k] && !(needs->l.v[i]->k == V_TEXT && !strcmp(NEEDS[k], needs->l.v[i]->t.s))) k++;
-      good = NEEDS[k] != NULL;
-    }
-    if (!good) {
-      *why = "The ceiling is a list of needs: net, store, files.read, files.write, screen.read, screen.act, run and lingos";
-      return NULL;
-    }
-    rec_set(a, local, "ceiling", needs);
-    if (!keep_json("policy.json", local)) {
-      *why = "This computer couldn't save policy.json";
-      return NULL;
-    }
-    out = policy(a);
-  } else if (!strcmp(verb, "call")) {
+  else if (!strcmp(verb, "call")) {
     const char *fn = text_or(v, "fn", "");
     val *given = rec_get(v, "values");
     if (!(out = core_call(a, fn, given && given->k == V_LIST ? given : values, &stop, &code, &message))) {
@@ -6555,7 +6468,7 @@ val *core_control(arena *a, const char *verb, val *v, const char **why) {
     if (!(out = badge_make(a, given && given->k == V_REC ? given : v, why))) return NULL;
   } else {
     *why = arena_fmt(a,
-        "There's nothing called %s here. It does start, stop, asks, answer, settings, set, manifest, policy, ceiling, call and badge",
+        "There's nothing called %s here. It does start, stop, asks, answer, settings, set, manifest, policy, call and badge",
         verb);
     return NULL;
   }
@@ -6566,7 +6479,7 @@ val *core_control(arena *a, const char *verb, val *v, const char **why) {
 
 /* 9. The account's policy as this computer keeps it, home/policy.account.json: device first, then the policy as it came.
    A version older than the one kept is refused. It returns an empty record, kept for callers that report what was
-   clamped: there is nothing to clamp any more, since the ceiling is checked at each phrase. */
+   clamped: there is nothing to clamp any more. */
 val *lingo_policy(arena *a, val *account, const char *device, const char **why) {
   val *core_kept = home_json(a, "policy.account.json");
   val *v = rec_get(account, "version");
@@ -6650,10 +6563,13 @@ int lingo_serves(void) { return live; }
 int core_look(void) {
   arena *a = arena_new();
   unsigned long long now;
-  val *grants = rec_get(policy(a), "grants");
+  val *p = policy(a);
   int outside = 0;
-  for (size_t i = 0; grants && grants->k == V_LIST && i < grants->l.n; i++)
-    outside |= !strcmp(text_or(grants->l.v[i], "to", ""), "public");
+  for (int k = 0; k < 2; k++) {   // this computer's own grants, then the account's
+    val *grants = rec_get(p, k ? "grants" : "own");
+    for (size_t i = 0; grants && grants->k == V_LIST && i < grants->l.n; i++)
+      outside |= !strcmp(text_or(grants->l.v[i], "to", ""), "public");
+  }
   look(a, &now);
   arena_free(a);
   if (now != looked) load(NULL);
@@ -6839,7 +6755,6 @@ void core_serve(const char *text, size_t n, const char *given, buf *out) {
     const char *was_fn = job.fn;
     const char *was_path = job.path;
     const char *was_id = job.id;
-    val *was_needs = job.needs;
     val *was_policy = job.policy;
     val *was_answers = job.answers;
     val *was_badge = job.badge;
@@ -6872,7 +6787,7 @@ void core_serve(const char *text, size_t n, const char *given, buf *out) {
     job.id = id.s;
     allowed = in;
     if (!full) let = why;
-    if (!full) core_decided(NULL, in, why);
+    if (!full) core_decided(c.name, job.path, NULL, in, why);
     buf_fmt(&call, "%s.serve", lingo);
     if (!in) {
       status = 404;
@@ -6933,7 +6848,6 @@ void core_serve(const char *text, size_t n, const char *given, buf *out) {
       const char *message = NULL;
       double started = pl_now();
       job.fn = call.s;
-      job.needs = said_needs(a, manifest_of(lingo), call.s);
       frame me = { top, "", 0 };
       snprintf(me.id, sizeof me.id, "%s", id.s);
       pl_enter(core_gate);
@@ -6969,7 +6883,6 @@ void core_serve(const char *text, size_t n, const char *given, buf *out) {
     job.lingo = was_lingo;
     job.fn = was_fn;
     job.path = was_path;
-    job.needs = was_needs;
     job.policy = was_policy;
     job.answers = was_answers;
     job.badge = was_badge;
@@ -7769,7 +7682,7 @@ void onsay_listen(const onsay_listener *l) { listening = *l; }
 
 /* The account's policy, from GET /policy: {version, policy, signed}, signed over {policy, version}. Checked, then handed to
    the core, which keeps it unless its version is older than the one kept, and what it applied sent back: the version and
-   clamped, which is empty since the ceiling is checked at each phrase. Anything that doesn't check out is refused, and
+   clamped, which is empty. Anything that doesn't check out is refused, and
    said. */
 static void policy_pull(void) {
   arena *a = arena_new();
@@ -8143,7 +8056,6 @@ void onsay_lingo(void) {
 //   onsay-core settings.json <verb> ...      one thing done, whether or not it runs, its answer printed as JSON:
 //     pack <folder> [<to>]                   a folder of a lingo's files made into its .lingo file
 //     start <lingo>, stop <lingo>            a lingo running or stopped
-//     ceiling <needs...>                     the most this computer ever allows
 //     policy                                 the policy in force
 //     settings <lingo>                       its settings, each with its value now
 //     set <lingo> <key> <value>              one changed. value is JSON, or text as it is when it isn't JSON
@@ -8619,9 +8531,9 @@ static void listener(void *arg) {
 
 ////////// MAIN //////////
 
-// What each verb takes, by name, in order. The last takes the rest of the words, joined by spaces, or for ceiling and
-// call as a list, and set's value and call's values are read as JSON when they are JSON.
-static const char *TAKES[][4] = { { "start", "lingo" }, { "stop", "lingo" }, { "ceiling", "needs" },
+// What each verb takes, by name, in order. The last takes the rest of the words, joined by spaces, or for call
+// as a list, and set's value and call's values are read as JSON when they are JSON.
+static const char *TAKES[][4] = { { "start", "lingo" }, { "stop", "lingo" },
   { "policy" }, { "settings", "lingo" }, { "set", "lingo", "key", "value" }, { "manifest", "lingo" },
   { "call", "fn", "values" }, { "badge", "value" } };
 
@@ -8633,7 +8545,7 @@ int main(int argc, char **argv) {
   while (verb && k < count && strcmp(TAKES[k][0], verb)) k++;
   if (verb && k == count && strcmp(verb, "pack")) {
     core_say(
-        "onsay-core %s %s isn't something it does. It does pack, start, stop, ceiling, policy, settings, set, manifest, call and badge",
+        "onsay-core %s %s isn't something it does. It does pack, start, stop, policy, settings, set, manifest, call and badge",
         path, verb);
     return 1;
   }
@@ -8674,7 +8586,7 @@ int main(int argc, char **argv) {
         parsed = !strcmp(take, "values") ? json_parse(a, argv[j], strlen(argv[j]), NULL) : NULL;
         list_push(a, list, parsed ? parsed : v_cstr(a, argv[j]));
       }
-      v = !strcmp(take, "needs") || !strcmp(take, "values") ? list : v_text(a, rest.s, rest.n);
+      v = !strcmp(take, "values") ? list : v_text(a, rest.s, rest.n);
       if (!strcmp(take, "value") && (parsed = json_parse(a, rest.s, rest.n, NULL))) v = parsed;
       rec_set(a, values, take, v);
       buf_free(&rest);

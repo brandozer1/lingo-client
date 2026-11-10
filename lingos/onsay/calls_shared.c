@@ -20,7 +20,7 @@
 #define SEARCH_SNIFF 8000   // how far into a file it looks for a 0 byte, which says the file isn't text
 
 // What each platform supplies. Its SLASH, "/" or "\\", is defined before this file is included.
-static val *path_of(run *r, val *p, const char *need);   // a path as the person means it, whole and checked
+static val *path_of(run *r, val *p);   // a path as the person means it, whole
 static void file_failed(run *r, const char *what, const char *path);   // fails, saying why this computer refused
 static val *listing(run *r, val **a, int deep);   // a folder's entries, with those inside it when deep
 static void copy_or_move(run *r, val **a, int move);
@@ -66,7 +66,7 @@ static size_t mark_length(const buf *b) {
 ////////// 2. FILES //////////
 
 static val *fs_read(run *r, val **a) {
-  val *p = path_of(r, a[0], "files.read");
+  val *p = path_of(r, a[0]);
   buf b = { 0 };
   if (!pl_read(p->t.s, &b)) file_failed(r, "read", p->t.s);
   size_t skip = mark_length(&b);
@@ -82,7 +82,7 @@ static void parent_folder(run *r, const char *path) {
 }
 
 static val *fs_write(run *r, val **a) {
-  val *p = path_of(r, a[0], "files.write");
+  val *p = path_of(r, a[0]);
   buf b = { 0 };
   if (a[1]->k == V_TEXT)
     buf_add(&b, a[1]->t.s, a[1]->t.len);
@@ -96,7 +96,7 @@ static val *fs_write(run *r, val **a) {
 }
 
 static val *fs_append(run *r, val **a) {
-  val *p = path_of(r, a[0], "files.write");
+  val *p = path_of(r, a[0]);
   const char *text = str(r, a[1]);
   parent_folder(r, p->t.s);
   if (!pl_append(p->t.s, text, strlen(text))) file_failed(r, "add to", p->t.s);
@@ -104,7 +104,7 @@ static val *fs_append(run *r, val **a) {
 }
 
 static val *fs_folder(run *r, val **a) {
-  val *p = path_of(r, a[0], "files.write");
+  val *p = path_of(r, a[0]);
   if (!pl_folder(p->t.s)) fail(r, "phrase", "can't make the folder %s", p->t.s);
   return NOTHING;
 }
@@ -215,7 +215,7 @@ static int times_in(const char *text, const char *what) {
 // files.edit: exact words in a file replaced by others. Words that are there more than once are refused unless all is
 // set, so the wrong place is never changed. Words of several lines also match a file that ends its lines \r\n.
 static val *fs_edit(run *r, val **a) {
-  val *p = path_of(r, a[0], "files.write");
+  val *p = path_of(r, a[0]);
   const char *find = str(r, a[1]);
   const char *with = str(r, a[2]);
   if (!*find) fail(r, "phrase", "files.edit needs the words to replace");

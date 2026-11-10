@@ -107,8 +107,8 @@ static int matches(run *r, val *rec, val *match) {
 }
 
 // A path as the person means it: / or \, ~ for home, downloads/desktop/documents for those folders, otherwise from home,
-// made whole, and checked with the core for need, files.read or files.write, when it is given (may in lingo.h).
-static val *path_of(run *r, val *p, const char *need) {
+// made whole.
+static val *path_of(run *r, val *p) {
   wchar_t *w = win_wide(str(r, p));
   wchar_t full[MAX_PATH * 4];
   wchar_t *base = NULL;
@@ -139,7 +139,6 @@ static val *path_of(run *r, val *p, const char *need) {
   free(w);
   if (!GetFullPathNameW(joined, sizeof full / sizeof *full, full, NULL)) wcscpy(full, joined);
   val *out = wtext(r, full, -1);
-  if (need) may(r, need, out->t.s);
   return out;
 }
 
@@ -376,7 +375,7 @@ static val *win_open(run *r, val **a) {
   int path = !strstr(t, "://") &&
       (strpbrk(t, "/\\~") || !_strnicmp(t, "downloads", 9) || !_strnicmp(t, "desktop", 7) ||
           !_strnicmp(t, "documents", 9));
-  wchar_t *target = win_wide(path ? path_of(r, a[0], NULL)->t.s : t);
+  wchar_t *target = win_wide(path ? path_of(r, a[0])->t.s : t);
   wchar_t expanded[2048];
   ExpandEnvironmentStringsW(target, expanded, 2048);
   free(target);
@@ -1629,7 +1628,7 @@ static DWORD attributes(val *p) {
 }
 
 static val *fs_exists(run *r, val **a) {
-  return VBOOL(attributes(path_of(r, a[0], "files.read")) != INVALID_FILE_ATTRIBUTES);
+  return VBOOL(attributes(path_of(r, a[0])) != INVALID_FILE_ATTRIBUTES);
 }
 
 static val *file_rec(run *r, const wchar_t *folder, WIN32_FIND_DATAW *d) {
@@ -1674,7 +1673,7 @@ static void look_in(run *r, const wchar_t *folder, const char *pattern, int deep
 }
 
 static val *listing(run *r, val **a, int deep) {
-  val *p = path_of(r, a[0], "files.read");
+  val *p = path_of(r, a[0]);
   val *out = v_list(r->a);
   DWORD at = attributes(p);
   if (at == INVALID_FILE_ATTRIBUTES || !(at & FILE_ATTRIBUTE_DIRECTORY))
@@ -1688,8 +1687,8 @@ static val *listing(run *r, val **a, int deep) {
 
 // Into to if it is a folder, otherwise as to, with the folders above it made.
 static void copy_or_move(run *r, val **a, int move) {
-  val *from = path_of(r, a[0], move ? "files.write" : "files.read");
-  val *to = path_of(r, a[1], "files.write");
+  val *from = path_of(r, a[0]);
+  val *to = path_of(r, a[1]);
   if (attributes(from) == INVALID_FILE_ATTRIBUTES) fail(r, "phrase", "there is nothing at %s", from->t.s);
   DWORD at = attributes(to);
   if (at != INVALID_FILE_ATTRIBUTES && (at & FILE_ATTRIBUTE_DIRECTORY)) {
@@ -1710,7 +1709,7 @@ static void copy_or_move(run *r, val **a, int move) {
 
 // To the Recycle Bin, so the person can always get it back.
 static val *fs_delete(run *r, val **a) {
-  val *p = path_of(r, a[0], "files.write");
+  val *p = path_of(r, a[0]);
   if (attributes(p) == INVALID_FILE_ATTRIBUTES) fail(r, "phrase", "there is nothing at %s", p->t.s);
   wchar_t *w = win_wide(p->t.s);
   size_t n = wcslen(w);

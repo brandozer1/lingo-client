@@ -43,8 +43,8 @@ static const char *home_folder(void) {
 }
 
 // A path as the person means it: ~ for home, downloads, desktop or documents for those folders, otherwise from home,
-// with . and .. worked out, and checked with the core for need, when given.
-static val *path_of(run *r, val *p, const char *need) {
+// with . and .. worked out.
+static val *path_of(run *r, val *p) {
   const char *given = str(r, p);
   const char *folder = NULL;
   size_t first = strcspn(given, "/");
@@ -86,7 +86,6 @@ static val *path_of(run *r, val *p, const char *need) {
   val *out = whole.n ? v_text(r->a, whole.s, whole.n) : v_cstr(r->a, "/");
   buf_free(&joined);
   buf_free(&whole);
-  if (need) may(r, need, out->t.s);
   return out;
 }
 
@@ -101,7 +100,7 @@ static void file_failed(run *r, const char *what, const char *path) {
 
 static val *fs_exists(run *r, val **a) {
   struct stat s;
-  return VBOOL(stat(path_of(r, a[0], "files.read")->t.s, &s) == 0);
+  return VBOOL(stat(path_of(r, a[0])->t.s, &s) == 0);
 }
 
 static val *file_rec(run *r, const char *name, const char *full, const struct stat *s) {
@@ -136,7 +135,7 @@ static void look_in(run *r, const char *folder, const char *pattern, int deep, v
 }
 
 static val *listing(run *r, val **a, int deep) {
-  val *p = path_of(r, a[0], "files.read");
+  val *p = path_of(r, a[0]);
   val *out = v_list(r->a);
   struct stat s;
   if (stat(p->t.s, &s) || !S_ISDIR(s.st_mode)) fail(r, "phrase", "there is no folder %s", p->t.s);
@@ -147,8 +146,8 @@ static val *listing(run *r, val **a, int deep) {
 
 // Into to if it is a folder, otherwise as to, with the folders above it made. Only a file can be copied, as on Windows.
 static void copy_or_move(run *r, val **a, int move) {
-  val *from = path_of(r, a[0], move ? "files.write" : "files.read");
-  val *to = path_of(r, a[1], "files.write");
+  val *from = path_of(r, a[0]);
+  val *to = path_of(r, a[1]);
   struct stat s;
   if (stat(from->t.s, &s)) fail(r, "phrase", "there is nothing at %s", from->t.s);
   const char *target = to->t.s;
@@ -173,7 +172,7 @@ static void copy_or_move(run *r, val **a, int move) {
 
 // To the trash in the person's home, so they can always get it back, the same promise as the Recycle Bin.
 static val *fs_delete(run *r, val **a) {
-  val *p = path_of(r, a[0], "files.write");
+  val *p = path_of(r, a[0]);
   struct stat s;
   if (lstat(p->t.s, &s)) fail(r, "phrase", "there is nothing at %s", p->t.s);
   buf trash = { 0 };

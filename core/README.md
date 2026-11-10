@@ -37,7 +37,7 @@ What it keeps in `home`:
 | File | What it is |
 |------|------------|
 | `running.json` | the lingos running, a list of their names. A lingo newly put in the lingos folder is stopped until it is started |
-| `policy.json` | the ceiling: the most any lingo may ever do here, changed only on this computer (*Who may do what*) |
+| `policy.json` | this computer's own grants, kept only here; with none, its own lingos reach everything (*Who may do what*) |
 | `policy.account.json` | the account's policy, kept as a native lingo hands it in (`lingo_policy`), with `device`, this computer's name on the account |
 | `requests.log` | every request it answered or made, and every need decided, a line of JSON each (*Who may do what*) |
 | `sent.log` | every message the onsay lingo sent Onsay, `{at, message}` a line, every token in it masked, for the person to read. Cut to its newest half past 4 MB |
@@ -48,9 +48,10 @@ What it keeps in `home`:
 
 ## Who may do what
 
-Every request answers two questions, and both must say yes: may this caller reach this address, and may this lingo do
-what each phrase it runs needs, here. The policy is ingress only. The whole design is in the onsay repo,
-`docs/lingo-function.md`, Badges and grants.
+Every request answers one question: does the policy let this caller make it. A lingo's own calls of this computer,
+like `files.read`, are requests too, to their address, `/onsay/files/read`, its caller the lingo by its route, like
+`/weather`. A lingo's `openapi.json` is for Onsay's index, never a permission. The whole design is in the onsay repo,
+`docs/lingo-function.md`, Badges and grants and Built for low level.
 
 **The caller** comes from whatever proof the request came with. An IP address never lets anyone in:
 
@@ -60,6 +61,7 @@ what each phrase it runs needs, here. The policy is ingress only. The whole desi
 | a signer | a request with an HTTP Message Signature (RFC 9421, Ed25519) that checks out, its signer's key looked up by the native lingo that knows keys (`key` in *Hooks*) | its keyid, like `laptop.james` |
 | onsay | Onsay's own search and agent, handed in as `onsay` | `onsay` |
 | anyone | no proof: a request to the port, or one a native lingo hands in from an address, like the first of a proxy's `x-forwarded-for` | `ip 203.0.113.7` |
+| a lingo here | a lingo running on this computer, for each call of this computer's it makes but pure computing | its route, like `/weather` |
 
 A signed request's `Signature-Input` covers `@method`, `@target-uri` and `content-digest` at least, and has `created`,
 `nonce` and `keyid`. It must check out, be made within 5 minutes, its nonce new in that time, and its `Content-Digest`
@@ -76,7 +78,7 @@ is a 401 that says why. Anyone not let in gets a 404, as if the lingo weren't th
 
 | Field | Meaning |
 |---|---|
-| `to` | `public`, a handle, every one of its computers, a computer like `laptop.alice`, or `onsay` |
+| `to` | `public`, a handle, every one of its computers, a computer like `laptop.alice`, `onsay`, or a route on this computer, every lingo under it, like `/` for all of them |
 | `allow` | addresses: one starting with `/` is on this computer, any other starts with a computer or a handle, like `desk.brandon/notes` or `brandon/notes`. `*` is any one part, and an address covers itself and everything under it |
 | `except` | addresses taken out of this grant's `allow`, never anything more |
 | `pass` | `true` when `to` may hand it on |
@@ -84,8 +86,9 @@ is a 401 that says why. Anyone not let in gets a 404, as if the lingo weren't th
 | `data` | anything the holder's lingos read with `badge.read()`. It never opens anything |
 | `sig` | `by`'s Ed25519 signature over the `sig` before it and this grant as Onsay signs (keys sorted, no spaces), without `sig` |
 
-**The policy** is the account's grants, kept by Onsay and written to `policy.account.json` here by the onsay lingo
-(`lingo_policy`), with no `by` or `sig`: they are trusted for being the policy. Everything is closed until one opens it.
+**The policy** is this computer's own grants, in `policy.json`, and the account's, kept by Onsay and written to
+`policy.account.json` here by the onsay lingo (`lingo_policy`), both with no `by` or `sig`: they are trusted for being
+the policy. Everything is closed until one opens it. The account's:
 
 ```json
 {
@@ -111,35 +114,30 @@ and lets pass it on, each grant's `to` is the next one's signer and lets it pass
 whose signature doesn't check out, or that isn't handed on, is a 401. The control routes open only to the owner or a
 badge the owner signed, never to a grant in the policy.
 
-`policy.json`, changed only on this computer, holds the ceiling:
+`policy.json`, changed only on this computer, holds its own grants. With none, it is this, so its own lingos reach
+everything; a computer that runs code it doesn't trust narrows it, like Onsay's library to `/onsay/store`:
 
 ```json
-{
-  "ceiling": ["net", "store", "files.read", "files.write", "screen.read", "screen.act", "run", "lingos"]
-}
+{ "grants": [{ "to": "/", "allow": ["/"] }] }
 ```
 
-**The ceiling** is the most this computer ever allows, every need when left out. Nothing from elsewhere can raise it.
-
-**At every phrase**, each need the lingo's `openapi.json` declares for the route the request reached
-(`x-lingo-needs`) must be under the ceiling. Then it is allowed: there is no per-caller need and no prompt. `net`,
-`store` and files inside `home` are routine; anything else is logged so the person can see what an app did. A need over
-the ceiling is a 403.
+**At every call of this computer's** a lingo makes, but pure computing, the lingo's route must be let in to the call's
+address by a grant, else the run stops with `denied`, a 403, saying `weather can't use files.read here: no grant lets
+it`. There is no prompt. At the command line, outside any request, it is the owner's.
 
 **`requests.log`** is the one log of every request, a line of JSON each, by `way`:
 
 | `way` | A line for |
 |-------|------------|
-| `in` | each request answered, the owner's too: its caller, the first signer of its badge, its lingo, route and method, its status, whether it was let in and why, and its error |
+| `in` | each request answered, the owner's too: its caller, the first signer of its badge, its lingo, route and method, its status, whether it was let in and why, and its error. And each call of this computer's a lingo made, its caller the lingo's route and `need` the call |
 | `out` | each request made, as `lingo_called` keeps it, every key taken out |
-| `need` | each need over the routine, allowed or refused |
 
-Whether anyone but the owner was let in, and each need, also goes to every running native lingo that wants it, like
+Whether anyone but the owner was let in, and each call refused a lingo, also goes to every running native lingo that wants it, like
 the onsay lingo, which sends it to Onsay for the account's activity feed. It is cut to its newest half past 4 MB.
 
 ```json
 {"at":"2026-10-28T14:00:00Z","way":"in","ms":2,"caller":"ip 203.0.113.7","lingo":"photos","route":"/photos/share","method":"GET","status":200,"allowed":true,"why":"grant: public"}
-{"at":"2026-10-28T14:00:01Z","way":"need","caller":"this computer","lingo":"desk","route":"/desk/tidy","need":"run","allowed":true,"why":"allowed"}
+{"at":"2026-10-28T14:00:01Z","way":"in","caller":"/desk","lingo":"desk","route":"/onsay/commands/run","need":"commands.run","allowed":true,"why":"grant: /"}
 {"at":"2026-10-28T14:00:02Z","way":"out","ms":180,"kind":"web","address":"https://api.example.com/v1?key=(redacted)","request":{...},"response":{...},"error":"","stopped":false}
 ```
 
@@ -154,8 +152,7 @@ onsay-core settings.json <verb> ...           does one thing and prints its answ
 |------|--------------|
 | `pack <folder> [<to>]` | makes the folder of a lingo's files into its `.lingo` file, in `to` or beside the folder (`../docs/lingo.md`, section 11) |
 | `start <lingo>`, `stop <lingo>` | a lingo running or stopped. A running lingo client sees it within 5 seconds |
-| `ceiling <needs...>` | sets the ceiling: `ceiling net store files.read` |
-| `policy` | prints the policy in force, `{ceiling, grants, device}`, and `local` and `account`, the files as they are |
+| `policy` | prints the policy in force, `{grants, own, device}`, the account's grants and this computer's,, and `local` and `account`, the files as they are |
 | `settings <lingo>` | prints every setting of a lingo, each with its value now, for a form of them |
 | `set <lingo> <key> <value>` | changes one, wherever that lingo keeps it. The value is JSON, like `"metric"` or `5`, or text as it is when it isn't JSON |
 | `manifest <lingo>` | prints a lingo's whole OpenAPI manifest, as the catalog has it, or why it can't load |
@@ -175,12 +172,11 @@ values in the query, or a `POST` of them as a JSON record by name. Each answers 
 | Route | Values | Answer |
 |-------|--------|--------|
 | `/.lingo/start`, `/.lingo/stop` | `lingo` | `{lingo, running}` |
-| `/.lingo/asks` | | the questions waiting, each `{id, lingo, need, path, caller}`, whether a lingo may, or `{id, lingo, questions, caller}`, a native lingo's questions for the person, like `chat.ask` (`lingo_ask`). Asking makes the app count as open for 10 seconds, so an app asks every second or so |
-| `/.lingo/answer` | `id`, `answer`: `once`, `always` or `no`, or for questions the list of answers, in order | `null` |
+| `/.lingo/asks` | | the questions waiting, each `{id, lingo, questions, caller}`, a native lingo's questions for the person, like `chat.ask` (`lingo_ask`). Asking makes the app count as open for 10 seconds, so an app asks every second or so |
+| `/.lingo/answer` | `id`, `answer`: the list of answers, in order | `null` |
 | `/.lingo/settings`, `/.lingo/set` | `lingo`, and `key` and `value` | as on the command line |
 | `/.lingo/manifest` | `lingo` | its whole manifest |
 | `/.lingo/policy` | | the policy in force, with the files |
-| `/.lingo/ceiling` | `needs`, a list | the policy in force |
 | `/.lingo/call` | `fn`, and `values`, a list | the function's value |
 | `/.lingo/badge` | `to`, `allow`, `except`, `pass`, `until`, `data`, `badge` | a badge signed by this computer, as base64 |
 
@@ -229,7 +225,7 @@ command line.
 | Hook | What it does |
 |------|--------------|
 | `running(catalog)` | called as it starts and each time the catalog changes, with the catalog as JSON, and with `NULL` as it stops |
-| `decided(line)` | each decision: whether anyone but the owner may reach what they asked, and each need over the routine |
+| `decided(line)` | each decision: whether anyone but the owner may reach what they asked, and each call refused a lingo |
 | `ask(values, n, stop, answer)` | answers `lingo(...)` and `use(...)`: `values` is `{ask, values, gives, context, asking, for}` or `{address, values, for}`, `for` the id of the request whose run asks, when one does, and the answer a record with `value`, or `error` and `code`. With no running lingo to ask, they are asked of the settings' `ask`, else fail with "This lingo client isn't connected to Onsay" |
 | `key(a, keyid)` | a request's signer, by its keyid like `laptop.brandon`: `{key: "ed25519:<base64>", handle, mine}`, or `NULL` |
 | `said(for, text)` | a line the run of request `for` says for the person, `chat.step` or `chat.say`: 1 when it sent it on to whoever asked, like the onsay lingo for a request Onsay sent, else 0 and it is a show line here |
@@ -260,17 +256,17 @@ whole manifest (`../docs/lingo.md`, section 11), or `{name, error}` for one set 
 
 It reads the folder as it starts and again within 5 seconds of any change, to it or to `running.json`: every `.lingo`
 file and every folder of a lingo's files. It loads the native lingos, compiles every Lingo lingo against all of them,
-checks each says in its `openapi.json` all its code needs, and sets aside any that can't load with the reason, like
-`liar.ls: liar.fetch needs net, which its openapi.json doesn't say`, the rest loading without it. A call to what this computer
+and sets aside any that can't load with the reason, the rest loading without it. A call to what this computer
 hasn't got loads, and asks the lingo search as it runs (`../docs/lingo.md`, section 6). A Lingo lingo whose name is
 a native lingo's or one of its groups is set aside too: `input is already a part of onsay, this computer's own lingo`.
 Every lingo here loads, running or not, so a running one can call a stopped one by its dotted name.
 
 **A native lingo** is a library written in C against `lingo.h`, linked with
 `bin/onsay-core.lib` (on Linux the core shares its words with `-rdynamic`). Its one entry, `lingo_phrases`, calls
-`phrase_add(group, needs, line, fn)` for each phrase: `needs` everything it uses, like `"screen.act, screen.read"`, and
-`line` its signature, then `-> what it gives` and `: what it does`, and `lingo_hook` when it has hooks. A file phrase
-calls `may(r, need, path)` for each path it reaches, so the core checks it against the root and the ceiling. A library
+`phrase_add(group, needs, line, fn)` for each phrase: `needs` what it uses, like `"screen.act, screen.read"`, said in
+the catalog for Onsay's index, or `none` for pure computing, which is never checked, and `line` its signature, then
+`-> what it gives` and `: what it does`, and `lingo_hook` when it has hooks. Every other phrase is checked as it is
+called (`may`). A library
 is loaded once and kept, so a changed one is used after a restart, and one whose lingo is gone stops being offered.
 
 **Lingo settings** are kept on this computer, never on Onsay: in `home/settings/<lingo>.json`, a record by name, or by
@@ -314,7 +310,7 @@ limits and stops, settings, `lingo(...)` and `use(...)` asked of the stand-in wh
 requests to Onsay names, resolved by the stand-in, the library, the base calls for real (`test/lingos/desk/desk.ls`), which may read the screen but never act on it, the
 catalog, packing and loading, running and stopped, grants for public, a handle, a computer and a route, with except, *
 and until, badges made, handed on and refused, signatures that check out and those that don't, the account policy pushed, fetched, kept and
-refused when older, the ceiling, the root, the person's answers through an app, `requests.log` and the decisions
+refused when older, this computer's own grants for its lingos, the person's answers through an app, `requests.log` and the decisions
 sent on, `/onsay`, its agent loop (calls run here, the step limit, a stop and Let me choose) and its sessions, `sent.log`, signing in and out from the command line and from an app, the control
 routes, every command, `call` asking `lingo(...)` and `use(...)` of its settings' `ask`, a bare core with no onsay lingo
 on port 6971, and coming back after a dropped connection and a statement that doesn't check out.

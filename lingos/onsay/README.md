@@ -16,8 +16,7 @@ the wire*.
   wire: its statement on this device's key, each request for the account's own, run as `me`, Onsay's own search and
   agent, run as `onsay`, and the account's policy.
 - **The account's policy** is fetched when Onsay says there's a new one, checked, kept unless its version is older,
-  and what this computer applied is said back: its version, and an empty `clamped`, since the ceiling is checked at
-  each phrase.
+  and what this computer applied is said back: its version, and an empty `clamped`.
 - **Every decision** of the lingo client goes to Onsay for the account's activity feed.
 - **Every call this computer makes** goes to Onsay too, in chunks, `{type: "calls", calls}`, each as the core hands it
   over (`core/README.md`, `called`), by its `kind`: `web`, an `http.send`, `lingo`, a call of a prompt's agent loop to

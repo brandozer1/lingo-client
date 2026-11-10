@@ -132,10 +132,9 @@ void native_begin(size_t lingo);              // the phrases added from now on a
 val *native_phrases(arena *a, size_t lingo);  // its phrases as the compiler reads them: [{id, params: [{name, default?}], does, needs}]
 const char *native_name(size_t lingo);        // a native lingo's name by its number, core being 0
 void std_phrases(void);
-// Stops the run with denied unless it may use need, like run or files.read, on path, a whole path, or on nothing when
-// path is NULL. Every phrase's needs are checked as it is called, and a native lingo's file phrases check each
-// path they reach.
-void may(run *r, const char *need, const char *path);
+// Stops the run with denied unless the policy lets the lingo running make id, one of this computer's calls like
+// files.read, a request to /onsay/files/read. Every phrase but pure computing is checked as it is called.
+void may(run *r, const char *id);
 
 ////////// 4. RUNNING //////////
 

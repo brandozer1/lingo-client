@@ -394,12 +394,13 @@ manifest (section 11), every function with what it does and its values as JSON S
 gives in its `description`, the way the base calls write it: `-> [{name,path,size,folder,changed}]` is a list of those records, `x?` is x or
 nothing, `a|b` is either, and `bool` is true or false.
 
-**Needs** are what a phrase uses on the computer, from one shared list: `net`, `store`, `files.read`, `files.write`,
+**Needs** say what a phrase uses on the computer, from one shared list: `net`, `store`, `files.read`, `files.write`,
 `screen.read`, `screen.act`, `run` and `lingos`, making and changing lingos. A native phrase says which it needs as it is added, and a function written in
-Lingo needs everything the phrases it reaches need, worked out from its code. A lingo's `openapi.json` says what each
-of its routes needs (`x-lingo-needs`, section 11), and the computer decides what it actually gets, every time a phrase
-runs: only what is under its ceiling and said in the manifest. A phrase that may not stops the call with `denied`, and
-`try` can't hide that. How the computer decides is in `core/README.md`, *Who may do what*.
+Lingo needs everything the phrases it reaches need, worked out from its code, said in its `openapi.json`
+(`x-lingo-needs`, section 11) for Onsay's index and for people. They are never a permission: each call of the
+computer's a lingo makes is a request to its address, like `/onsay/files/read`, and the computer's policy decides it as
+it runs. One the policy doesn't let stops the call with `denied`, and `try` can't hide that. How the computer decides
+is in `core/README.md`, *Who may do what*.
 
 ## 11. A .lingo file: its program and its openapi.json
 
@@ -492,10 +493,9 @@ a `.lingo` file whose files are deflated, as most zip programs make them, loads 
 - **`x-lingo`** is the lingo's own: its `name`, its `program`, its `route`, and its `settings` and `keep` when it has
   them, below.
 
-**Loading checks it.** When a `.lingo` file's `openapi.json` says its paths, the lingo client works out what its code
-needs and sets the lingo aside when it says less, with why: `liar.ls: liar.fetch needs net, which its openapi.json
-doesn't say. Pack it again to say all it needs`. With no paths, like a folder while it is written, they are made from
-its code as it loads, as `pack` makes them.
+**It is never a permission.** What its `openapi.json` says is for Onsay's index and for people; the policy alone
+decides what a lingo may do. With no paths, like a folder while it is written, they are made from its code as it loads,
+as `pack` makes them.
 
 **What its maker writes in `openapi.json`**, all optional, a part of the whole: its `info`, like a `description` for a
 native lingo, which has no comments to read, and `x-lingo` with its settings, a route and where its settings are kept
@@ -575,7 +575,7 @@ its dotted name whether that one is running or stopped: running is only whether 
 **Linking.** When a function is called, it is linked against the lingos here: every function written in Lingo it
 reaches becomes a call to its `fn`, with any value left out taking its default, and only the functions it actually
 reaches are kept. What is left calls nothing but native phrases. An error inside a lingo names its own file and line:
-`memo.ls line 7: memo needs files.write, which this computer never allows`.
+`memo.ls line 7: memo can't use files.write here: no grant lets it`.
 
 ## 12. Where lingos run
 
@@ -587,8 +587,8 @@ answered by that computer's lingo client itself. Anything at any other address r
 plain web request. Onsay runs no Lingo: it passes requests and answers. An answer sent to a computer after an `@` is a
 request too, the answer the function's first value.
 
-Each computer decides what its lingos may do, in its policy, and the lingo client refuses any phrase that needs what it
-may not have, and stops any call the moment Onsay or the person says stop. `core/README.md` has the policy and the
+Each computer decides what its lingos may do, in its policy, and the lingo client refuses any call of its own a lingo
+makes that the policy doesn't let, and stops any call the moment Onsay or the person says stop. `core/README.md` has the policy and the
 hooks a native lingo fills, `lingos/onsay/README.md` how the onsay lingo talks with Onsay, and `core/test/server.mjs`
 runs real lingos on a real lingo client.
 
