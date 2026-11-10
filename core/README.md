@@ -233,7 +233,7 @@ command line.
 | `ask(values, n, stop, answer)` | answers `lingo(...)` and `use(...)`: `values` is `{ask, values, gives, context, asking, for}` or `{address, values, for}`, `for` the id of the request whose run asks, when one does, and the answer a record with `value`, or `error` and `code`. With no running lingo to ask, they are asked of the settings' `ask`, else fail with "This lingo client isn't connected to Onsay" |
 | `key(a, keyid)` | a request's signer, by its keyid like `laptop.brandon`: `{key: "ed25519:<base64>", handle, mine}`, or `NULL` |
 | `said(for, text)` | a line the run of request `for` says for the person, `chat.step` or `chat.say`: 1 when it sent it on to whoever asked, like the onsay lingo for a request Onsay sent, else 0 and it is a show line here |
-| `called(line)` | each request this lingo client made, a line of JSON: `{at, ms, kind, address, ask, request {method, url, path, headers, body}, response {status, headers, body}, error, stopped}`, a key in a header or in the address taken out and each body cut to 4 KB. `kind` is `web`, `lingo` or `socket`, one for each WebSocket a lingo opened, as its run lets it go or as it fails to open (`../lingos/onsay/README.md`). The onsay lingo sends them to Onsay in chunks |
+| `called(line)` | each request this lingo client made, its line of `requests.log`: `{at, way, ms, kind, address, ask, request {method, url, path, headers, body}, response {status, headers, body}, error, stopped}`, a key in a header or in the address taken out and each body cut to 4 KB. `kind` is `web`, `lingo` or `socket`, one for each WebSocket a lingo opened, as its run lets it go or as it fails to open (`../lingos/onsay/README.md`). The onsay lingo sends them to Onsay in chunks |
 
 What the lingo client offers it back, from any thread:
 
@@ -297,7 +297,8 @@ the lingo's own functions when its `openapi.json`'s `x-lingo` says `keep` (`../d
                                             that ship, packed by the lingo client itself), and
                                             bin/linux-x64/onsay-core and bin/linux-arm64/onsay-core, with onsay and the base calls built in,
                                             for glibc 2.28 or later, all built on Windows with zig, one download, no
-                                            installer
+                                            installer. Built for size and stripped, about 400 KB each, the test build
+                                            the same
 node test/server.mjs                        a stand-in for Onsay, then in another terminal:
 bin/test/onsay-core.exe test/onsay.json     runs every test, each result shown on the stand-in's side
 sh install.sh ./bin/linux-x64/onsay-core    on a Linux server: installs that one. With nothing after it, it downloads it

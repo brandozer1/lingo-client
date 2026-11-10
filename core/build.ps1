@@ -15,6 +15,8 @@ $here = $PSScriptRoot
 $lingos = "$here/../lingos"
 Remove-Item -Recurse -Force "$here/bin/lingos", "$here/bin/test/lingos", "$here/obj" -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force "$here/bin/test", "$here/bin/lingos", "$here/obj" | Out-Null
+# Each program linked stripped, with no symbols or debug information, and what is never used left out.
+$small = "-s", "-Wl,--gc-sections"
 function build($what) { & $zig cc @flags @what | Out-Host; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }
 
 # The web's top level domains (tlds.txt, IANA's list, the same file Onsay keeps) as one C text, " aaa aarp ... ", for
@@ -41,7 +43,10 @@ foreach ($name in $names) { $lines += "  { `"$name`", `"$(ctext "$lingos/$name/o
 $lines += "};"
 Set-Content "$here/obj/builtins.h" $lines
 
-$flags = "-std=c11", "-O2", "-Wall", "-Wextra", "-Wno-unused-parameter", "-I$here/obj", "-I$here", "-I$here/vendor"
+# Small: built for size, each function and value in a section of its own, so the linker drops those never used. The
+# test build is the same, so what is tested is what ships.
+$flags = "-std=c11", "-Os", "-ffunction-sections", "-fdata-sections"
+$flags += "-Wall", "-Wextra", "-Wno-unused-parameter", "-I$here/obj", "-I$here", "-I$here/vendor"
 # native.call calls any function of the system by its layout, with a small part of libffi (vendor/libffi, MIT): the
 # same C everywhere, and each chip's own part, its assembly compiled on its own.
 $ffi = "$here/vendor/libffi"
@@ -54,8 +59,8 @@ build ($win + "-DX86_WIN64", "-I$ffi/include", "-I$ffi/x86", "-c", "$ffi/x86/win
 $windows = $both + "$lingos/windows/windows.c", "$lingos/onsay/agent.c", "-I$lingos/onsay"
 $windows += "$ffi/x86/ffiw64.c", "$here/obj/win64.o", "-DLINGO_CORE", "-DX86_WIN64", "-I$ffi/x86"
 $windows += "-lwinhttp", "-lws2_32", "-luser32", "-lbcrypt", "-lcrypt32", "-lole32", "-loleaut32", "-lshell32", "-lgdi32"
-build ($win + $windows + "-o", "$here/bin/onsay-core.exe", "-Wl,--out-implib,$here/bin/onsay-core.lib")
-build ($win + $windows + "-DTEST", "-o", "$here/bin/test/onsay-core.exe")
+build ($win + $windows + $small + "-o", "$here/bin/onsay-core.exe", "-Wl,--out-implib,$here/bin/onsay-core.lib")
+build ($win + $windows + $small + "-DTEST", "-o", "$here/bin/test/onsay-core.exe")
 
 # Linux. -rdynamic shares the core's words with a native lingo's library, as onsay-core.lib does on Windows.
 $linux = $both + "$lingos/linux/linux.c", "$lingos/onsay/agent.c", "-I$lingos/onsay", "-DLINGO_CORE"
@@ -71,7 +76,7 @@ foreach ($arch in $chips.GetEnumerator()) {
     build ($target + "-std=gnu11", "-DFFI_BUILDING", "-I$ffi/include", "-c", "$ffi/$dir/$one", "-o", "$here/obj/$one-$cpu.o")
     $chip += "$here/obj/$one-$cpu.o"
   }
-  build ($target + $linux + $chip + "-rdynamic", "-ldl", "-lpthread", "-o", "$here/bin/linux-$($arch.Key)/onsay-core")
+  build ($target + $linux + $chip + $small + "-rdynamic", "-ldl", "-lpthread", "-o", "$here/bin/linux-$($arch.Key)/onsay-core")
 }
 Get-ChildItem "$here/bin", "$here/obj" -Recurse -Include *.pdb, *.lib -Exclude onsay-core.lib | Remove-Item
 
