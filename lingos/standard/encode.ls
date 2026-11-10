@@ -122,7 +122,7 @@ fn from_hex(text) "Hex back to text. Spaces are skipped, and it fails when it is
 
 ////////// HELPERS //////////
 
-fn _letters(url_safe) "base64's 64 letters, the URL-safe ones when url_safe." {return "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789" + (url_safe ? "-_" : "+/")}
+fn _letters(url_safe) "Base64's 64 letters, the URL-safe ones when url_safe." {return "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789" + (url_safe ? "-_" : "+/")}
 
 fn _digit(b) "A hex digit's value from its byte, or nothing when it isn't one." {return b >= 48 and b <= 57 ? b - 48 : b >= 97 and b <= 102 ? b - 87 : b >= 65 and b <= 70 ? b - 55 : nothing}
 

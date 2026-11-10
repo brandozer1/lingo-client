@@ -83,7 +83,7 @@ fn _think(place, said, given, last) "The model's next message for the conversati
   fail "Coding Agent couldn't get an answer from an AI: {why}"
 }
 
-fn _found_ais() {
+fn _found_ais() "The addresses of the AIs the lingo function finds for it, best first." {
   ways = lingo.ways("An AI model for a lingo's own agent: the model's next message for a conversation of chat messages in OpenAI's format, which may call the tools it is given", {})
   out = []
   for w in ways ?? [] {out += [w.address]}
@@ -91,7 +91,7 @@ fn _found_ais() {
   return out
 }
 
-fn _heard(a) {
+fn _heard(a) "An AI's answer as the next message, from OpenAI's whole answer or the message alone, or a failure when it is in another shape." {
   m = a.choices != nothing ? a.choices[0].message : a
   if m.content == nothing and m.tool_calls == nothing {fail "that AI didn't answer with a chat message"}
   out = {role: "assistant", content: m.content ?? ""}
@@ -104,7 +104,7 @@ fn _heard(a) {
   return out
 }
 
-fn _compacted(said) {
+fn _compacted(said) "The conversation summed up when it is past about 100,000 tokens, its newest 60,000 characters kept as they are from a message of the model's, and the rest written out and summed up by the AI." {
   if std.length(std.to_json(said)) < 400000 {return said}
   kept = 0
   cut = std.length(said)
@@ -128,7 +128,7 @@ fn _compacted(said) {
 
 ////////// 3. ITS TOOLS //////////
 
-fn _tools(mode) {
+fn _tools(mode) "Its tools as OpenAI writes them, plan mode's without those that change files." {
   s = {type: "string"}
   n = {type: "integer"}
   all = [
@@ -152,7 +152,7 @@ fn _tools(mode) {
   return out
 }
 
-fn _acted(place, state, c) {
+fn _acted(place, state, c) "What one tool call gave, \{said, state}: its result as text, or what went wrong, for the model to act on, and the state after it, since a function changes only its own copy: the files read and the calls made." {
   name = text.lower(std.text(c.function.name))
   a = {}
   try {
@@ -173,7 +173,7 @@ fn _acted(place, state, c) {
   return {said: got, state: state}
 }
 
-fn _done_by(place, state, name, a) {
+fn _done_by(place, state, name, a) "What a tool gave, as text, or what went wrong." {
   try {
     if name == "read" {return _read_file(place, a)}
     if name == "edit" {return _edit_file(place, state, a)}
@@ -189,7 +189,7 @@ fn _done_by(place, state, name, a) {
   }
 }
 
-fn _said_step(name, a) {
+fn _said_step(name, a) "What a call is doing, in a few words, for the person's chat." {
   if name == "read" {return "Reading {a.filePath}"}
   if name == "edit" or name == "write" {return "Changing {a.filePath}"}
   if name == "glob" or name == "grep" {return "Searching for {a.pattern}"}
@@ -198,22 +198,22 @@ fn _said_step(name, a) {
   return "Working"
 }
 
-fn _whole(place, p) {
+fn _whole(place, p) "A path the model gave, made whole: absolute as it is, else under the project folder." {
   if p == nothing or p == "" {return place.folder}
   p = text.replace(std.text(p), "\\", "/")
   if text.starts_with(p, "/") or text.starts_with(p, "~") or std.slice(p, 1, 2) == ":" {return p}
   return place.folder + "/" + p
 }
 
-fn _literal(words) {
+fn _literal(words) "Text as a PowerShell here-string, which needs no escaping, kept to one line." {
   return "@'\n" + text.replace(text.replace(std.text(words), std.from_bytes([13]), " "), "\n", " ") + "\n'@"
 }
 
-fn _quoted(words) {
+fn _quoted(words) "Text as one sh word in single quotes." {
   return "'" + text.replace(std.text(words), "'", "'\\''") + "'"
 }
 
-fn _powershell(values, script) {
+fn _powershell(values, script) "A PowerShell script given its values as $a, from JSON, and its output, or its words as a failure." {
   done = commands.run("$a = " + _literal(std.to_json(values)) + " | ConvertFrom-Json\n" + script)
   if done.code != 0 {fail done.out}
   return done.out
@@ -252,7 +252,7 @@ fn _write_file(place, state, a) {
   return "Wrote {p}."
 }
 
-fn _glob(place, a) {
+fn _glob(place, a) "Files by name pattern, the last part of the pattern matched by name and any folders before it by path, noise left out, at most 100." {
   pattern = text.replace(std.text(a.pattern), "\\", "/")
   parts = text.split(pattern, "/")
   name = parts[-1]
@@ -296,7 +296,7 @@ fn _grep(place, a) {
   return done.out
 }
 
-fn _shell(place, a) {
+fn _shell(place, a) "A command in the project folder, or workdir, with its exit code and the end of its output." {
   where = _whole(place, a.workdir)
   command = place.windows ? "Set-Location -LiteralPath " + _literal(where) + "\n" + std.text(a.command) : "cd " + _quoted(where) + " && " + std.text(a.command)
   done = commands.run(command)
@@ -342,7 +342,7 @@ fn _placed(folder, mode) "The project folder and what the model is told: its gui
   return {folder: f, windows: windows, guide: guide}
 }
 
-fn _read_before(said, place) {
+fn _read_before(said, place) "The files a conversation already read, so they may be edited." {
   seen = {}
   for m in said {
     for c in m.tool_calls ?? [] {
@@ -354,7 +354,7 @@ fn _read_before(said, place) {
   return seen
 }
 
-fn _ended(answer, messages, added, state) {
+fn _ended(answer, messages, added, state) "What ask gives: the answer alone, or, given a conversation, with what it added, its work in short and its task list." {
   if messages == nothing {return answer}
   steps = []
   calls = {}

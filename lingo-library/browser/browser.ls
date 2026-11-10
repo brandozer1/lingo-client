@@ -230,7 +230,7 @@ fn _release() "The LibreWolf it fetches, by its version, where each computer's i
   }
 }
 
-fn _installed() {
+fn _installed() "Where LibreWolf is on this computer, \{version, windows, folder, exe, profile}, kept in store, fetched and checked first when it isn't there, is another version, or the folder setting moved it." {
   r = _release()
   want = text.replace(std.text(setting("folder") ?? ""), "\\", "/")
   kept = store.get("browser/place")
@@ -276,7 +276,7 @@ fn _installed() {
   return p
 }
 
-fn _begin() {
+fn _begin() "A socket to the running browser with a session begun on it, as \{socket, place}, LibreWolf fetched and started first when it isn't running." {
   p = _installed()
   s = _reached(p)
   if s != nothing {return {socket: s, place: p}}
@@ -322,7 +322,7 @@ fn _reached(p) "A socket to the browser with a session begun, or nothing when it
   return s
 }
 
-fn _hidden() {
+fn _hidden() "Whether it works out of sight, which it does unless its show setting is on." {
   shown = setting("show")
   return not (shown == true or text.lower(std.text(shown ?? "")) in ["true", "on", "yes", "1"])
 }
@@ -341,7 +341,7 @@ fn _finish(b) "Out of sight, every tab shown on a screen of its own, Browser tab
   socket.close(b.socket)
 }
 
-fn _asked(s, method, params={}) {
+fn _asked(s, method, params={}) "One WebDriver BiDi command and its result, or its error as a failure." {
   socket.send(s, std.to_json({id: 1, method: method, params: params}))
   while true {
     got = socket.receive(s, 60)
@@ -352,7 +352,7 @@ fn _asked(s, method, params={}) {
   }
 }
 
-fn _tabbed(b, tab) ""new\", else the open one, else the first, else a new one. Tabs are numbered from 1 in the browser's order, since the browser gives them new ids with every session." {
+fn _tabbed(b, tab) "The tab to use, \{id, number}, which becomes the open one: number tab, a new one for \"new\", else the open one, else the first, else a new one. Tabs are numbered from 1 in the browser's order, since the browser gives them new ids with every session." {
   made = tab == "new" ? _asked(b.socket, "browsingContext.create", {type: "tab"}).context : nothing
   ids = []
   for c in _asked(b.socket, "browsingContext.getTree", {maxDepth: 0}).contexts {ids += [c.context]}
@@ -383,7 +383,7 @@ fn _page(b, t, body) "JavaScript run in a tab and its answer, body the inside of
   return std.from_json(got.result.value)
 }
 
-fn _settled(b, t) {
+fn _settled(b, t) "The tab's title and address once its page has loaded, after a click or a key that may have begun loading another, waiting at most 10 seconds." {
   compute.wait(0.5)
   for turn in 1..20 {
     try {now = _page(b, t, "return JSON.stringify(\{state: document.readyState, title: document.title, url: location.href\});")} catch e {}
@@ -393,7 +393,7 @@ fn _settled(b, t) {
   return {title: now.title, url: now.url}
 }
 
-fn _plain(v) {
+fn _plain(v) "A value from the page, as WebDriver BiDi writes it, as a plain value." {
   if v.type == "array" or v.type == "set" or v.type == "nodelist" or v.type == "htmlcollection" {
     out = []
     for x in v.value ?? [] {out += [_plain(x)]}
@@ -407,7 +407,7 @@ fn _plain(v) {
   return v.value
 }
 
-fn _quoted(words, windows) {
+fn _quoted(words, windows) "Text as one word of this computer's shell, in single quotes, PowerShell's on Windows, else sh's." {
   if windows {return "'" + text.replace(std.text(words), "'", "''") + "'"}
   return "'" + text.replace(std.text(words), "'", "'\\''") + "'"
 }

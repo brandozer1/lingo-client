@@ -159,7 +159,7 @@ fn ends_with(text, part, ignore_case=false) "Whether text ends with part. part i
 
 fn _same(text, ignore_case) "Text as it is, or in lower case when case doesn't matter." {return ignore_case ? lower(text) : std.text(text)}
 
-fn _filled(fill, n) "fill repeated to exactly n characters." {
+fn _filled(fill, n) "Fill repeated to exactly n characters." {
   t = std.text(fill)
   while std.length(t) < n {t += t}
   return std.slice(t, 0, n)

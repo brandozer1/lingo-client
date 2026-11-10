@@ -40,7 +40,7 @@ fn kind(value) "What kind of value it is: nothing, bool, number, text, list or r
 
 ////////// HELPERS //////////
 
-fn _laid(value, step, at) "A list or record as JSON over lines, at the depth at, each level a step further in." {
+fn _laid(value, step, at) "A list or record as JSON over lines, at the depth at, each level a step further in. stringify lays out with it." {
   k = kind(value)
   if (k != "list" and k != "record") or std.length(value) == 0 {return std.to_json(value)}
   out = []
