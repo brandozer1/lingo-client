@@ -40,10 +40,11 @@
 #endif
 #define FRESH 300   // seconds a signer's key looked up holds
 #ifdef TEST
-#define SEND_EVERY 2   // seconds between tries at sending the log
+#define SEND_EVERY 2   // seconds between tries at sending the log, unless Onsay's answer says otherwise
 #else
 #define SEND_EVERY 20
 #endif
+#define SEND_MOST 3600   // the longest it waits after a try that didn't go, doubling the wait each time
 #define LOG_MOST (4 << 20)   // bytes the log, or what waits to be sent, may grow to before it is cut to its newest half
 #define HEAD (64 << 10)   // the most a call's first line and headers may be
 #define BODY_ROOM (4 << 20)   // and its body
@@ -429,8 +430,10 @@ static void logged(arena *a, const char *way, const char *who, const char *route
 /* 4. What waits, sealed so only Onsay can read it and signed by this computer, POSTed to Onsay's log box:
       {key, name, eph, nonce, box, sig}. The seal is X25519 with Onsay's key turned to it and a fresh key of this one's,
       the shared secret hashed with both into a ChaCha20-Poly1305 key (RFC 8439); sig is this computer's Ed25519
-      signature over eph, nonce and box. Kept to try again when it doesn't go. */
-static void send_log(void) {
+      signature over eph, nonce and box. Kept to try again when it doesn't go. How many seconds to wait before the next
+      try: what Onsay's answer says in next, SEND_EVERY with nothing to send, and when it doesn't go, twice the last wait,
+      up to SEND_MOST. */
+static double send_log(double last) {
   arena *a = arena_new();
   buf lines = { 0 };
   unsigned char onsay[32], theirs[32], eph[32], mine[32], shared[32], key[32], nonce[12], sig[64], me[32];
@@ -441,7 +444,7 @@ static void send_log(void) {
   if (!lines.n || !key_bytes(ONSAY_KEY, onsay) || !key_of("device", 1, me)) {
     buf_free(&lines);
     arena_free(a);
-    return;
+    return SEND_EVERY;
   }
   crypto_eddsa_to_x25519(theirs, onsay);
   pl_random(eph, 32);
@@ -483,7 +486,11 @@ static void send_log(void) {
   rec_set(a, headers, "Content-Type", v_cstr(a, "application/json"));
   val *got = pl_http(a, "POST", ONSAY "/logs", headers, body.s, body.n, 10, &error);
   val *status = rec_get(got, "status");
+  double wait = last * 2 < SEND_MOST ? last * 2 : SEND_MOST;
   if (status && status->k == V_NUM && status->n == 200) {
+    const char *text = text_or(got, "text", "");
+    val *next = rec_get(json_parse(a, text, strlen(text), NULL), "next");
+    wait = next && next->k == V_NUM && next->n >= 1 ? next->n : SEND_EVERY;
     pl_enter(log_gate);
     size_t gone = lines.n <= waiting.n ? lines.n : waiting.n;
     memmove(waiting.s, waiting.s + gone, waiting.n - gone);
@@ -500,13 +507,15 @@ static void send_log(void) {
   buf_free(&part);
   buf_free(&error);
   arena_free(a);
+  return wait;
 }
 
 static void sender(void *arg) {
+  double wait = SEND_EVERY;
   (void)arg;
   for (;;) {
-    pl_sleep(SEND_EVERY);
-    send_log();
+    pl_sleep(wait);
+    wait = send_log(wait);
   }
 }
 

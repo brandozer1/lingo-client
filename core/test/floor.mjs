@@ -79,7 +79,7 @@ const stand = http.createServer((req, res) => {
   req.on('data', (d) => { body += d })
   req.on('end', () => {
     const json = (status, v) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(v)) }
-    if (req.url === '/logs') { logs.push(opened(JSON.parse(body))); return json(200, { kept: true }) }
+    if (req.url === '/logs') { logs.push({ ...opened(JSON.parse(body)), when: Date.now() }); return json(200, { kept: 1, next: 1 }) }
     if (req.url.startsWith('/echo')) { echoed.push({ path: req.url, body: JSON.parse(body || 'null'), signed: checks(req, body) }); return json(200, { path: req.url, got: JSON.parse(body || 'null') }) }
     if (req.url === '/broken') return json(500, { error: 'it broke over there' })
     if (req.url === '/ask') {
@@ -200,6 +200,12 @@ const CASES = [
     for (let i = 0; i < 20 && !logs.length; i++) await pause(250)
     const all = logs.map((x) => x.text).join('')
     return logs.length > 0 && logs.every((x) => x.ok) && /"way":"in"/.test(all) && /"way":"call"/.test(all)
+  }],
+  ['it sends again when Onsay\'s answer says, sooner than its own wait', async () => {
+    const had = logs.length, asked = Date.now()
+    await call('/', 'return 1')
+    for (let i = 0; i < 30 && logs.length === had; i++) await pause(100)
+    return logs.length > had && logs.at(-1).when - asked < 1900
   }],
 ]
 

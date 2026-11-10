@@ -13,7 +13,8 @@ The language, and what a lingo is, its `.lingo` file, its code, its `openapi.jso
 
 **The floor**, `floor.c`, is the new lingo client that replaces this one: one function, lingo script in and its value
 out. It takes a call, checks who signed it and whether the policy lets them, runs the script it carries, logs it and
-tries to send its log to Onsay, sealed so only Onsay can read it. Everything else becomes a lingo. It is built beside
+sends its log to Onsay blind, sealed so only Onsay can read it, as often as Onsay's answer says, waiting twice as long
+after each try that doesn't go, up to an hour. Everything else becomes a lingo. It is built beside
 this one, `bin/floor.exe` and `bin/linux-*/floor`, and tested by `test/floor.mjs`, until the releases switch to it
 (`../../onsay/docs/lingo-function.md`, The floor).
 
