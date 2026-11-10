@@ -5727,9 +5727,11 @@ static int let_in(arena *a, val *p, const caller *c, const char *path, int listi
   onsay_name(&name);
   const char *here = arena_fmt(a, "%s", name.s ? name.s : "");
   buf_free(&name);
-  for (int k = 0; k < 2; k++) {   // this computer's own grants, then the account's
+  // This computer's own grants, then the account's, which never speak for the lingos here: only policy.json does.
+  for (int k = 0; k < 2; k++) {
     val *some = rec_get(p, k ? "grants" : "own");
-    for (size_t i = 0; some && some->k == V_LIST && i < some->l.n; i++) list_push(a, grants, some->l.v[i]);
+    for (size_t i = 0; some && some->k == V_LIST && i < some->l.n; i++)
+      if (!k || *text_or(some->l.v[i], "to", "") != '/') list_push(a, grants, some->l.v[i]);
   }
   if (c->owner) {
     *why = "the owner";

@@ -719,9 +719,9 @@ const WEB_CASES = [
     const r = await control('call', { fn: 'onsay.devices' })
     return r.status === 200 && same(r.json, [{ name: 'laptop', online: true, seen: ADDED }, { name: 'desk', online: false, seen: null }])
   }],
-  ['grants: this computer\'s own, narrowed, refuse a lingo a call at once, and widened again let it', async () => {
+  ['grants: this computer\'s own, narrowed, refuse a lingo a call at once, the account\'s never widen them, and widened again let it', async () => {
     writeFileSync(new URL('policy.json', DATA), JSON.stringify({ grants: [{ to: '/', allow: ['/onsay/store'] }] }))
-    const r = await post('/checks/http_get', { base: HTTP })
+    const r = await withGrants([...DEFAULT_GRANTS, { to: '/', allow: ['/'] }], () => post('/checks/http_get', { base: HTTP }))
     writeFileSync(new URL('policy.json', DATA), JSON.stringify(POLICY))
     const again = await post('/checks/http_get', { base: HTTP })
     return r.status === 403 && /checks can't use http.send here: no grant lets it/.test(r.json.error) && again.status === 200 &&

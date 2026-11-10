@@ -114,7 +114,7 @@ and lets pass it on, each grant's `to` is the next one's signer and lets it pass
 whose signature doesn't check out, or that isn't handed on, is a 401. The control routes open only to the owner or a
 badge the owner signed, never to a grant in the policy.
 
-`policy.json`, changed only on this computer, holds its own grants. With none, it is this, so its own lingos reach
+`policy.json`, changed only on this computer, holds its own grants, and only they speak for the lingos here: an account grant whose `to` is a route is passed over, so nothing from Onsay widens them. With none, it is this, so its own lingos reach
 everything; a computer that runs code it doesn't trust narrows it, like Onsay's library to `/onsay/store`:
 
 ```json
