@@ -3,13 +3,14 @@
 // logs it, and tries to send its log to Onsay. Nothing else: everything else is a lingo, called like any other. Built by
 // build.ps1 beside lingo.c, which it replaces. See ../../onsay/docs/lingo-function.md, The floor.
 //
-// 1. Settings   its settings file: home, port, name, owner, keys, calls, ask, steps and ms, and the lingos built in
+// 1. Settings   its settings file: home, port, name, owner, keys, ask, steps and ms, and the lingos built in
 // 2. Callers    a signer's key, the owner, and the policy
-// 3. Calls      each call a script makes: checked, then answered here or sent where it goes, signed
-// 4. Log        every request, a line of home/requests.log, sent to Onsay sealed whenever a connection works
-// 5. Running    a call's script compiled and run, one at a time, within its limits
-// 6. Port       calls coming in, as web requests
-// 7. Main       the command line
+// 3. Offers     the table of lingos offered here: what each does and where it answers, made from its own code
+// 4. Calls      each call a script makes: checked, then answered here or sent where it goes, signed
+// 5. Log        every request, a line of home/requests.log, sent to Onsay sealed whenever a connection works
+// 6. Running    a call's script compiled and run, one at a time, within its limits
+// 7. Port       calls coming in, as web requests
+// 8. Main       the command line
 
 #ifndef _WIN32
 #define _GNU_SOURCE
@@ -76,7 +77,6 @@ typedef struct {
      name    this computer's name, like laptop.brandon, what it signs as; left out, it signs as its key itself
      owner   whose calls reach everything: a key, ed25519:<base64>, or a handle, every one of its computers
      keys    signers known by key, {"laptop.james": "ed25519:..."}, before Onsay is asked
-     calls   where calls it doesn't answer go, by group, {"files": "http://127.0.0.1:7000"}
      ask     where lingo(...), and use(...) of a name it can't reach, are asked, as JSON
      steps, ms   the most one call may take */
 static struct {
@@ -279,12 +279,145 @@ static val *policy(arena *a) {
   return out;
 }
 
-////////// 3. CALLS //////////
+////////// 3. OFFERS //////////
+
+static pl_gate *offer_gate;
+static void offered_sent(void);
+static val *natives(arena *a);
+
+// The table, home/offered.json: {name: {address, about, openapi}}, read as each call comes, so a change holds at once.
+static val *offers(arena *a) {
+  buf text = { 0 };
+  val *t = pl_read(arena_fmt(a, "%s/offered.json", set.root), &text) ? json_parse(a, text.s, text.n, NULL) : NULL;
+  buf_free(&text);
+  return t && t->k == V_REC ? t : v_rec(a);
+}
+
+/* A lingo's OpenAPI document, made from its listing as its code says it: each function a POST at /<name>/<function>,
+   its words the summary and description, its values' types and words the request's schema, what it gives the answer's,
+   and x-lingo-internal on a helper, one whose name starts with _. */
+static val *openapi_of(arena *a, const char *name, val *l) {
+  val *doc = v_rec(a);
+  val *info = v_rec(a);
+  val *paths = v_rec(a);
+  val *x = v_rec(a);
+  val *phrases = rec_get(l, "phrases");
+  rec_set(a, info, "title", v_cstr(a, name));
+  rec_set(a, info, "version", v_cstr(a, "1.0.0"));
+  if (rec_get(l, "about")) rec_set(a, info, "description", rec_get(l, "about"));
+  for (size_t i = 0; phrases && i < phrases->l.n; i++) {
+    val *p = phrases->l.v[i];
+    const char *id = text_or(p, "id", "");
+    const char *does = text_or(p, "does", "");
+    const char *stop = strstr(does, ". ");
+    val *op = v_rec(a);
+    val *item = v_rec(a);
+    val *body = v_rec(a);
+    val *content = v_rec(a);
+    val *json = v_rec(a);
+    val *ok = v_rec(a);
+    val *responses = v_rec(a);
+    if (*does) rec_set(a, op, "summary", v_text(a, does, stop ? (size_t)(stop - does + 1) : strlen(does)));
+    if (*does) rec_set(a, op, "description", v_cstr(a, does));
+    rec_set(a, json, "schema", rec_get(p, "inputSchema") ? rec_get(p, "inputSchema") : v_rec(a));
+    rec_set(a, content, "application/json", json);
+    rec_set(a, body, "content", content);
+    rec_set(a, op, "requestBody", body);
+    rec_set(a, ok, "description", v_cstr(a, "The function's value, as JSON"));
+    if (rec_get(p, "gives")) {
+      val *answer = v_rec(a);
+      val *got = v_rec(a);
+      rec_set(a, got, "schema", type_schema(a, text_or(p, "gives", "any")));
+      rec_set(a, answer, "application/json", got);
+      rec_set(a, ok, "content", answer);
+    }
+    rec_set(a, responses, "200", ok);
+    rec_set(a, op, "responses", responses);
+    rec_set(a, op, "x-lingo-function", v_cstr(a, id));
+    if (truthy(rec_get(p, "internal") ? rec_get(p, "internal") : NOTHING)) rec_set(a, op, "x-lingo-internal", VBOOL(1));
+    rec_set(a, item, "post", op);
+    rec_set(a, paths, arena_fmt(a, "/%s/%s", name, strchr(id, '.') ? strchr(id, '.') + 1 : id), item);
+  }
+  rec_set(a, x, "name", v_cstr(a, name));
+  rec_set(a, x, "route", v_cstr(a, arena_fmt(a, "/%s", name)));
+  rec_set(a, doc, "openapi", v_cstr(a, "3.1.0"));
+  rec_set(a, doc, "info", info);
+  rec_set(a, doc, "paths", paths);
+  rec_set(a, doc, "x-lingo", x);
+  return doc;
+}
+
+/* 3. lingo.offer(name, code, address): a lingo offering itself here, its code, Lingo or only its functions' signatures,
+      read by the compiler into what it does, and where it answers, an address its calls are sent to. Its functions, each
+      its name and what it does, but its helpers. Offered again, it replaces what was; with no code, it is taken away. A
+      name that is one of this computer's own groups, like files, can't be offered. */
+static val *lingo_offer(run *r, val **a) {
+  arena *ra = r->a;
+  const char *name = a[0]->t.s;
+  const char *code = a[1]->k == V_TEXT ? a[1]->t.s : "";
+  val *out = v_list(ra);
+  if (!named(name)) fail(r, "type", "A lingo's name is lower case letters, digits, _ and -, like weather");
+  const char *prefix = arena_fmt(ra, "%s.", name);
+  for (size_t k = 0; k <= BUILT_IN; k++) {
+    val *ps = native_phrases(ra, k);
+    for (size_t i = 0; i < ps->l.n; i++)
+      if (!strncmp(text_or(ps->l.v[i], "id", ""), prefix, strlen(prefix)))
+        fail(r, "denied", "%s is one of this computer's own, so it can't be offered", name);
+  }
+  pl_enter(offer_gate);
+  val *table = offers(ra);
+  val *kept = v_rec(ra);
+  for (size_t i = 0; i < table->r.n; i++)
+    if (strcmp(table->r.key[i], name)) rec_set(ra, kept, table->r.key[i], table->r.v[i]);
+  if (*code) {
+    const char *why = NULL;
+    val *stacked = v_list(ra);
+    val *e = v_rec(ra);
+    rec_set(ra, e, "file", v_cstr(ra, arena_fmt(ra, "%s.ls", name)));
+    rec_set(ra, e, "code", v_cstr(ra, code));
+    list_push(ra, stacked, e);
+    val *inst = lingo_load(ra, natives(ra), stacked, &why);
+    val *l = inst ? rec_get(rec_get(inst, "lingos"), name) : NULL;
+    if (!l) {
+      pl_leave(offer_gate);
+      fail(r, "phrase", "%s", why ? why : "Its code doesn't say what it does");
+    }
+    val *entry = v_rec(ra);
+    rec_set(ra, entry, "address", a[2]);
+    if (rec_get(l, "about")) rec_set(ra, entry, "about", rec_get(l, "about"));
+    rec_set(ra, entry, "openapi", openapi_of(ra, name, l));
+    rec_set(ra, kept, name, entry);
+    val *phrases = rec_get(l, "phrases");
+    for (size_t i = 0; i < phrases->l.n; i++) {
+      val *p = phrases->l.v[i];
+      if (rec_get(p, "internal")) continue;
+      val *one = v_rec(ra);
+      rec_set(ra, one, "name", v_cstr(ra, strchr(text_or(p, "id", ""), '.') + 1));
+      rec_set(ra, one, "does", rec_get(p, "does"));
+      list_push(ra, out, one);
+    }
+  }
+  buf text = { 0 };
+  buf_json(&text, kept);
+  int ok = pl_write(arena_fmt(ra, "%s/offered.json", set.root), text.s, text.n);
+  buf_free(&text);
+  pl_leave(offer_gate);
+  if (!ok) fail(r, "phrase", "This computer couldn't keep what was offered");
+  offered_sent();
+  return out;
+}
+
+// Where an offered lingo answers, by its name, or NULL.
+static const char *offered_at(arena *a, const char *name) {
+  return text_or(rec_get(offers(a), name), "address", NULL);
+}
+
+////////// 4. CALLS //////////
 
 static caller now;          // who the call running now is from
 static val *now_policy;     // and the policy it is judged by
 
-// 3. Each call of the computer's a script makes but pure computing, a request to its address, like /files/read, judged
+// 4. Each call of the computer's a script makes but pure computing, a request to its address, like /files/read, judged
 //    by the policy for whoever sent the script. At the command line, the owner's.
 void may(run *r, const char *id) {
   if (!now.name) return;
@@ -324,12 +457,12 @@ static val *sent(run *r, const char *url, val *values, int asked) {
   return answer ? answer : v_cstr(a, text);
 }
 
-// A call nothing here answers, like files.read: sent to where calls lists its group, its values in order, else the error
-// it always was. A phrase that failed here stays its own failure.
+// A call nothing here answers, like weather.now: sent to where the lingo offered as its group answers, its values in order,
+// else the error it always was. A phrase that failed here stays its own failure.
 static val *searched(run *r, const char *id, val *values, const char *code, const char *message) {
   const char *dot = strchr(id, '.');
   const char *group = dot ? arena_fmt(r->a, "%.*s", (int)(dot - id), id) : id;
-  const char *where = text_or(rec_get(set.all, "calls"), group, NULL);
+  const char *where = offered_at(r->a, group);
   if (strcmp(code, "unknown") || !where || !dot) fail(r, code, "%s", message);
   may(r, id);
   return sent(r, arena_fmt(r->a, "%s/%s", where, dot + 1), values, 0);
@@ -359,12 +492,12 @@ static val *lingo_ways(run *r, val **a) {
   return asked(r, q);
 }
 
-// lingo.use(address, values): a web address is sent to as it is, a group calls names is sent there, and any other name is
-// asked of ask.
+// lingo.use(address, values): a web address is sent to as it is, a lingo offered here is sent where it answers, and any
+// other name is asked of ask.
 static val *lingo_use(run *r, val **a) {
   const char *address = a[0]->t.s;
   size_t n = strcspn(address, "/");
-  const char *where = text_or(rec_get(set.all, "calls"), arena_fmt(r->a, "%.*s", (int)n, address), NULL);
+  const char *where = offered_at(r->a, arena_fmt(r->a, "%.*s", (int)n, address));
   if (!strncmp(address, "http://", 7) || !strncmp(address, "https://", 8)) return sent(r, address, a[1], 0);
   if (where) return sent(r, arena_fmt(r->a, "%s%s", where, address + n), a[1], 0);
   val *q = v_rec(r->a);
@@ -373,15 +506,15 @@ static val *lingo_use(run *r, val **a) {
   return asked(r, q);
 }
 
-// lingo.setting(key, reference): the floor keeps no settings, so it is asked of whatever calls names for settings.
+// lingo.setting(key, reference): the floor keeps no settings, so it is asked of the lingo offered as settings.
 static val *setting_(run *r, val **a) {
   val *values = v_list(r->a);
   list_push(r->a, values, a[0]);
   list_push(r->a, values, a[1]);
-  return searched(r, "settings.get", values, "unknown", "Nothing keeps settings here: its settings' calls name none");
+  return searched(r, "settings.get", values, "unknown", "Nothing keeps settings here: no lingo called settings is offered");
 }
 
-////////// 4. LOG //////////
+////////// 5. LOG //////////
 
 static pl_gate *log_gate;
 static buf waiting;   // lines not yet sent to Onsay
@@ -427,7 +560,7 @@ static void logged(arena *a, const char *way, const char *who, const char *route
   buf_free(&all);
 }
 
-/* 4. What waits, sealed so only Onsay can read it and signed by this computer, POSTed to Onsay's log box:
+/* 5. What waits, sealed so only Onsay can read it and signed by this computer, POSTed to Onsay's log box:
       {key, name, eph, nonce, box, sig}. The seal is X25519 with Onsay's key turned to it and a fresh key of this one's,
       the shared secret hashed with both into a ChaCha20-Poly1305 key (RFC 8439); sig is this computer's Ed25519
       signature over eph, nonce and box. Kept to try again when it doesn't go. How many seconds to wait before the next
@@ -510,6 +643,31 @@ static double send_log(double last) {
   return wait;
 }
 
+/* 5. The table as Onsay indexes it, a line of what waits to be sent: {way: offered, lingos: [{name, openapi}]}, never
+      where they answer. As it starts, and each time it changes. */
+static void offered_sent(void) {
+  arena *a = arena_new();
+  val *table = offers(a);
+  val *line = v_rec(a);
+  val *lingos = v_list(a);
+  buf text = { 0 };
+  for (size_t i = 0; i < table->r.n; i++) {
+    val *one = v_rec(a);
+    rec_set(a, one, "name", v_cstr(a, table->r.key[i]));
+    rec_set(a, one, "openapi", rec_get(table->r.v[i], "openapi") ? rec_get(table->r.v[i], "openapi") : v_rec(a));
+    list_push(a, lingos, one);
+  }
+  rec_set(a, line, "way", v_cstr(a, "offered"));
+  rec_set(a, line, "lingos", lingos);
+  buf_json(&text, line);
+  buf_chr(&text, '\n');
+  pl_enter(log_gate);
+  buf_add(&waiting, text.s, text.n);
+  pl_leave(log_gate);
+  buf_free(&text);
+  arena_free(a);
+}
+
 static void sender(void *arg) {
   double wait = SEND_EVERY;
   (void)arg;
@@ -519,7 +677,23 @@ static void sender(void *arg) {
   }
 }
 
-////////// 5. RUNNING //////////
+////////// 6. RUNNING //////////
+
+// This computer's own calls, as the compiler reads them, made in a's memory, since compiling writes into them.
+static val *natives(arena *a) {
+  val *out = v_list(a);
+  val *core = v_rec(a);
+  rec_set(a, core, "name", v_cstr(a, "core"));
+  rec_set(a, core, "phrases", native_phrases(a, 0));
+  list_push(a, out, core);
+  for (size_t i = 0; i < BUILT_IN; i++) {
+    val *one = v_rec(a);
+    rec_set(a, one, "name", v_cstr(a, built_in[i].name));
+    rec_set(a, one, "phrases", native_phrases(a, i + 1));
+    list_push(a, out, one);
+  }
+  return out;
+}
 
 /* A script run for who: compiled as the body of fn main(a0, a1, ...) in call.ls, against the standard functions and this
    computer's own calls, and run with values as a0, a1 and on, within the limits. Its value, or NULL with code and
@@ -529,18 +703,7 @@ static val *run_script(arena *a, const char *script, val *values, const caller *
   buf code_text = { 0 };
   val *stacked = v_list(a);
   val *input = v_rec(a);
-  val *offered = v_list(a);   // this computer's own calls, as the compiler reads them, made again in this call's memory,
-  val *core = v_rec(a);       // since compiling writes into them
   volatile int stop = 0;
-  rec_set(a, core, "name", v_cstr(a, "core"));
-  rec_set(a, core, "phrases", native_phrases(a, 0));
-  list_push(a, offered, core);
-  for (size_t i = 0; i < BUILT_IN; i++) {
-    val *one = v_rec(a);
-    rec_set(a, one, "name", v_cstr(a, built_in[i].name));
-    rec_set(a, one, "phrases", native_phrases(a, i + 1));
-    list_push(a, offered, one);
-  }
   buf_str(&code_text, "fn main(");
   for (size_t i = 0; i < values->l.n; i++) {
     buf_fmt(&code_text, "%sa%zu", i ? ", " : "", i);
@@ -558,7 +721,7 @@ static val *run_script(arena *a, const char *script, val *values, const caller *
   rec_set(a, e, "code", v_text(a, code_text.s, code_text.n));
   list_push(a, stacked, e);
   buf_free(&code_text);
-  val *inst = lingo_load(a, offered, stacked, message);
+  val *inst = lingo_load(a, natives(a), stacked, message);
   val *program = inst ? lingo_call(a, inst, "call.main") : NULL;
   if (!program) {
     *code = "compile";
@@ -598,7 +761,18 @@ static int answer(arena *a, const char *path, const char *body, size_t n, const 
       val *v = rec_get(given, ph->params[i]);
       list_push(a, values, v ? v : NOTHING);
     }
-    if (given->k == V_REC && !ph) list_push(a, values, given);
+    // An offered function's values by name, in the order its schema lists them, else the record as its one value.
+    const char *dot = call.s ? strchr(call.s, '.') : NULL;
+    val *offer = dot && !ph ? rec_get(offers(a), arena_fmt(a, "%.*s", (int)(dot - call.s), call.s)) : NULL;
+    const char *where[] = { "openapi", "paths", NULL, "post", "requestBody", "content", "application/json", "schema", "properties" };
+    where[2] = dot ? arena_fmt(a, "/%.*s/%s", (int)(dot - call.s), call.s, dot + 1) : "";
+    val *props = offer;
+    for (size_t k = 0; props && k < sizeof where / sizeof *where; k++) props = rec_get(props, where[k]);
+    for (size_t i = 0; given->k == V_REC && props && props->k == V_REC && i < props->r.n; i++) {
+      val *v = rec_get(given, props->r.key[i]);
+      list_push(a, values, v ? v : NOTHING);
+    }
+    if (given->k == V_REC && !ph && !(props && props->k == V_REC)) list_push(a, values, given);
     buf b = { 0 };
     buf_fmt(&b, "return %s(", call.s ? call.s : "");
     for (size_t i = 0; i < values->l.n; i++) buf_fmt(&b, "%sa%zu", i ? ", " : "", i);
@@ -622,7 +796,7 @@ static int answer(arena *a, const char *path, const char *body, size_t n, const 
   return !strcmp(code, "compile") ? 400 : 500;
 }
 
-////////// 6. PORT //////////
+////////// 7. PORT //////////
 
 typedef struct {
   pl_conn *c;
@@ -728,7 +902,7 @@ static void listener(void *arg) {
   }
 }
 
-////////// 7. MAIN //////////
+////////// 8. MAIN //////////
 
 /*   floor settings.json                 runs it: calls come in on its port, and its log goes to Onsay
      floor settings.json key             its own key, ed25519:<base64>, made first when missing, for an owner's record
@@ -740,6 +914,7 @@ int main(int argc, char **argv) {
   keys_gate = pl_gate_new();
   log_gate = pl_gate_new();
   run_gate = pl_gate_new();
+  offer_gate = pl_gate_new();
   native_begin(0);
   std_phrases();
   phrase_add("lingo", "net", "run(ask: text, values: record=nothing, gives: text=\"\")", lingo_run);
@@ -748,6 +923,10 @@ int main(int argc, char **argv) {
       lingo_ways);
   phrase_add("lingo", "net", "use(address: url, values: record=nothing)", lingo_use);
   phrase_add("lingo", "net", "setting(key: text, reference: text)", setting_);
+  phrase_add("lingo", "lingos",
+      "offer(name: text, code: text, address: url) -> [{name: text, does: text}]: a lingo offering itself here, its code or "
+      "its functions' signatures, and where its calls are sent, giving back its functions; with no code, taken away",
+      lingo_offer);
   for (size_t i = 0; i < BUILT_IN; i++) {
     native_begin(i + 1);
     built_in[i].add();
@@ -784,6 +963,7 @@ int main(int argc, char **argv) {
     return 1;
   }
   fprintf(stderr, "The floor %s takes calls on port %d\n", FLOOR_VERSION, set.port);
+  offered_sent();
   pl_thread(sender, NULL);
   listener(p);
   return 0;

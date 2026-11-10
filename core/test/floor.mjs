@@ -105,6 +105,8 @@ const call = async (path, body, { key, keyid, badge, method = 'POST' } = {}) => 
   return { status: r.status, json: parsed }
 }
 const owner = { key: OWNER }
+// The echo lingo, offered as its signatures alone: its calls are answered where it answers, the stand-in's /echo.
+const ECHO = '"Says what it was sent back."\nfn hello(a, b) "Says it back." {}\nfn again(x: text) "Says one back." {}\nfn hi() {}\nfn _quiet() {}'
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
 const policy = (grants) => writeFileSync(`${HOME}/policy.json`, JSON.stringify({ grants }))
 const lines = () => readFileSync(`${HOME}/requests.log`, 'utf8').trim().split('\n').map((l) => JSON.parse(l))
@@ -114,6 +116,15 @@ const CASES = [
   ['GET / says what it is and its own key, for an owner to add to their record', async () => {
     const r = await call('/', undefined, { method: 'GET' })
     return r.status === 200 && r.json.floor && /^ed25519:/.test(r.json.key)
+  }],
+  ['a lingo offers itself, as the owner may, its functions read from its code, and anyone else may not', async () => {
+    const offer = (key) => call('/lingo/offer', { name: 'echo', code: ECHO, address: `http://127.0.0.1:${ONSAY_PORT}/echo` }, key)
+    const [theirs, mine] = [await offer(undefined), await offer(owner)]
+    const table = JSON.parse(readFileSync(`${HOME}/offered.json`, 'utf8'))
+    return theirs.status === 403 && mine.status === 200 && same(mine.json, [{ name: 'hello', does: 'Says it back.' }, { name: 'again', does: 'Says one back.' }, { name: 'hi', does: '' }]) &&
+      table.echo.address === `http://127.0.0.1:${ONSAY_PORT}/echo` && table.echo.openapi.paths['/echo/hello'].post.summary === 'Says it back.' &&
+      table.echo.openapi.paths['/echo/again'].post.requestBody.content['application/json'].schema.properties.x.type === 'string' &&
+      table.echo.openapi.paths['/echo/_quiet'].post['x-lingo-internal'] === true
   }],
   ['a script is run, pure computing open to anyone, its value as JSON', async () => {
     const r = await call('/', 'x = [1, 2, 3]\nreturn {sum: x[0] + x[1] + x[2], words: text.split("a b", " ")}')
@@ -137,6 +148,10 @@ const CASES = [
   ['/group/name with values is the same call: a list in order', async () => {
     const r = await call('/echo/again', ['y'], owner)
     return r.status === 200 && r.json.path === '/echo/again' && same(r.json.got, ['y'])
+  }],
+  ['an offered function by name takes a record, matched to its values as its code names them', async () => {
+    const r = await call('/echo/again', { x: 'z' }, owner)
+    return r.status === 200 && same(r.json.got, ['z'])
   }],
   ['one of the computer\'s own calls by name takes a record, matched to its values', async () => {
     const r = await call('/std/find', { in: 'abc', what: 'c' }, owner)
@@ -201,6 +216,11 @@ const CASES = [
     const all = logs.map((x) => x.text).join('')
     return logs.length > 0 && logs.every((x) => x.ok) && /"way":"in"/.test(all) && /"way":"call"/.test(all)
   }],
+  ['what is offered reaches Onsay as its OpenAPI, never where it answers', async () => {
+    const lines = logs.flatMap((x) => x.text.trim().split('\n')).map((l) => JSON.parse(l)).filter((l) => l.way === 'offered')
+    const last = lines.at(-1)
+    return !!last && last.lingos[0].name === 'echo' && !!last.lingos[0].openapi.paths['/echo/hello'] && !JSON.stringify(last).includes('127.0.0.1')
+  }],
   ['it sends again when Onsay\'s answer says, sooner than its own wait', async () => {
     const had = logs.length, asked = Date.now()
     await call('/', 'return 1')
@@ -226,6 +246,10 @@ const WINDOWS_CASES = [
     const log = readFileSync(`${WINDOWS_HOME}/requests.log`, 'utf8')
     return r.status === 200 && r.json === 200 && log.includes('"way":"out"') && log.includes('/echo/web')
   }],
+  ['one of this computer\'s own groups can\'t be offered', async () => {
+    const r = await call('/lingo/offer', { name: 'files', code: 'fn read(path) {}', address: 'http://127.0.0.1:1' }, owner)
+    return r.status === 403 && /one of this computer's own/.test(r.json.error)
+  }],
   ['a command runs, as the owner', async () => {
     const r = await call('/', 'return commands.run("Write-Output 7").out', owner)
     return r.status === 200 && /7/.test(r.json)
@@ -237,7 +261,7 @@ const WINDOWS_CASES = [
 rmSync(HOME, { recursive: true, force: true })
 mkdirSync(HOME, { recursive: true })
 writeFileSync(SETTINGS, JSON.stringify({ home: HOME, port: FLOOR, owner: publicOf(OWNER), steps: 100000, ms: 5000,
-  keys: { 'laptop.james': publicOf(JAMES) }, calls: { echo: `http://127.0.0.1:${ONSAY_PORT}/echo` }, ask: `http://127.0.0.1:${ONSAY_PORT}/ask` }))
+  keys: { 'laptop.james': publicOf(JAMES) }, ask: `http://127.0.0.1:${ONSAY_PORT}/ask` }))
 await new Promise((r) => stand.listen(ONSAY_PORT, '127.0.0.1', r))
 const floor = spawn(EXE, [SETTINGS], { cwd: CORE, stdio: ['ignore', 'ignore', 'pipe'] })
 let said = ''

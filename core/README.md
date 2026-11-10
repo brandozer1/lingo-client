@@ -22,10 +22,10 @@ this one, `bin/floor.exe` and `bin/linux-*/floor`, and tested by `test/floor.mjs
 |------|--------------|
 | `POST /`, lingo script as its body | runs it, its value as JSON. Each of the computer's own calls it makes but pure computing is a request to `/group/name`, like `/lingo/use`, judged by the policy for whoever sent the script |
 | `POST /group/name`, values as JSON | the same as the script `return group.name(...)`: a list in order, or a record by name for one of this computer's own calls |
+| `POST /lingo/offer`, `{name, code, address}` | a lingo offering itself here: its code, or only its functions' signatures, read by the compiler into what it does, and the address its calls are sent to. Kept in `home/offered.json`, its table, and sent to Onsay as each lingo's OpenAPI, never its address. A call of an offered lingo, `echo.hello(...)`, goes there, signed by this floor. With no code, it is taken away; one of this computer's own groups can't be offered |
 | `GET /` | what it is, `{floor, name, key}`, its own key for an owner to add to their record |
 
-Its settings (`floor.json`): `home`, `port`, `name`, `owner` (a key or a handle), `keys` (signers known by key),
-`calls` (where a call it doesn't answer goes, by group), `ask` (where `lingo(...)` and `use(...)` of a name are asked),
+Its settings (`floor.json`): `home`, `port`, `name`, `owner` (a key or a handle), `keys` (signers known by key), `ask` (where `lingo(...)` and `use(...)` of a name are asked),
 `steps` and `ms`. On the command line, `floor <settings> key` gives its key and `floor <settings> run <script>` runs a
 script as the owner.
 
