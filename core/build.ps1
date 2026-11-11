@@ -8,7 +8,7 @@
 #                               Linux's installed
 # What is only made on the way, like win64.o, tlds.h, builtins.h and standard.h, goes in obj/.
 $zig = (Get-Command zig -ErrorAction SilentlyContinue).Source
-if (-not $zig) { $zig = Get-ChildItem "$env:LOCALAPPDATA\zig" -Recurse -Filter zig.exe -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName }
+if (-not $zig -and $env:LOCALAPPDATA) { $zig = Get-ChildItem "$env:LOCALAPPDATA\zig" -Recurse -Filter zig.exe -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName }
 if (-not $zig) { Write-Error "zig wasn't found. Get it from ziglang.org/download"; exit 1 }
 
 $here = $PSScriptRoot
@@ -99,10 +99,11 @@ foreach ($arch in $chips.GetEnumerator()) {
 }
 Get-ChildItem "$here/bin", "$here/obj" -Recurse -Include *.pdb, *.lib -Exclude onsay-core.lib | Remove-Item
 
-# The lingos that ship, ai, the person's AI, and agent, on it, packed into bin/lingos by the lingo client.
+# The lingos that ship, ai, the person's AI, and agent, on it, packed into bin/lingos by the lingo client, which runs
+# only on Windows, so a build elsewhere, like a release built on Linux, leaves them out.
 $slash = $here -replace '\\', '/'
 Set-Content "$here/obj/pack.json" "{`"home`": `"$slash/obj/home`", `"lingos`": `"$slash/../lingo-library`"}"
-foreach ($name in @("ai", "agent")) {
+foreach ($name in $(if ($env:OS -eq "Windows_NT") { @("ai", "agent") } else { @() })) {
   & "$here/bin/onsay-core.exe" "$here/obj/pack.json" pack "$here/../lingo-library/$name" "$here/bin/lingos" 2>$null
   if ($LASTEXITCODE -ne 0) { Write-Error "$name couldn't be packed. To see why: bin/onsay-core.exe obj/pack.json pack ../lingo-library/$name"; exit 1 }
 }
