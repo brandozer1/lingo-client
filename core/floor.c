@@ -1,12 +1,15 @@
 // floor.c - the floor, the lingo client: one function, lingo script in and its value out, as a computer's hardware takes
 // instructions. It takes a call, checks who signed it and whether the policy lets them, runs the script the call carries,
-// logs it, and tries to send its log to Onsay. Nothing else: everything else is a lingo, called like any other. Built by
+// logs it, and tries to send its log to Onsay. It is the compiler and the lingo search in one: lingo(...), and a script
+// that doesn't compile, are asked of Onsay's index, and the ways it finds are called from here. Nothing else: everything
+// else is a lingo, called like any other. Built by
 // build.ps1 beside lingo.c, which it replaces. See ../../onsay/docs/lingo-function.md, The floor.
 //
-// 1. Settings   its settings file: home, port, name, owner, keys, ask, steps and ms, and the lingos built in
+// 1. Settings   its settings file: home, port, name, owner, keys, steps and ms, and the lingos built in
 // 2. Callers    a signer's key, the owner, and the policy
 // 3. Offers     the table of lingos offered here: what each does and where it answers, made from its own code
-// 4. Calls      each call a script makes: checked, then answered here or sent where it goes, signed
+// 4. Calls      each call a script makes: checked, then answered here or sent where it goes, signed, and the lingo
+//               search, lingo(...), which calls from here the ways Onsay's index finds
 // 5. Log        every request, a line of home/requests.log, sent to Onsay sealed whenever a connection works, its
 //               answer bringing the calls that came for this computer through Onsay
 // 6. Running    a call's script compiled and run, one at a time, within its limits
@@ -79,11 +82,10 @@ typedef struct {
      name    this computer's name, like laptop.brandon, what it signs as; left out, it signs as its key itself
      owner   whose calls reach everything: a key, ed25519:<base64>, or a handle, every one of its computers
      keys    signers known by key, {"laptop.james": "ed25519:..."}, before Onsay is asked
-     ask     where lingo(...), and use(...) of a name it can't reach, are asked, as JSON
      steps, ms   the most one call may take */
 static struct {
   val *all;
-  const char *home, *root, *name, *owner, *ask;
+  const char *home, *root, *name, *owner;
   int port;
   long long steps;
   double ms;
@@ -110,7 +112,6 @@ static int settings_read(const char *path) {
   set.home = text_or(set.all, "home", "floor-data");
   set.name = text_or(set.all, "name", "");
   set.owner = text_or(set.all, "owner", "");
-  set.ask = text_or(set.all, "ask", "");
   set.port = port && port->k == V_NUM ? (int)port->n : 6969;
   set.steps = steps && steps->k == V_NUM ? (long long)steps->n : 10000000;
   set.ms = ms && ms->k == V_NUM ? ms->n : 30000;
@@ -524,19 +525,58 @@ static val *searched(run *r, const char *id, val *values, const char *code, cons
   return sent(r, arena_fmt(r->a, "%s/%s", where, dot + 1), values, 0);
 }
 
-// What lingo(...) and use(...) ask of ask: {ask, values, gives} or {address, values}, answered {value} or {error, code}.
+// What Onsay's lingo search is asked, {ask, values, gives, mode} or {address, values}, answered {value} or {error, code}.
 static val *asked(run *r, val *question) {
-  if (!*set.ask) fail(r, "unknown", "Nothing answers lingo(...) here: its settings name no ask");
-  return sent(r, set.ask, question, 1);
+  return sent(r, ONSAY "/search/ask", question, 1);
 }
 
-// lingo.run(ask, values, gives).
+/* A call of an address from here: a web address sent to as it is, a lingo offered here sent where it answers, and any
+   other, like a lingo on another computer, reached through Onsay. */
+static val *used(run *r, const char *address, val *values) {
+  size_t n = strcspn(address, "/");
+  const char *where = offered_at(r->a, arena_fmt(r->a, "%.*s", (int)n, address));
+  if (!strncmp(address, "http://", 7) || !strncmp(address, "https://", 8)) return sent(r, address, values, 0);
+  if (where) return sent(r, arena_fmt(r->a, "%s%s", where, address + n), values, 0);
+  val *q = v_rec(r->a);
+  rec_set(r->a, q, "address", v_cstr(r->a, address));
+  rec_set(r->a, q, "values", values);
+  return asked(r, q);
+}
+
+/* lingo.run(ask, values, gives), what lingo(...) is: the lingo search, built in. Onsay's index gives the ways that answer
+   it, best first, nothing run there, and each is called from here until one answers, at most WAYS_MOST. A way that needs
+   an input nobody gave is passed over. Its answer, or the last way's failure, or unknown when none was found. Each way
+   tried is a line of the log, so Onsay learns which work. */
+#define WAYS_MOST 3
 static val *lingo_run(run *r, val **a) {
   val *q = v_rec(r->a);
   rec_set(r->a, q, "ask", a[0]);
   rec_set(r->a, q, "values", a[1]);
   rec_set(r->a, q, "gives", a[2]);
-  return asked(r, q);
+  rec_set(r->a, q, "mode", v_cstr(r->a, "list"));
+  val *ways = asked(r, q);
+  volatile int tried = 0;
+  for (volatile size_t i = 0; ways->k == V_LIST && i < ways->l.n && tried < WAYS_MOST; i++) {
+    val *way = ways->l.v[i];
+    val *needs = rec_get(way, "needs");
+    val *inputs = rec_get(way, "inputs");
+    if (needs && needs->k == V_LIST && needs->l.n) continue;
+    tried++;
+    trap_t t;
+    void *volatile prev = r->trap;
+    volatile int depth = r->depth;
+    r->trap = &t;
+    if (!setjmp(t.j)) {
+      val *got = used(r, text_or(way, "address", ""), inputs ? inputs : v_rec(r->a));
+      r->trap = prev;
+      return got;
+    }
+    r->trap = prev;
+    r->depth = depth;
+    if (!strcmp(r->code, "limit") || !strcmp(r->code, "stopped")) rethrow(r);
+  }
+  if (tried) rethrow(r);
+  fail(r, "unknown", "Nothing found that does that yet");
 }
 
 // lingo.ways(ask, values).
@@ -548,18 +588,9 @@ static val *lingo_ways(run *r, val **a) {
   return asked(r, q);
 }
 
-// lingo.use(address, values): a web address is sent to as it is, a lingo offered here is sent where it answers, and any
-// other name is asked of ask.
+// lingo.use(address, values)
 static val *lingo_use(run *r, val **a) {
-  const char *address = a[0]->t.s;
-  size_t n = strcspn(address, "/");
-  const char *where = offered_at(r->a, arena_fmt(r->a, "%.*s", (int)n, address));
-  if (!strncmp(address, "http://", 7) || !strncmp(address, "https://", 8)) return sent(r, address, a[1], 0);
-  if (where) return sent(r, arena_fmt(r->a, "%s%s", where, address + n), a[1], 0);
-  val *q = v_rec(r->a);
-  rec_set(r->a, q, "address", a[0]);
-  rec_set(r->a, q, "values", a[1]);
-  return asked(r, q);
+  return used(r, a[0]->t.s, a[1]);
 }
 
 // lingo.setting(key, reference): the floor keeps no settings, so it is asked of the lingo offered as settings.
@@ -784,7 +815,9 @@ static int names_lingo(const char *text, const char *name) {
 
 /* A script run for who: compiled as the body of fn main(a0, a1, ...) in call.ls, against the standard functions, the
    lingos kept here that it names, and those they name in turn, and this computer's own calls, and run with values as
-   a0, a1 and on, within the limits. Its value, or NULL with code and message. Each runs on its own thread, side by side. */
+   a0, a1 and on, within the limits. Its value, or NULL with code and message. Each runs on its own thread, side by side.
+   SEARCHED is what runs for one that doesn't compile. */
+#define SEARCHED "return lingo.run(a0, a1)"
 static val *run_script(arena *a, const char *script, val *values, const caller *who, const char **code, const char **message) {
   buf code_text = { 0 };
   val *stacked = v_list(a);
@@ -831,6 +864,18 @@ static val *run_script(arena *a, const char *script, val *values, const caller *
   }
   val *inst = lingo_load(a, natives(a), stacked, message);
   val *program = inst ? lingo_call(a, inst, "call.main") : NULL;
+  /* What doesn't compile, a character missing or not Lingo at all, is asked of the lingo search, its values by name, and
+     what it finds is the answer, as if the compiler had done it. Nothing found, or nothing they may search, it is the
+     compile error it was. */
+  if (!program && strcmp(script, SEARCHED)) {
+    const char *why = *message;
+    val *asking = v_list(a);
+    list_push(a, asking, v_cstr(a, script));
+    list_push(a, asking, input);
+    val *got = run_script(a, SEARCHED, asking, who, code, message);
+    if (got || (strcmp(*code, "unknown") && strcmp(*code, "denied"))) return got;
+    *message = why;
+  }
   if (!program) {
     *code = "compile";
     return NULL;

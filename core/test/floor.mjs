@@ -103,11 +103,22 @@ const stand = http.createServer((req, res) => {
     if (req.url === '/echo/slow') return setTimeout(() => json(200, 'slow'), 1500)
     if (req.url.startsWith('/echo')) { echoed.push({ path: req.url, body: JSON.parse(body || 'null'), signed: checks(req, body), run: req.headers['onsay-run'] }); return json(200, { path: req.url, got: JSON.parse(body || 'null') }) }
     if (req.url === '/broken') return json(500, { error: 'it broke over there' })
-    if (req.url === '/ask') {
+    if (req.url === '/weather') return json(200, `sunny in ${JSON.parse(body).city}`)
+    // The lingo search: the ways it finds, best first, in list mode, or a call relayed to its address.
+    if (req.url === '/search/ask') {
       const q = JSON.parse(body)
-      if (q.ask === 'the weather in a city') return json(200, { value: `sunny in ${q.values.city}` })
+      const here = `http://127.0.0.1:${ONSAY_PORT}`
       if (q.address === 'weather.tester/now') return json(200, { value: 'raining' })
-      return json(200, { error: `Nothing can do "${q.ask}" yet`, code: 'unknown' })
+      if (q.mode !== 'list') return json(200, { error: 'the floor asks for ways', code: 'type' })
+      if (q.ask === 'the weather in a city') {
+        return json(200, { value: [
+          { address: `${here}/weather`, inputs: {}, needs: ['city'] },
+          { address: `${here}/broken`, inputs: {} },
+          { address: `${here}/weather`, inputs: { city: q.values.city } },
+        ] })
+      }
+      if (q.ask === 'whats the weather in rome') return json(200, { value: [{ address: `${here}/weather`, inputs: { city: 'Rome' } }] })
+      return json(200, { value: [] })
     }
     json(404, { error: 'nothing here' })
   })
@@ -197,13 +208,22 @@ const CASES = [
     const r = await call('/', `return use("http://127.0.0.1:${ONSAY_PORT}/broken", {})`, owner)
     return r.status === 500 && /it broke over there/.test(r.json.error) && lines().some((l) => l.way === 'out' && !l.allowed)
   }],
-  ['lingo(...) is asked of ask, and its answer goes on', async () => {
+  ['lingo(...) asks Onsay\'s index for ways and calls them from here, best first, past one missing an input and one that fails', async () => {
     const r = await call('/', 'w = lingo("the weather in a city", {city: "Rome"}, "text")\nreturn "it is " + w', owner)
-    return r.status === 200 && r.json === 'it is sunny in Rome'
+    const out = lines().filter((l) => l.way === 'out')
+    return r.status === 200 && r.json === 'it is sunny in Rome' && out.some((l) => /broken/.test(l.route) && !l.allowed)
   }],
-  ['use() of a name it can\'t reach is asked of ask too', async () => {
+  ['use() of a name it can\'t reach goes through Onsay', async () => {
     const r = await call('/', 'return use("weather.tester/now", {})', owner)
     return r.status === 200 && r.json === 'raining'
+  }],
+  ['what doesn\'t compile is asked of the lingo search, and its answer comes back as if it had compiled', async () => {
+    const r = await call('/', 'whats the weather in rome', owner)
+    return r.status === 200 && r.json === 'sunny in Rome'
+  }],
+  ['what doesn\'t compile and finds nothing is the compile error it was', async () => {
+    const r = await call('/', 'return 1 +', owner)
+    return r.status >= 400 && r.json.code === 'compile'
   }],
   ['a grant lets james, signed and known by key, make what it allows and nothing more', async () => {
     policy([{ to: 'james', allow: ['/lingo/use'] }])
@@ -373,7 +393,7 @@ const WINDOWS_CASES = [
 rmSync(HOME, { recursive: true, force: true })
 mkdirSync(HOME, { recursive: true })
 writeFileSync(SETTINGS, JSON.stringify({ home: HOME, port: FLOOR, owner: publicOf(OWNER), steps: 100000, ms: 5000,
-  keys: { 'laptop.james': publicOf(JAMES) }, ask: `http://127.0.0.1:${ONSAY_PORT}/ask` }))
+  keys: { 'laptop.james': publicOf(JAMES) } }))
 await new Promise((r) => stand.listen(ONSAY_PORT, '127.0.0.1', r))
 const floor = spawn(EXE, [SETTINGS], { cwd: CORE, stdio: ['ignore', 'ignore', 'pipe'] })
 let said = ''

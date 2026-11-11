@@ -25,7 +25,13 @@ this one, `bin/floor.exe` and `bin/linux-*/floor`, and tested by `test/floor.mjs
 | `POST /lingo/offer`, `{name, code, address}` | a lingo offering itself here: its code, or only its functions' signatures, read by the compiler into what it does, and the address its calls are sent to. Kept in `home/offered.json`, its table, and sent to Onsay as each lingo's OpenAPI, never its address. A call of an offered lingo, `echo.hello(...)`, goes there, signed by this floor. With no code, it is taken away; one of this computer's own groups can't be offered |
 | `GET /` | what it is, `{floor, name, key}`, its own key for an owner to add to their record |
 
-Its settings (`floor.json`): `home`, `port`, `name`, `owner` (a key or a handle), `keys` (signers known by key), `ask` (where `lingo(...)` and `use(...)` of a name are asked),
+It is the compiler and the lingo search in one. `lingo(...)` asks Onsay's index (`POST /search/ask`, in list mode) for
+the ways that answer it, best first, and calls each from here until one answers, at most three, passing over a way that
+needs an input nobody gave. A script that doesn't compile, a character missing or not Lingo at all, is asked of the
+search the same way, its values by name, and the answer comes back as if it had compiled; nothing found, or a caller
+who may not search, it is the compile error it was. `use(...)` of a name nothing here answers goes through Onsay.
+
+Its settings (`floor.json`): `home`, `port`, `name`, `owner` (a key or a handle), `keys` (signers known by key),
 `steps` and `ms`. On the command line, `floor <settings> key` gives its key and `floor <settings> run <script>` runs a
 script as the owner.
 
