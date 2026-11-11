@@ -289,7 +289,8 @@ static pl_gate *offer_gate;
 static void offered_sent(void);
 static val *natives(arena *a);
 
-// The table, home/offered.json: {name: {address, about, openapi}}, read as each call comes, so a change holds at once.
+// The table, home/offered.json: {name: {address or code, about, openapi}}, read as each call comes, so a change holds at
+// once.
 static val *offers(arena *a) {
   buf text = { 0 };
   val *t = pl_read(arena_fmt(a, "%s/offered.json", set.root), &text) ? json_parse(a, text.s, text.n, NULL) : NULL;
@@ -352,8 +353,9 @@ static val *openapi_of(arena *a, const char *name, val *l) {
 }
 
 /* 3. lingo.offer(name, code, address): a lingo offering itself here, its code, Lingo or only its functions' signatures,
-      read by the compiler into what it does, and where it answers, an address its calls are sent to. Its functions, each
-      its name and what it does, but its helpers. Offered again, it replaces what was; with no code, it is taken away. A
+      read by the compiler into what it does, and where it answers, an address its calls are sent to. With no address,
+      its code is kept in the table and runs right here, stacked with each script that names it. Its functions, each its
+      name and what it does, but its helpers. Offered again, it replaces what was; with no code, it is taken away. A
       name that is one of this computer's own groups, like files, can't be offered. */
 static val *lingo_offer(run *r, val **a) {
   arena *ra = r->a;
@@ -387,7 +389,10 @@ static val *lingo_offer(run *r, val **a) {
       fail(r, "phrase", "%s", why ? why : "Its code doesn't say what it does");
     }
     val *entry = v_rec(ra);
-    rec_set(ra, entry, "address", a[2]);
+    if (a[2]->k == V_TEXT && *a[2]->t.s)
+      rec_set(ra, entry, "address", a[2]);
+    else
+      rec_set(ra, entry, "code", v_cstr(ra, code));
     if (rec_get(l, "about")) rec_set(ra, entry, "about", rec_get(l, "about"));
     rec_set(ra, entry, "openapi", openapi_of(ra, name, l));
     rec_set(ra, kept, name, entry);
@@ -418,8 +423,8 @@ static const char *offered_at(arena *a, const char *name) {
 
 ////////// 4. CALLS //////////
 
-static caller now;          // who the call running now is from
-static val *now_policy;     // and the policy it is judged by
+static _Thread_local caller now;       // who the call running on this thread is from
+static _Thread_local val *now_policy;  // and the policy it is judged by
 
 // 4. Each call of the computer's a script makes but pure computing, a request to its address, like /files/read, judged
 //    by the policy for whoever sent the script. At the command line, the owner's.
@@ -720,10 +725,19 @@ static val *natives(arena *a) {
   return out;
 }
 
-/* A script run for who: compiled as the body of fn main(a0, a1, ...) in call.ls, against the standard functions and this
-   computer's own calls, and run with values as a0, a1 and on, within the limits. Its value, or NULL with code and
-   message. One runs at a time. */
-static pl_gate *run_gate;
+// Whether text names the lingo name, as name.function or name/function, not inside a longer name.
+static int names_lingo(const char *text, const char *name) {
+  size_t n = strlen(name);
+  for (const char *p = strstr(text, name); p; p = strstr(p + 1, name)) {
+    int alone = p == text || !(isalnum((unsigned char)p[-1]) || p[-1] == '_' || p[-1] == '-');
+    if (alone && (p[n] == '.' || p[n] == '/')) return 1;
+  }
+  return 0;
+}
+
+/* A script run for who: compiled as the body of fn main(a0, a1, ...) in call.ls, against the standard functions, the
+   lingos kept here that it names, and those they name in turn, and this computer's own calls, and run with values as
+   a0, a1 and on, within the limits. Its value, or NULL with code and message. Each runs on its own thread, side by side. */
 static val *run_script(arena *a, const char *script, val *values, const caller *who, const char **code, const char **message) {
   buf code_text = { 0 };
   val *stacked = v_list(a);
@@ -746,18 +760,38 @@ static val *run_script(arena *a, const char *script, val *values, const caller *
   rec_set(a, e, "code", v_text(a, code_text.s, code_text.n));
   list_push(a, stacked, e);
   buf_free(&code_text);
+  // Each lingo kept here that something stacked names, until none more is named.
+  val *table = offers(a);
+  size_t standards = sizeof STANDARD / sizeof *STANDARD;
+  for (int more = 1; more;) {
+    more = 0;
+    for (size_t i = 0; i < table->r.n && !more; i++) {
+      const char *kept = text_or(table->r.v[i], "code", NULL);
+      const char *file = arena_fmt(a, "%s.ls", table->r.key[i]);
+      int there = 0;
+      int named_here = 0;
+      for (size_t k = standards; kept && k < stacked->l.n; k++) {
+        there |= !strcmp(text_or(stacked->l.v[k], "file", ""), file);
+        named_here |= names_lingo(text_or(stacked->l.v[k], "code", ""), table->r.key[i]);
+      }
+      if (!kept || there || !named_here) continue;
+      val *one = v_rec(a);
+      rec_set(a, one, "file", v_cstr(a, file));
+      rec_set(a, one, "code", v_cstr(a, kept));
+      list_push(a, stacked, one);
+      more = 1;
+    }
+  }
   val *inst = lingo_load(a, natives(a), stacked, message);
   val *program = inst ? lingo_call(a, inst, "call.main") : NULL;
   if (!program) {
     *code = "compile";
     return NULL;
   }
-  pl_enter(run_gate);
   now = *who;
   now_policy = policy(a);
   val *got = run_program(a, program, input, (limits){ set.steps, set.ms, &stop }, code, message);
   now.name = NULL;
-  pl_leave(run_gate);
   return got;
 }
 
@@ -991,8 +1025,8 @@ int main(int argc, char **argv) {
   const char *verb = argc > 2 ? argv[2] : NULL;
   if (!settings_read(path)) return 1;
   keys_gate = pl_gate_new();
+  nonce_gate = pl_gate_new();
   log_gate = pl_gate_new();
-  run_gate = pl_gate_new();
   offer_gate = pl_gate_new();
   native_begin(0);
   std_phrases();
@@ -1003,8 +1037,9 @@ int main(int argc, char **argv) {
   phrase_add("lingo", "net", "use(address: url, values: record=nothing)", lingo_use);
   phrase_add("lingo", "net", "setting(key: text, reference: text)", setting_);
   phrase_add("lingo", "lingos",
-      "offer(name: text, code: text, address: url) -> [{name: text, does: text}]: a lingo offering itself here, its code or "
-      "its functions' signatures, and where its calls are sent, giving back its functions; with no code, taken away",
+      "offer(name: text, code: text, address: url=nothing) -> [{name: text, does: text}]: a lingo offering itself here, its "
+      "code or its functions' signatures, and where its calls are sent, or with no address its code kept to run here, "
+      "giving back its functions; with no code, taken away",
       lingo_offer);
   for (size_t i = 0; i < BUILT_IN; i++) {
     native_begin(i + 1);

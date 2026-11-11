@@ -320,9 +320,9 @@ void pl_leave(pl_gate *g);
 void pl_wait(pl_gate *g, double seconds);   // inside the gate: let go, wait to be woken or for the time, take it again
 void pl_wake(pl_gate *g);
 
-// A crash on this thread while *active is set, like a bad pointer or the stack running out, goes to recover, which never
-// returns, instead of ending the program. On any other thread, or with *active unset, it ends the program as ever.
-void pl_faults(void *volatile *active, void (*recover)(const char *what));
+// A crash on any thread while active() gives something for it, like a bad pointer or the stack running out, goes to
+// recover on that thread, which never returns, instead of ending the program. Otherwise it ends the program as ever.
+void pl_faults(void *(*active)(void), void (*recover)(const char *what));
 void pl_fault_over(void);   // once off the stack that crashed, so the stack can run out and be caught again
 
 ////////// 3. LINKS //////////

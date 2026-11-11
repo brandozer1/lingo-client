@@ -73,9 +73,12 @@ typedef struct {
   void *arg;
 } start;
 
+// Each thread keeps back stack to handle its own stack running out (pl_faults).
 static DWORD WINAPI begin(LPVOID p) {
   start s = *(start *)p;
+  ULONG room = 64 << 10;
   free(p);
+  SetThreadStackGuarantee(&room);
   s.fn(s.arg);
   return 0;
 }
@@ -87,11 +90,10 @@ void pl_thread(void (*fn)(void *), void *arg) {
   if (h) CloseHandle(h);
 }
 
-static void *volatile *fault_active;
+static void *(*fault_active)(void);
 static void (*fault_recover)(const char *what);
-static const char *fault_what;
-static DWORD fault_thread;
-static int fault_overflow;
+static _Thread_local const char *fault_what;
+static _Thread_local int fault_overflow;
 
 // Where a crash continues, as though the instruction that crashed had called it, so the jump out of it unwinds as usual.
 __attribute__((force_align_arg_pointer)) static void fault_landing(void) { fault_recover(fault_what); }
@@ -108,7 +110,7 @@ static LONG WINAPI on_fault(EXCEPTION_POINTERS *e) {
     case EXCEPTION_DATATYPE_MISALIGNMENT: what = "misaligned memory"; break;
     default: return EXCEPTION_CONTINUE_SEARCH;
   }
-  if (GetCurrentThreadId() != fault_thread || !*fault_active) return EXCEPTION_CONTINUE_SEARCH;
+  if (!fault_active || !fault_active()) return EXCEPTION_CONTINUE_SEARCH;
   fault_what = what;
   fault_overflow = e->ExceptionRecord->ExceptionCode == EXCEPTION_STACK_OVERFLOW;
   CONTEXT *c = e->ContextRecord;
@@ -124,11 +126,10 @@ static LONG WINAPI on_fault(EXCEPTION_POINTERS *e) {
   return EXCEPTION_CONTINUE_EXECUTION;
 }
 
-void pl_faults(void *volatile *active, void (*recover)(const char *what)) {
+void pl_faults(void *(*active)(void), void (*recover)(const char *what)) {
   ULONG room = 64 << 10;   // what the stack keeps back to handle running out
   fault_active = active;
   fault_recover = recover;
-  fault_thread = GetCurrentThreadId();
   SetThreadStackGuarantee(&room);
   SetUnhandledExceptionFilter(on_fault);
 }
@@ -791,20 +792,25 @@ typedef struct {
   void *arg;
 } start;
 
+// Each thread has stack of its own aside, so its stack running out can be handled too (pl_faults).
 static void *begin(void *p) {
   start s = *(start *)p;
+  stack_t aside = { .ss_sp = malloc(64 << 10), .ss_size = 64 << 10 };
+  stack_t off = { .ss_flags = SS_DISABLE };
   free(p);
+  sigaltstack(&aside, NULL);
   s.fn(s.arg);
+  sigaltstack(&off, NULL);
+  free(aside.ss_sp);
   return NULL;
 }
 
-static void *volatile *fault_active;
+static void *(*fault_active)(void);
 static void (*fault_recover)(const char *what);
-static pthread_t fault_thread;
 
 static void on_fault(int number) {
   const char *what = number == SIGFPE ? "dividing by zero" : number == SIGILL ? "a bad instruction" : "a bad memory address";
-  if (!pthread_equal(pthread_self(), fault_thread) || !*fault_active) {
+  if (!fault_active || !fault_active()) {
 #ifdef __ANDROID__
     pl_crashed(what);
 #endif
@@ -814,12 +820,11 @@ static void on_fault(int number) {
   fault_recover(what);
 }
 
-void pl_faults(void *volatile *active, void (*recover)(const char *what)) {
+void pl_faults(void *(*active)(void), void (*recover)(const char *what)) {
   stack_t aside = { .ss_sp = malloc(64 << 10), .ss_size = 64 << 10 };   // so the stack running out can be handled too
   struct sigaction on = { .sa_handler = on_fault, .sa_flags = SA_ONSTACK | SA_NODEFER };
   fault_active = active;
   fault_recover = recover;
-  fault_thread = pthread_self();
   sigaltstack(&aside, NULL);
   sigaction(SIGSEGV, &on, NULL);
   sigaction(SIGBUS, &on, NULL);

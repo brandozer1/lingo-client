@@ -2675,8 +2675,9 @@ static const char *name_of(val *v) { return v->k == V_TEXT ? v->t.s : ""; }
 
 ////////// 1. ERRORS AND LIMITS //////////
 
-static const char *phrase_now;   // the phrase running, so its errors say which it was
-static void *volatile running;   // the innermost run on the job thread, so a crash inside it ends only it
+static _Thread_local const char *phrase_now;   // the phrase running on this thread, so its errors say which it was
+static _Thread_local void *volatile running;   // the innermost run on this thread, so a crash inside it ends only it
+static void *running_now(void) { return running; }
 
 // 1.
 _Noreturn void fail(run *r, const char *code, const char *fmt, ...) {
@@ -3255,7 +3256,7 @@ val *run_program(arena *a, val *program, val *input, limits l, const char **code
   val *volatile out = NULL;
   void *volatile outer = running;
   static int guarded;
-  if (!guarded) pl_faults(&running, crashed);
+  if (!guarded) pl_faults(running_now, crashed);
   guarded = 1;
   running = r;
   if (!setjmp(t.j)) {

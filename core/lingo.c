@@ -4541,6 +4541,7 @@ static const char *TAKES[][4] = { { "start", "lingo" }, { "stop", "lingo" },
   { "call", "fn", "values" }, { "badge", "value" } };
 
 int main(int argc, char **argv) {
+  nonce_gate = pl_gate_new();
   const char *path = argc > 1 ? argv[1] : "onsay.json";
   const char *verb = argc > 2 ? argv[2] : NULL;
   size_t k = 0;

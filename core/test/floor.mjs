@@ -100,6 +100,7 @@ const stand = http.createServer((req, res) => {
       res.writeHead(200, { 'content-type': 'application/octet-stream' })
       return res.end(file)
     }
+    if (req.url === '/echo/slow') return setTimeout(() => json(200, 'slow'), 1500)
     if (req.url.startsWith('/echo')) { echoed.push({ path: req.url, body: JSON.parse(body || 'null'), signed: checks(req, body) }); return json(200, { path: req.url, got: JSON.parse(body || 'null') }) }
     if (req.url === '/broken') return json(500, { error: 'it broke over there' })
     if (req.url === '/ask') {
@@ -261,6 +262,23 @@ const CASES = [
     await call('/', 'return 1')
     for (let i = 0; i < 30 && logs.length === had; i++) await pause(100)
     return logs.length > had && logs.at(-1).when - asked < 1900
+  }],
+  ['a lingo offered with its code and no address runs right here, and one kept lingo uses another', async () => {
+    const tally = await call('/lingo/offer', { name: 'tally', code: '"Counts."\nfn twice(x: number "a number") -> number "It doubled." {return x * 2}' }, owner)
+    const sums = await call('/lingo/offer', { name: 'sums', code: 'fn four() -> number {return tally.twice(2)}' }, owner)
+    const direct = await call('/tally/twice', [21], owner)
+    const through = await call('/', 'return sums.four()', owner)
+    const table = JSON.parse(readFileSync(`${HOME}/offered.json`, 'utf8'))
+    return tally.status === 200 && sums.status === 200 && direct.json === 42 && through.json === 4 && !table.tally.address && !!table.tally.code
+  }],
+  ['calls run side by side: a quick one is answered while a slow one still waits', async () => {
+    const began = Date.now()
+    const slow = call('/', 'return echo.slow()', owner)
+    await pause(200)
+    const quick = await call('/', 'return 1', owner)
+    const quickAt = Date.now() - began
+    const done = await slow
+    return quick.json === 1 && quickAt < 1200 && done.json === 'slow'
   }],
   ['a call through Onsay is checked like one from the port, and its answer comes straight back', async () => {
     policy([])

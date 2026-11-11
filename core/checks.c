@@ -312,6 +312,8 @@ static struct {
   double at;
 } * nonces;   // each signature's keyid and nonce, kept 5 minutes, so none is used twice
 static size_t nonce_count;
+static pl_gate *nonce_gate;   // keeps the nonces, which calls coming in on their own threads check at once; made by the
+                              // lingo client as it starts
 
 
 /* 4. Who signed a request, by HTTP Message Signatures (RFC 9421) with Ed25519. Its Signature-Input covers @method,
@@ -401,6 +403,7 @@ static const char *signer(arena *a, val *h, const char *method, const char *path
   else {
     const char *seen = arena_fmt(a, "%s %s", keyid, nonce);
     size_t core_kept = 0;
+    pl_enter(nonce_gate);
     for (size_t i = 0; i < nonce_count; i++) {
       if (nonces[i].at < now - 300) {
         free(nonces[i].seen);
@@ -417,6 +420,7 @@ static const char *signer(arena *a, val *h, const char *method, const char *path
       c->name = keyid;
       c->owner = truthy(rec_get(who, "mine") ? rec_get(who, "mine") : NOTHING);
     }
+    pl_leave(nonce_gate);
   }
   buf_free(&base);
   buf_free(&raw);
