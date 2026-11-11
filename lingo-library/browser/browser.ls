@@ -18,16 +18,16 @@
 // On first use it fetches LibreWolf for this computer, Windows or Linux, from LibreWolf's own releases
 // (dl.librewolf.net), one version pinned in _release() and checked against its SHA-256, into a folder of its own with its
 // own profile, so it never touches the person's own browser. It drives it over WebDriver BiDi, the W3C standard built
-// into Firefox, through the core's socket phrases: each call starts it when it isn't running, opens a socket to it,
+// into Firefox, through the lingo client's socket calls: each call starts it when it isn't running, opens a socket to it,
 // begins a session, does its work and ends the session, so later calls find the same browser and its tabs. Out of
 // sight, as each call ends, every tab shows on a screen of its own, Browser tab 1 and on, beside the to-do it works for,
 // so the person can watch: the picture LibreWolf itself drew of what is in view, exactly as a browser shows it. Its
-// settings, in openapi.json beside it: show, to see its window, and folder, where it keeps LibreWolf. A download that
-// stops partway carries on from there next time.
+// settings: show, on to see its window, and folder, where it keeps LibreWolf, else lingo-browser in AppData\Local on
+// Windows and ~/.local/share on Linux. A download that stops partway carries on from there next time.
 
 ////////// 1. THE BROWSER //////////
 
-fn open(url, tab=nothing) "Opens a web page in a browser and gives its title and address once it has loaded: to look something up, visit a site, or start a task on a web page before reading, clicking or typing there. url is any web address, https:// left off when it likes. tab is the number of the tab to open it in, \"new\" for a new one, else the open one." {
+fn open(url: url "any web address, https:// may be left off", tab: whole|text? "the number of the tab to open it in, new for a new one, else the open one" = nothing) -> {tab: whole, title: text, url: url} "Opens a web page in a browser and gives its tab, title and address once it has loaded: to look something up, visit a site, or start a task on a web page before reading, clicking or typing there." {
   b = _begin()
   try {
     t = _tabbed(b, tab)
@@ -44,7 +44,7 @@ fn open(url, tab=nothing) "Opens a web page in a browser and gives its title and
   return out
 }
 
-fn read(tab=nothing) "What the web page open in the browser shows: its title, address and words, its links as \{text, url}, and its form's fields as \{label, type, value}, a password never given. Use it to read a page that open, click or type reached, before deciding what to do next on it." {
+fn read(tab: whole? "the tab's number, else the open one" = nothing) -> {title: text, url: url, text: text, links: [{text: text, url: url}], fields: [{label: text, type: text, value: any}]} "What the web page open in the browser shows: its title, address and words, its links, and its form's fields by their labels, a password never given. Use it to read a page that open, click or type reached, before deciding what to do next on it." {
   b = _begin()
   try {
     t = _tabbed(b, tab)
@@ -64,7 +64,7 @@ fn read(tab=nothing) "What the web page open in the browser shows: its title, ad
   return out
 }
 
-fn click(words, tab=nothing) "Clicks the link or button on the web page that shows those words, like Sign in or Next, the way a person would, and gives what it clicked and the page's title and address after. Fails when nothing on the page shows them." {
+fn click(words: text "the words the link or button shows, like Sign in or Next", tab: whole? "the tab's number, else the open one" = nothing) -> {clicked: text, title: text, url: url} "Clicks the link or button on the web page that shows those words, the way a person would, and gives what it clicked and the page's title and address after. Fails when nothing on the page shows them." {
   b = _begin()
   try {
     t = _tabbed(b, tab)
@@ -91,7 +91,7 @@ fn click(words, tab=nothing) "Clicks the link or button on the web page that sho
   return out
 }
 
-fn type(text, into=nothing, tab=nothing) "Types text into a field on the web page the way a person would, key by key: the field whose label, placeholder or name is into, its old text replaced, else the field that has the focus. A new line in text presses Enter, to send a search or a form. Gives the field's label and the page's title and address after." {
+fn type(text: text "what to type, a new line pressing Enter to send a search or a form", into: text? "the field's label, placeholder or name, else the field that has the focus" = nothing, tab: whole? "the tab's number, else the open one" = nothing) -> {field: text, title: text, url: url} "Types text into a field on the web page the way a person would, key by key, its old text replaced. Gives the field's label and the page's title and address after." {
   b = _begin()
   try {
     t = _tabbed(b, tab)
@@ -128,7 +128,7 @@ fn type(text, into=nothing, tab=nothing) "Types text into a field on the web pag
   return out
 }
 
-fn run(script, tab=nothing) "Runs JavaScript in the web page and gives its value, a promise's once it settles: for what reading, clicking and typing can't do, like pulling a table out of a page or scrolling it. script is run as a script, its last statement its value." {
+fn run(script: text "JavaScript run as a script, its last statement its value", tab: whole? "the tab's number, else the open one" = nothing) -> any "Runs JavaScript in the web page and gives its value, a promise's once it settles: for what reading, clicking and typing can't do, like pulling a table out of a page or scrolling it." {
   b = _begin()
   try {
     t = _tabbed(b, tab)
@@ -143,7 +143,7 @@ fn run(script, tab=nothing) "Runs JavaScript in the web page and gives its value
   return out
 }
 
-fn screenshot(tab=nothing) "A picture of the web page as the browser shows it, saved as a PNG file, and its path: to see a page's layout, or to show it to an AI that takes pictures." {
+fn screenshot(tab: whole? "the tab's number, else the open one" = nothing) -> {path: path} "A picture of the web page as the browser shows it, saved as a PNG file, and its path: to see a page's layout, or to show it to an AI that takes pictures." {
   b = _begin()
   try {
     t = _tabbed(b, tab)
@@ -166,7 +166,7 @@ fn screenshot(tab=nothing) "A picture of the web page as the browser shows it, s
   return {path: path}
 }
 
-fn tabs() "Every tab open in the browser, by its number, with its title and address, to pick one for the other functions. A page the browser keeps to itself, like about:home, has no title here." {
+fn tabs() -> [{tab: whole, title: text, url: url}] "Every tab open in the browser, by its number, with its title and address, to pick one for the other functions. A page the browser keeps to itself, like about:home, has no title here." {
   b = _begin()
   try {
     out = []
@@ -183,7 +183,7 @@ fn tabs() "Every tab open in the browser, by its number, with its title and addr
   return out
 }
 
-fn close(tab=nothing) "Closes a tab in the browser, the open one when none is given, and the first becomes the open one. The last tab left is emptied instead." {
+fn close(tab: whole? "the tab's number, else the open one" = nothing) "Closes a tab in the browser, and the first becomes the open one. The last tab left is emptied instead." {
   b = _begin()
   try {
     t = _tabbed(b, tab)
@@ -192,7 +192,7 @@ fn close(tab=nothing) "Closes a tab in the browser, the open one when none is gi
     } else {
       _asked(b.socket, "browsingContext.navigate", {context: t.id, url: "about:blank", wait: "complete"})
     }
-    store.delete("browser/tab")
+    _keep("tab", nothing)
   } catch e {
     _finish(b)
     fail e
@@ -200,7 +200,7 @@ fn close(tab=nothing) "Closes a tab in the browser, the open one when none is gi
   _finish(b)
 }
 
-fn render(html, tab=nothing) "Lays out a page of HTML and CSS a lingo made, like a report, a table or a card, in the browser, so it shows on the Browser screen beside the to-do and can be read, clicked or typed in like any page. tab is the number of the tab to use, \"new\" for a new one, else the open one. Gives the tab and the page's title." {
+fn render(html: text "a whole page of HTML and CSS", tab: whole|text? "the number of the tab to use, new for a new one, else the open one" = nothing) -> {tab: whole, title: text} "Lays out a page of HTML and CSS a lingo made, like a report, a table or a card, in the browser, so it shows on the Browser screen beside the to-do and can be read, clicked or typed in like any page. Gives the tab and the page's title." {
   b = _begin()
   try {
     t = _tabbed(b, tab)
@@ -230,11 +230,10 @@ fn _release() "The LibreWolf it fetches, by its version, where each computer's i
   }
 }
 
-fn _installed() "Where LibreWolf is on this computer, \{version, windows, folder, exe, profile}, kept in store, fetched and checked first when it isn't there, is another version, or the folder setting moved it." {
+fn _installed() "Where LibreWolf is on this computer, \{version, windows, folder, exe, profile}, kept in its notes, fetched and checked first when it isn't there, is another version, or the folder setting moved it." {
   r = _release()
   want = text.replace(std.text(setting("folder") ?? ""), "\\", "/")
-  kept = store.get("browser/place")
-  p = kept == nothing ? nothing : std.from_json(kept)
+  p = _kept("place")
   if p != nothing and p.version == r.version and files.exists(p.exe) and (want == "" or want == p.folder) {return p}
   windows = files.exists("C:/Windows")
   if windows {
@@ -272,7 +271,7 @@ fn _installed() "Where LibreWolf is on this computer, \{version, windows, folder
     ], "\n"))
   }
   if done.code != 0 {fail "LibreWolf couldn't be fetched: {done.out}"}
-  store.put("browser/place", std.to_json(p))
+  _keep("place", p)
   return p
 }
 
@@ -289,7 +288,7 @@ fn _begin() "A socket to the running browser with a session begun on it, as \{so
     done = commands.run("rm -f " + _quoted(ready, false) + "\nnohup " + _quoted(p.exe, false) + " " + flags + " >/dev/null 2>&1 & echo $!")
   }
   if done.code != 0 {fail "LibreWolf couldn't start: {done.out}"}
-  store.put("browser/pid", text.trim(done.out))
+  _keep("pid", text.trim(done.out))
   for turn in 1..60 {
     compute.wait(0.5)
     s = _reached(p)
@@ -312,7 +311,7 @@ fn _reached(p) "A socket to the browser with a session begun, or nothing when it
   } catch e {
     socket.close(s)
     if not ("Maximum number of active sessions" in e) {fail e}
-    pid = std.number(store.get("browser/pid") ?? "")
+    pid = std.number(_kept("pid") ?? "")
     if pid != nothing {
       try {commands.stop(pid)} catch e {}
     }
@@ -360,12 +359,12 @@ fn _tabbed(b, tab) "The tab to use, \{id, number}, which becomes the open one: n
     made = _asked(b.socket, "browsingContext.create", {type: "tab"}).context
     ids = [made]
   }
-  n = made != nothing ? list.index_of(ids, made) + 1 : std.number(tab ?? store.get("browser/tab") ?? 1)
+  n = made != nothing ? list.index_of(ids, made) + 1 : std.number(tab ?? _kept("tab") ?? 1)
   if n == nothing or n < 1 or n > std.length(ids) {
     if tab != nothing {fail "There's no tab {tab}. tabs gives the tabs open"}
     n = 1
   }
-  store.put("browser/tab", n)
+  _keep("tab", n)
   return {id: ids[n - 1], number: n}
 }
 
@@ -405,6 +404,26 @@ fn _plain(v) "A value from the page, as WebDriver BiDi writes it, as a plain val
     return out
   }
   return v.value
+}
+
+fn _notes() "Where it keeps what it knows between calls, browser.json in its folder: the folder setting, else lingo-browser in AppData\\Local on Windows and ~/.local/share on Linux." {
+  want = text.replace(std.text(setting("folder") ?? ""), "\\", "/")
+  folder = want != "" ? want : files.exists("C:/Windows") ? "~/AppData/Local/lingo-browser" : "~/.local/share/lingo-browser"
+  return {folder: folder, file: folder + "/browser.json"}
+}
+
+fn _kept(key) "What it kept under key, or nothing." {
+  n = _notes()
+  if not files.exists(n.file) {return nothing}
+  return std.from_json(files.read(n.file))[key]
+}
+
+fn _keep(key, value) "Keeps value under key, nothing taking it away." {
+  n = _notes()
+  all = files.exists(n.file) ? std.from_json(files.read(n.file)) : {}
+  all[key] = value
+  try {files.make_folder(n.folder)} catch e {}
+  files.write(n.file, std.to_json(all))
 }
 
 fn _quoted(words, windows) "Text as one word of this computer's shell, in single quotes, PowerShell's on Windows, else sh's." {

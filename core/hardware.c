@@ -203,7 +203,30 @@ static DWORD open_url(
   return *connection ? 0 : GetLastError();
 }
 
+/* WinHTTP's WebSockets, Windows 8 and later, found as they are first wanted rather than linked, so the lingo client still
+   starts on Windows 7, where a socket fails saying why. */
+typedef HINTERNET(WINAPI *ws_upgrade_fn)(HINTERNET, DWORD_PTR);
+typedef DWORD(WINAPI *ws_send_fn)(HINTERNET, WINHTTP_WEB_SOCKET_BUFFER_TYPE, PVOID, DWORD);
+typedef DWORD(WINAPI *ws_receive_fn)(HINTERNET, PVOID, DWORD, DWORD *, WINHTTP_WEB_SOCKET_BUFFER_TYPE *);
+static ws_upgrade_fn ws_upgrade;
+static ws_send_fn ws_send;
+static ws_receive_fn ws_receive;
+
+static int websockets(void) {
+  HMODULE m = GetModuleHandleW(L"winhttp.dll");
+  if (!ws_upgrade && m) {
+    ws_send = (ws_send_fn)(void *)GetProcAddress(m, "WinHttpWebSocketSend");
+    ws_receive = (ws_receive_fn)(void *)GetProcAddress(m, "WinHttpWebSocketReceive");
+    ws_upgrade = (ws_upgrade_fn)(void *)GetProcAddress(m, "WinHttpWebSocketCompleteUpgrade");
+  }
+  return ws_upgrade && ws_send && ws_receive;
+}
+
 pl_link *pl_connect(const char *url, const char *headers, buf *error) {
+  if (!websockets()) {
+    buf_str(error, "This version of Windows has no WebSockets: they need Windows 8 or later");
+    return NULL;
+  }
   // WinHTTP reads the address as http or https, then upgrades the connection to a WebSocket.
   buf http = { 0 };
   if (!strncmp(url, "wss://", 6)) {
@@ -245,7 +268,7 @@ pl_link *pl_connect(const char *url, const char *headers, buf *error) {
     buf_fmt(error, "The server answered %lu instead of opening a connection", (unsigned long)status);
     goto done;
   }
-  l->socket = WinHttpWebSocketCompleteUpgrade(request, 0);
+  l->socket = ws_upgrade(request, 0);
   if (!l->socket) {
     failed = GetLastError();
     step = "Opening the connection";
@@ -272,7 +295,7 @@ int pl_send(pl_link *l, const char *text, size_t n) {
   EnterCriticalSection(&l->sending);
   DWORD e = l->closed
       ? 1
-      : WinHttpWebSocketSend(l->socket, WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE, (PVOID)text, (DWORD)n);
+      : ws_send(l->socket, WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE, (PVOID)text, (DWORD)n);
   LeaveCriticalSection(&l->sending);
   return e == 0;
 }
@@ -283,7 +306,7 @@ int pl_receive(pl_link *l, buf *out) {
     if (l->closed) return 0;
     DWORD got = 0;
     WINHTTP_WEB_SOCKET_BUFFER_TYPE type;
-    if (WinHttpWebSocketReceive(l->socket, chunk, sizeof chunk, &got, &type)) return 0;
+    if (ws_receive(l->socket, chunk, sizeof chunk, &got, &type)) return 0;
     if (type == WINHTTP_WEB_SOCKET_CLOSE_BUFFER_TYPE) return 0;
     buf_add(out, chunk, got);
     if (type == WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE || type == WINHTTP_WEB_SOCKET_BINARY_MESSAGE_BUFFER_TYPE)

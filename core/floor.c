@@ -548,12 +548,14 @@ static val *used(run *r, const char *address, val *values) {
    an input nobody gave is passed over. Its answer, or the last way's failure, or unknown when none was found. Each way
    tried is a line of the log, so Onsay learns which work. */
 #define WAYS_MOST 3
+static _Thread_local int ways_tried;   // ways the last lingo(...) on this thread called, for a script that didn't compile
 static val *lingo_run(run *r, val **a) {
   val *q = v_rec(r->a);
   rec_set(r->a, q, "ask", a[0]);
   rec_set(r->a, q, "values", a[1]);
   rec_set(r->a, q, "gives", a[2]);
   rec_set(r->a, q, "mode", v_cstr(r->a, "list"));
+  ways_tried = 0;
   val *ways = asked(r, q);
   volatile int tried = 0;
   for (volatile size_t i = 0; ways->k == V_LIST && i < ways->l.n && tried < WAYS_MOST; i++) {
@@ -562,6 +564,7 @@ static val *lingo_run(run *r, val **a) {
     val *inputs = rec_get(way, "inputs");
     if (needs && needs->k == V_LIST && needs->l.n) continue;
     tried++;
+    ways_tried = tried;
     trap_t t;
     void *volatile prev = r->trap;
     volatile int depth = r->depth;
@@ -865,15 +868,17 @@ static val *run_script(arena *a, const char *script, val *values, const caller *
   val *inst = lingo_load(a, natives(a), stacked, message);
   val *program = inst ? lingo_call(a, inst, "call.main") : NULL;
   /* What doesn't compile, a character missing or not Lingo at all, is asked of the lingo search, its values by name, and
-     what it finds is the answer, as if the compiler had done it. Nothing found, or nothing they may search, it is the
-     compile error it was. */
+     what it finds is the answer, as if the compiler had done it. Unless a way it found was called and failed, which is
+     then the failure, it is the compile error it was: nothing found, the search out of reach, or a caller who may not
+     search. */
   if (!program && strcmp(script, SEARCHED)) {
     const char *why = *message;
     val *asking = v_list(a);
     list_push(a, asking, v_cstr(a, script));
     list_push(a, asking, input);
+    ways_tried = 0;
     val *got = run_script(a, SEARCHED, asking, who, code, message);
-    if (got || (strcmp(*code, "unknown") && strcmp(*code, "denied"))) return got;
+    if (got || ways_tried) return got;
     *message = why;
   }
   if (!program) {

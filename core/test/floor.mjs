@@ -110,6 +110,7 @@ const stand = http.createServer((req, res) => {
       const here = `http://127.0.0.1:${ONSAY_PORT}`
       if (q.address === 'weather.tester/now') return json(200, { value: 'raining' })
       if (q.mode !== 'list') return json(200, { error: 'the floor asks for ways', code: 'type' })
+      if (q.ask.includes('refused')) return json(401, { error: 'Sign in to continue' })
       if (q.ask === 'the weather in a city') {
         return json(200, { value: [
           { address: `${here}/weather`, inputs: {}, needs: ['city'] },
@@ -223,6 +224,10 @@ const CASES = [
   }],
   ['what doesn\'t compile and finds nothing is the compile error it was', async () => {
     const r = await call('/', 'return 1 +', owner)
+    return r.status >= 400 && r.json.code === 'compile'
+  }],
+  ['and so is one the search refuses, like a computer not signed in', async () => {
+    const r = await call('/', 'refused = 1 +', owner)
     return r.status >= 400 && r.json.code === 'compile'
   }],
   ['a grant lets james, signed and known by key, make what it allows and nothing more', async () => {
