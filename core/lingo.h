@@ -236,6 +236,8 @@ void lingo_hook(const lingo_hooks *hooks);
                     empty record, which callers report as clamped: there is nothing to clamp any more
      lingo_setting  one of a lingo's settings as this computer keeps them, or NULL. lingo_set keeps one, 1 when it was
      lingo_home     this lingo client's home folder, as a whole path, for a file a native lingo keeps there, like a log
+     lingo_onsay    where Onsay is, like https://api.onsay.dev, and lingo_vouched whether Onsay signed value, its
+                    signature onsay:<base64> over value as Onsay signs it, checked with the key the floor was built with
      lingo_serves   1 in a lingo client that serves, whether or not the native lingo asking runs, 0 at the command line
      lingo_said     on the job thread: a line the running request says for the person, handed to the native lingo that
                     sends such lines on (said in lingo_hooks). 1 when it took it, else 0, and this computer shows it
@@ -260,6 +262,8 @@ val *lingo_policy(arena *a, val *account, const char *device, const char **why);
 val *lingo_setting(arena *a, const char *lingo, const char *key);
 int lingo_set(const char *lingo, const char *key, val *value);
 const char *lingo_home(void);
+const char *lingo_onsay(void);
+int lingo_vouched(val *value, val *signed_);
 int lingo_serves(void);
 int lingo_said(const char *text);
 const char *lingo_job(void);
@@ -337,7 +341,7 @@ void pl_free(pl_link *l);
 int pl_read(const char *path, buf *out);
 int pl_write(const char *path, const char *data, size_t n);   // replaces the file whole, never half written
 int pl_append(const char *path, const char *data, size_t n);  // adds to its end, making it when missing
-int pl_delete(const char *path);
+int pl_delete(const char *path);                              // a file, or a folder once it is empty
 int pl_folder(const char *path);                              // makes it, and the folders above it, if missing
 void pl_whole(const char *path, buf *out);                    // the path whole, from the folder it runs in
 // Everything in a folder, one level: each name, whether it is a folder, its size, and when it last changed, in seconds.
@@ -363,8 +367,8 @@ void *pl_symbol(const char *library, const char *function);
 lingo_entry pl_library(const char *path, buf *error);
 
 // One web request, for http.send: method a word in capitals, url whole with no #, headers a record of text, each a whole
-// line. Its answer, {status, headers, text}, headers a record by lower case name, redirects followed, or NULL with why in
-// error, in words. An answer over 4 MB, or not text, is an error too.
+// line. Its answer, {status, headers, text}, headers a record by lower case name, redirects followed, with bytes in place
+// of text for an answer that isn't text, like a file, or NULL with why in error, in words. An answer over 4 MB is an error.
 val *pl_http(arena *a, const char *method, const char *url, val *headers, const char *body, size_t n, double seconds, buf *error);
 
 ////////// 6. CONNECTIONS //////////

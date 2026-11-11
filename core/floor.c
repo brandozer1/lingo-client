@@ -148,6 +148,8 @@ static void logged(arena *a, const char *way, const char *who, const char *route
     const char *error, double ms);
 
 const char *lingo_home(void) { return set.root; }
+const char *lingo_onsay(void) { return ONSAY; }
+int lingo_vouched(val *value, val *signed_) { return signed_by(value, signed_, NULL); }
 void onsay_name(buf *out) { buf_str(out, set.name); }
 const char *native_name(size_t lingo) { return lingo && lingo <= BUILT_IN ? built_in[lingo - 1].name : "core"; }
 

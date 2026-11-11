@@ -346,7 +346,7 @@ int pl_append(const char *path, const char *data, size_t n) {
 
 int pl_delete(const char *path) {
   wchar_t *w = win_wide(path);
-  int ok = DeleteFileW(w) || GetLastError() == ERROR_FILE_NOT_FOUND;
+  int ok = DeleteFileW(w) || RemoveDirectoryW(w) || GetLastError() == ERROR_FILE_NOT_FOUND;
   free(w);
   return ok;
 }
@@ -580,13 +580,13 @@ val *pl_http(arena *a, const char *method, const char *url, val *headers, const 
     buf_free(&where);
   } else if (text.n > ANSWER_ROOM)
     buf_fmt(error, "%s answered with more than 4 MB", url);
-  else if (!utf8_ok(text.s ? text.s : "", text.n))
-    buf_fmt(error, "%s answered with something that isn't text, like a picture or a file", url);
   else {
+    int words = utf8_ok(text.s ? text.s : "", text.n);
     out = v_rec(a);
     rec_set(a, out, "status", v_num(a, status));
     rec_set(a, out, "headers", header_lines(a, raw.s ? raw.s : ""));
-    rec_set(a, out, "text", v_text(a, text.s ? text.s : "", text.n));
+    if (words) rec_set(a, out, "text", v_text(a, text.s ? text.s : "", text.n));
+    else rec_set(a, out, "bytes", v_bytes(a, text.s, text.n));
   }
   if (c) WinHttpCloseHandle(c);
   if (s) WinHttpCloseHandle(s);
@@ -1436,13 +1436,13 @@ val *pl_http(arena *a, const char *method, const char *url, val *headers, const 
       buf_fmt(&where, "%s couldn't be reached", url);
       why(error, where.s, e);
       buf_free(&where);
-    } else if (!utf8_ok(text.s ? text.s : "", text.n))
-      buf_fmt(error, "%s answered with something that isn't text, like a picture or a file", url);
-    else {
+    } else {
+      int words = utf8_ok(text.s ? text.s : "", text.n);
       out = v_rec(a);
       rec_set(a, out, "status", v_num(a, (double)status));
       rec_set(a, out, "headers", header_lines(a, raw.s ? raw.s : ""));
-      rec_set(a, out, "text", v_text(a, text.s ? text.s : "", text.n));
+      if (words) rec_set(a, out, "text", v_text(a, text.s ? text.s : "", text.n));
+      else rec_set(a, out, "bytes", v_bytes(a, text.s, text.n));
     }
     curl.cleanup(c);
   }

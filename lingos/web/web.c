@@ -36,6 +36,6 @@ static val *send(run *r, val **a) {
 void web_calls(void) {
   phrase_add("http", "net",
       "send(method: text, url: url, headers: record=nothing, body: text=nothing, timeout: number=30) -> {status: whole, headers: record, text: text}: one request, "
-      "headers a record, body text, redirects followed, at most 4 MB back",
+      "headers a record, body text, redirects followed, at most 4 MB back, with bytes in place of text for a file",
       send);
 }

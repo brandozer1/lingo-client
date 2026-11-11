@@ -9,7 +9,7 @@ import http from 'node:http'
 import crypto from 'node:crypto'
 import { spawn, execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 const ONSAY_PORT = 8788, FLOOR = 6975, WINDOWS = 6976
@@ -77,6 +77,9 @@ const opened = (m) => {
 
 const logs = [], echoed = []
 const relay = []   // calls for the floor, handed over in the answer to its next held post
+// The newest release, signed as Onsay signs it unless forged, and its files by name.
+const release = { version: '9.9.9', files: [] }, shipped = {}
+let forged = false
 const stand = http.createServer((req, res) => {
   let body = ''
   req.on('data', (d) => { body += d })
@@ -86,6 +89,16 @@ const stand = http.createServer((req, res) => {
       const m = JSON.parse(body)
       logs.push({ ...opened(m), when: Date.now() })
       return json(200, { kept: 1, next: 1, calls: m.hold ? relay.splice(0) : [] })
+    }
+    if (req.url === '/updates/release') {
+      const sig = crypto.sign(null, Buffer.from(canonical(release)), ONSAY).toString('base64')
+      return json(200, { release: forged ? { ...release, version: '6.6.6' } : release, signed: `onsay:${sig}` })
+    }
+    if (req.url.startsWith('/updates/')) {
+      const file = shipped[decodeURIComponent(req.url.slice(9))]
+      if (file === undefined) return json(404, { error: 'no such file' })
+      res.writeHead(200, { 'content-type': 'application/octet-stream' })
+      return res.end(file)
     }
     if (req.url.startsWith('/echo')) { echoed.push({ path: req.url, body: JSON.parse(body || 'null'), signed: checks(req, body) }); return json(200, { path: req.url, got: JSON.parse(body || 'null') }) }
     if (req.url === '/broken') return json(500, { error: 'it broke over there' })
@@ -260,7 +273,40 @@ const CASES = [
 
 // The same floor with the lingos a Windows computer carries built in: its base calls and the web, each call of theirs a
 // request judged by the policy like any other.
+const ROOT = `${WINDOWS_HOME}/install`, sha = (b) => crypto.createHash('sha256').update(b).digest('hex')
 const WINDOWS_CASES = [
+  ['the update lingo puts the newest release Onsay signed beside the one running, each file checked, and applies it', async () => {
+    rmSync(ROOT, { recursive: true, force: true })
+    mkdirSync(`${ROOT}/app-1.0.0`, { recursive: true })
+    mkdirSync(`${ROOT}/app-0.9.0/lingos`, { recursive: true })
+    writeFileSync(`${ROOT}/app-0.9.0/lingos/old.lingo`, 'old')
+    writeFileSync(`${ROOT}/version.txt`, '1.0.0')
+    writeFileSync(`${ROOT}/app-1.0.0/same.dll`, 'unchanged')
+    const exe = Buffer.from([0x4d, 0x5a, 0, 1, 2, 255])
+    shipped['Onsay.exe'] = exe
+    shipped['lingos.agent.lingo'] = 'fn ask() {}'
+    release.files = [
+      { path: 'Onsay.exe', name: 'Onsay.exe', sha256: sha(exe), size: exe.length },
+      { path: 'same.dll', name: 'same.dll', sha256: sha('unchanged'), size: 9 },
+      { path: 'lingos/agent.lingo', name: 'lingos.agent.lingo', sha256: sha('fn ask() {}'), size: 11 },
+      { path: 'other.exe', name: 'other.exe', sha256: sha('x'), size: 1, arch: 'arm64' },
+    ]
+    const checked = await call('/update/check', [ROOT], owner)
+    const into = `${ROOT}/app-9.9.9`
+    const ready = readFileSync(`${into}/Onsay.exe`).equals(exe) && readFileSync(`${into}/same.dll`, 'utf8') === 'unchanged' &&
+      readFileSync(`${into}/lingos/agent.lingo`, 'utf8') === 'fn ask() {}' && !existsSync(`${into}/other.exe`) && !existsSync(`${ROOT}/app-0.9.0`)
+    const before = readFileSync(`${ROOT}/version.txt`, 'utf8')
+    const applied = await call('/update/apply', [ROOT, '9.9.9'], owner)
+    const again = await call('/update/check', [ROOT], owner)
+    return checked.json?.version === '9.9.9' && ready && before === '1.0.0' && applied.json?.version === '9.9.9' &&
+      readFileSync(`${ROOT}/version.txt`, 'utf8') === '9.9.9' && again.status === 200 && again.json === null
+  }],
+  ["and refuses a release Onsay didn't sign, changing nothing", async () => {
+    forged = true
+    const r = await call('/update/check', [ROOT], owner)
+    forged = false
+    return r.status === 500 && /signed/.test(r.json?.error) && !existsSync(`${ROOT}/app-6.6.6`)
+  }],
   ['with the base calls built in, the owner reads a file', async () => {
     writeFileSync(`${WINDOWS_HOME}/note.txt`, 'héllo')
     const r = await call('/', `return files.read(${JSON.stringify(`${WINDOWS_HOME}/note.txt`)})`, owner)
