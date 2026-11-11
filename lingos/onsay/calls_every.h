@@ -21,9 +21,12 @@ CALL("commands", "none", "running() -> [{pid: whole, name: text, memory: number}
 CALL("commands", "run", "stop(pid: whole): ends a running program or process", shell_stop)
 CALL("commands", "run", "start(command: command) -> {id: text}: starts a command in the background and goes on, for one that takes long or keeps running, like a server. commands.output gives what it has written", shell_start)
 CALL("commands", "none", "output(id: text) -> {running: bool, code?: whole, pid: whole, out: text}: what a command begun with commands.start has written so far, whether it still runs, and its exit code once it ended", shell_output)
+// The chat is the app's on the floor (FLOOR), offered by the app beside it like any lingo, never built in.
+#ifndef FLOOR
 CALL("chat", "none", "ask(questions: list|text, seconds: number=120) -> [text]?: asks the person questions in Onsay's chat on this computer and waits for "
      "their answers, in order, so the work goes on with them. Each question is text, answered by typing, or {question, choices}, "
      "answered by picking one. Nothing when nobody answered in seconds. Fails when no Onsay app is open to ask", chat_ask)
 CALL("chat", "none", "say(text: text): tells the person something in Onsay's chat while the work goes on, on whichever computer they asked from", chat_say)
 CALL("chat", "none", "step(text: text): shows what is being done now as a step under the person's message in Onsay's chat, on whichever computer they asked from. "
      "Say one as each part of a long job starts: it also tells Onsay the work is still going", chat_step)
+#endif

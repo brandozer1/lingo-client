@@ -68,7 +68,7 @@ $floorwin = "-lwinhttp", "-lws2_32", "-luser32", "-lbcrypt", "-lcrypt32", "-lole
 build ($win + $floor + $floorwin + $small + "-o", "$here/bin/floor.exe")
 build ($win + $floor + $floorwin + $small + "-DTEST", "-o", "$here/bin/test/floor.exe")
 # And with the lingos a Windows computer carries built in: its base calls (files, commands, the screen and input) and the web.
-$withwin = "$lingos/windows/windows.c", "$lingos/web/web.c", "$lingos/update/update.c", "-I$lingos/onsay", "-DLINGOS=X(base_calls)X(web_calls)X(update_calls)"
+$withwin = "$lingos/windows/windows.c", "$lingos/web/web.c", "$lingos/update/update.c", "-I$lingos/onsay", "-DLINGOS=X(base_calls)X(web_calls)X(update_calls)", "-DFLOOR"
 New-Item -ItemType Directory -Force "$here/bin/windows", "$here/bin/test/windows" | Out-Null
 build ($win + $floor + $withwin + $floorwin + $small + "-o", "$here/bin/windows/floor.exe")
 build ($win + $floor + $withwin + $floorwin + $small + "-DTEST", "-o", "$here/bin/test/windows/floor.exe")

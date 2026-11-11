@@ -339,6 +339,12 @@ const WINDOWS_CASES = [
     const log = readFileSync(`${WINDOWS_HOME}/requests.log`, 'utf8')
     return r.status === 200 && r.json === 200 && log.includes('"way":"out"') && log.includes('/echo/web')
   }],
+  ["the chat is the app's: offered by it like any lingo, its calls go to the app, signed by the floor", async () => {
+    const offered = await call('/lingo/offer', { name: 'chat', code: 'fn say(text: text) {}\nfn ask(questions: list|text) {}', address: `http://127.0.0.1:${ONSAY_PORT}/echo/chat` }, owner)
+    const r = await call('/', 'return chat.say("hello")', owner)
+    const got = echoed.find((e) => e.path === '/echo/chat/say')
+    return offered.status === 200 && r.status === 200 && got?.signed === true && got.body[0] === 'hello'
+  }],
   ['one of this computer\'s own groups can\'t be offered', async () => {
     const r = await call('/lingo/offer', { name: 'files', code: 'fn read(path) {}', address: 'http://127.0.0.1:1' }, owner)
     return r.status === 403 && /one of this computer's own/.test(r.json.error)

@@ -300,6 +300,10 @@ static val *shell_output(run *r, val **a) {
 
 ////////// 4. CHAT //////////
 
+// The chat's calls are the app's on the floor (FLOOR), offered by it like any lingo; chat_line stays for this computer's
+// own steps, on stdout for the app.
+#ifndef FLOOR
+
 // Questions in the person's Onsay chat here, each text, answered by typing, or {question, choices}, answered by picking
 // one, waited for until an app answers (lingo_ask), which shows them as one card. A text alone is one question. Their
 // answers in order, or nothing when none came in seconds.
@@ -317,6 +321,7 @@ static val *chat_ask(run *r, val **a) {
   if (!got) fail(r, "phrase", "No Onsay app is open on this computer to ask the person");
   return got;
 }
+#endif
 
 // A line in the chat, {"show":"say"} or {"show":"step"}, with its text, for an app to draw. A request Onsay sent this
 // computer sends it on instead, as a step, to the person who asked, wherever they are (lingo_said).
@@ -331,5 +336,7 @@ static val *chat_line(run *r, const char *kind, val *text) {
   return NOTHING;
 }
 
+#ifndef FLOOR
 static val *chat_say(run *r, val **a) { return chat_line(r, "say", a[0]); }
 static val *chat_step(run *r, val **a) { return chat_line(r, "step", a[0]); }
+#endif
