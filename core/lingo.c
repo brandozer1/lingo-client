@@ -309,29 +309,6 @@ static int keep_json(const char *name, val *v) {
 
 // compute: the clock, waiting, and a line in the lingo client's log.
 
-static val *time_(run *r, val **a) {
-  (void)a;
-  return v_num(r->a, pl_now());
-}
-
-static val *wait_(run *r, val **a) {
-  double s = num_of(r, a[0], NULL);
-  double until = pl_now() + (s > 60 ? 60 : s);
-  // Short sleeps, so a stop still lands quickly.
-  while (pl_now() < until) {
-    if (*r->stop) fail(r, "stopped", "Stopped by the person");
-    double left = until - pl_now();
-    int never = 0;
-    lingo_wait(&never, r->stop, left < 0.05 ? left : 0.05);
-  }
-  return NOTHING;
-}
-
-static val *log_(run *r, val **a) {
-  say("%s", text_of(r, a[0])->t.s);
-  return NOTHING;
-}
-
 // store: Onsay's own storage, one file per key in home/store. A key's name is written so any key is a safe file name on
 // any system: only a to z, 0 to 9, _ and - stay, everything else becomes %XX, so case and dots can never clash.
 
@@ -1397,9 +1374,6 @@ static void floor_phrases(void) {
       "read() -> {caller: text, data: record}: who called the request running, and the data of the badge it came with, "
       "a later grant's written over an earlier's",
       badge_read);
-  phrase_add("compute", "none", "now() -> number: seconds since 1970", time_);
-  phrase_add("compute", "none", "wait(seconds: number): at most 60", wait_);
-  phrase_add("compute", "none", "log(x: any): a line in the lingo client's log", log_);
   phrase_add("store", "store", "get(key: text) -> text?: Onsay's own storage on this computer", get);
   phrase_add("store", "store", "put(key: text, value: any): kept as text", core_put);
   phrase_add("store", "store", "keys(prefix: text=\"\") -> [text]: sorted", keys);

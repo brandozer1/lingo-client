@@ -7,7 +7,7 @@
 // 2. Phrases     what this computer can do: each call's line, what it needs and its C
 // 3. Compiling   Lingo code to the tree the runner runs, every lingo listed and linked
 // 4. Running     a tree to its value or its error, within its limits
-// 5. Standard    the std calls: length, slice, find, text, JSON and bytes
+// 5. Standard    the std calls: length, slice, find, text, JSON and bytes, and compute: the clock, a pause, a log line
 // 6. Signing     SHA-256, base64 and Ed25519
 
 //////////////////// 1. VALUES ////////////////////
@@ -3434,7 +3434,34 @@ static val *from_bytes(run *r, val **a) {
 
 ////////// 3. STD_PHRASES //////////
 
+// compute: the clock, a pause and a line in the log, which every lingo client has, the standard functions too.
+static val *time_(run *r, val **a) {
+  (void)a;
+  return v_num(r->a, pl_now());
+}
+
+static val *wait_(run *r, val **a) {
+  double s = num_of(r, a[0], NULL);
+  double until = pl_now() + (s > 60 ? 60 : s);
+  // Short sleeps, so a stop still lands quickly.
+  while (pl_now() < until) {
+    if (*r->stop) fail(r, "stopped", "Stopped by the person");
+    double left = until - pl_now();
+    int never = 0;
+    lingo_wait(&never, r->stop, left < 0.05 ? left : 0.05);
+  }
+  return NOTHING;
+}
+
+static val *log_(run *r, val **a) {
+  core_say("%s", text_of(r, a[0])->t.s);
+  return NOTHING;
+}
+
 void std_phrases(void) {
+  phrase_add("compute", "none", "now() -> number: seconds since 1970", time_);
+  phrase_add("compute", "none", "wait(seconds: number): at most 60", wait_);
+  phrase_add("compute", "none", "log(x: any): a line in the lingo client's log", log_);
   phrase_add("std", "none", "length(x: any) -> number: items, characters or parts", len);
   phrase_add("std", "none", "keys(r: record) -> [text]: a record's part names", std_keys);
   phrase_add(

@@ -148,6 +148,16 @@ static void logged(arena *a, const char *way, const char *who, const char *route
     const char *error, double ms);
 
 const char *lingo_home(void) { return set.root; }
+
+// A line on stderr, which whatever started the floor keeps, like compute.log's.
+void core_say(const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  vfprintf(stderr, fmt, ap);
+  va_end(ap);
+  fputc('\n', stderr);
+}
+
 const char *lingo_onsay(void) { return ONSAY; }
 int lingo_vouched(val *value, val *signed_) { return signed_by(value, signed_, NULL); }
 void onsay_name(buf *out) { buf_str(out, set.name); }
