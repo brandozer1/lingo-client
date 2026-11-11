@@ -417,6 +417,39 @@ static val *lingo_offer(run *r, val **a) {
   return out;
 }
 
+/* 3. lingo.list(): every lingo offered here, {name, about, functions: [{name, does}]}, from its OpenAPI, its helpers
+      left out. */
+static val *lingo_list(run *r, val **a) {
+  val *table = offers(r->a);
+  val *out = v_list(r->a);
+  (void)a;
+  for (size_t i = 0; i < table->r.n; i++) {
+    val *one = v_rec(r->a);
+    val *functions = v_list(r->a);
+    val *paths = rec_get(rec_get(table->r.v[i], "openapi"), "paths");
+    for (size_t k = 0; paths && paths->k == V_REC && k < paths->r.n; k++) {
+      val *op = rec_get(paths->r.v[k], "post");
+      const char *slash = strrchr(paths->r.key[k], '/');
+      if (!op || rec_get(op, "x-lingo-internal")) continue;
+      val *f = v_rec(r->a);
+      rec_set(r->a, f, "name", v_cstr(r->a, slash ? slash + 1 : paths->r.key[k]));
+      rec_set(r->a, f, "does", v_cstr(r->a, text_or(op, "description", "")));
+      list_push(r->a, functions, f);
+    }
+    rec_set(r->a, one, "name", v_cstr(r->a, table->r.key[i]));
+    rec_set(r->a, one, "about", v_cstr(r->a, text_or(table->r.v[i], "about", "")));
+    rec_set(r->a, one, "functions", functions);
+    list_push(r->a, out, one);
+  }
+  return out;
+}
+
+// 3. lingo.code(name): the code of a lingo kept here, or nothing for one that answers elsewhere or isn't offered.
+static val *lingo_code(run *r, val **a) {
+  val *code = rec_get(rec_get(offers(r->a), a[0]->t.s), "code");
+  return code ? code : NOTHING;
+}
+
 // Where an offered lingo answers, by its name, or NULL.
 static const char *offered_at(arena *a, const char *name) {
   return text_or(rec_get(offers(a), name), "address", NULL);
@@ -1047,6 +1080,8 @@ int main(int argc, char **argv) {
       "code or its functions' signatures, and where its calls are sent, or with no address its code kept to run here, "
       "giving back its functions; with no code, taken away",
       lingo_offer);
+  phrase_add("lingo", "none", "list() -> [{name: text, about: text, functions: [{name: text, does: text}]}]: every lingo offered here", lingo_list);
+  phrase_add("lingo", "none", "code(name: text) -> text?: the code of a lingo kept here, nothing for one that answers elsewhere", lingo_code);
   for (size_t i = 0; i < BUILT_IN; i++) {
     native_begin(i + 1);
     built_in[i].add();

@@ -271,6 +271,13 @@ const CASES = [
     const table = JSON.parse(readFileSync(`${HOME}/offered.json`, 'utf8'))
     return tally.status === 200 && sums.status === 200 && direct.json === 42 && through.json === 4 && !table.tally.address && !!table.tally.code
   }],
+  ['lingo.list gives every lingo offered with its functions, and lingo.code the code of one kept here', async () => {
+    const list = await call('/', 'return lingo.list()', owner)
+    const tally = list.json?.find?.((l) => l.name === 'tally')
+    const code = await call('/', 'return lingo.code("tally")', owner)
+    const elsewhere = await call('/', 'return lingo.code("echo")', owner)
+    return tally?.about === 'Counts.' && tally.functions[0].name === 'twice' && /return x \* 2/.test(code.json) && elsewhere.json === null
+  }],
   ['calls run side by side: a quick one is answered while a slow one still waits', async () => {
     const began = Date.now()
     const slow = call('/', 'return echo.slow()', owner)
@@ -292,7 +299,13 @@ const CASES = [
 // The same floor with the lingos a Windows computer carries built in: its base calls and the web, each call of theirs a
 // request judged by the policy like any other.
 const ROOT = `${WINDOWS_HOME}/install`, sha = (b) => crypto.createHash('sha256').update(b).digest('hex')
+const LIBRARY = fileURLToPath(new URL('../../lingo-library', import.meta.url))
 const WINDOWS_CASES = [
+  ['the agent and ai lingos the app ships are kept here, offered with their code, and read by the compiler whole', async () => {
+    const ai = await call('/lingo/offer', { name: 'ai', code: readFileSync(`${LIBRARY}/ai/ai.ls`, 'utf8') }, owner)
+    const agent = await call('/lingo/offer', { name: 'agent', code: readFileSync(`${LIBRARY}/agent/agent.ls`, 'utf8') }, owner)
+    return ai.status === 200 && agent.status === 200 && agent.json.some((f) => f.name === 'ask')
+  }],
   ['the update lingo puts the newest release Onsay signed beside the one running, each file checked, and applies it', async () => {
     rmSync(ROOT, { recursive: true, force: true })
     mkdirSync(`${ROOT}/app-1.0.0`, { recursive: true })

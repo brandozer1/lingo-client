@@ -242,11 +242,10 @@ fn _guide(me) "What the agent's model is told it is, how it works, the lingos he
 fn _described() "The agent's tools, as OpenAI writes them. Each needs the values its needs names, else its first." {
   text = {type: "string"}
   all = _here() + [
-    {name: "read_lingo", does: "Gives back a lingo's code and its openapi.json, its settings and such, to change it or learn from it", takes: {name: text}},
-    {name: "save_lingo", does: "Writes a lingo, or changes one, on this computer, and starts it at once. Give its whole code, every function it keeps. It gives back its functions, or the first mistake in the code to fix. openapi only when it has settings, as read_lingo gives it", takes: {
+    {name: "read_lingo", does: "Gives back a lingo's code, to change it or learn from it, or nothing for one that runs elsewhere", takes: {name: text}},
+    {name: "save_lingo", does: "Writes a lingo, or changes one, on this computer, and starts it at once. Give its whole code, every function it keeps. It gives back its functions, or the first mistake in the code to fix", takes: {
       name: {type: "string", description: "Its name, lower case with dashes, for the one thing it is about, like chess-site"},
       code: {type: "string", description: "Its whole .ls file"},
-      openapi: {type: "object", description: "Its openapi.json, only when it has settings, as read_lingo gives it"},
     }, needs: ["name", "code"]},
     {name: "lingo", does: "Asks Onsay's lingo function, which knows every lingo and call on all the person's computers, everything shared with them, web APIs, MCP tools and Onsay's library, and how each has done before. It finds what can solve a task, runs the one it decides on, and gives back only the answer. One call does one thing. With decide true it runs nothing and gives back the best ways, best first, each with what it does, where it runs, its address and the inputs it worked out, to run with use", takes: {
       task: {type: "string", description: "What to do or find, in plain words, with every detail it needs and the computer it is for"},
@@ -382,7 +381,7 @@ fn _used(me, name, a) "What a tool the model asked for gave, as text, or what we
       got = lingo.code(a.name)
     } else if name == "save_lingo" {
       if a.name == "ai" or a.name == "agent" {return "ai and agent come with Onsay and aren't changed here: make another lingo"}
-      got = lingo.save(a.name, a.code, a.openapi)
+      got = lingo.offer(a.name, a.code)
     } else if name == "run" {
       r = commands.run(a.command)
       got = "Exit code {r.code}\n{r.out}"
