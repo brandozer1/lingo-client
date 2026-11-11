@@ -101,7 +101,7 @@ const stand = http.createServer((req, res) => {
       return res.end(file)
     }
     if (req.url === '/echo/slow') return setTimeout(() => json(200, 'slow'), 1500)
-    if (req.url.startsWith('/echo')) { echoed.push({ path: req.url, body: JSON.parse(body || 'null'), signed: checks(req, body) }); return json(200, { path: req.url, got: JSON.parse(body || 'null') }) }
+    if (req.url.startsWith('/echo')) { echoed.push({ path: req.url, body: JSON.parse(body || 'null'), signed: checks(req, body), run: req.headers['onsay-run'] }); return json(200, { path: req.url, got: JSON.parse(body || 'null') }) }
     if (req.url === '/broken') return json(500, { error: 'it broke over there' })
     if (req.url === '/ask') {
       const q = JSON.parse(body)
@@ -116,9 +116,9 @@ const stand = http.createServer((req, res) => {
 ////////// 3. CASES //////////
 
 let URL_ = `http://127.0.0.1:${FLOOR}`
-const call = async (path, body, { key, keyid, badge, method = 'POST' } = {}) => {
+const call = async (path, body, { key, keyid, badge, run, method = 'POST' } = {}) => {
   const text = typeof body === 'string' ? body : body === undefined ? '' : JSON.stringify(body)
-  const headers = { ...(key ? signed(key, keyid ?? publicOf(key), method, URL_ + path, text) : {}), ...(badge ? { 'onsay-badge': badge } : {}) }
+  const headers = { ...(key ? signed(key, keyid ?? publicOf(key), method, URL_ + path, text) : {}), ...(badge ? { 'onsay-badge': badge } : {}), ...(run ? { 'onsay-run': run } : {}) }
   const r = await fetch(URL_ + path, { method, headers, body: method === 'GET' ? undefined : text })
   const got = await r.text()
   let parsed
@@ -339,11 +339,11 @@ const WINDOWS_CASES = [
     const log = readFileSync(`${WINDOWS_HOME}/requests.log`, 'utf8')
     return r.status === 200 && r.json === 200 && log.includes('"way":"out"') && log.includes('/echo/web')
   }],
-  ["the chat is the app's: offered by it like any lingo, its calls go to the app, signed by the floor", async () => {
+  ["the chat is the app's: offered by it like any lingo, its calls go to the app, signed by the floor, with the run that made them", async () => {
     const offered = await call('/lingo/offer', { name: 'chat', code: 'fn say(text: text) {}\nfn ask(questions: list|text) {}', address: `http://127.0.0.1:${ONSAY_PORT}/echo/chat` }, owner)
-    const r = await call('/', 'return chat.say("hello")', owner)
+    const r = await call('/', 'return chat.say("hello")', { ...owner, run: 'todo-7' })
     const got = echoed.find((e) => e.path === '/echo/chat/say')
-    return offered.status === 200 && r.status === 200 && got?.signed === true && got.body[0] === 'hello'
+    return offered.status === 200 && r.status === 200 && got?.signed === true && got.run === 'todo-7' && got.body[0] === 'hello'
   }],
   ['one of this computer\'s own groups can\'t be offered', async () => {
     const r = await call('/lingo/offer', { name: 'files', code: 'fn read(path) {}', address: 'http://127.0.0.1:1' }, owner)

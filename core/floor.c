@@ -289,8 +289,8 @@ static pl_gate *offer_gate;
 static void offered_sent(void);
 static val *natives(arena *a);
 
-// The table, home/offered.json: {name: {address or code, about, openapi}}, read as each call comes, so a change holds at
-// once.
+// The table, home/offered.json: {name: {address or code, about, settings, openapi}}, settings the names of those its code
+// reads, read as each call comes, so a change holds at once.
 static val *offers(arena *a) {
   buf text = { 0 };
   val *t = pl_read(arena_fmt(a, "%s/offered.json", set.root), &text) ? json_parse(a, text.s, text.n, NULL) : NULL;
@@ -394,6 +394,7 @@ static val *lingo_offer(run *r, val **a) {
     else
       rec_set(ra, entry, "code", v_cstr(ra, code));
     if (rec_get(l, "about")) rec_set(ra, entry, "about", rec_get(l, "about"));
+    if (rec_get(l, "settings")) rec_set(ra, entry, "settings", rec_get(l, "settings"));
     rec_set(ra, entry, "openapi", openapi_of(ra, name, l));
     rec_set(ra, kept, name, entry);
     val *phrases = rec_get(l, "phrases");
@@ -425,6 +426,8 @@ static const char *offered_at(arena *a, const char *name) {
 
 static _Thread_local caller now;       // who the call running on this thread is from
 static _Thread_local val *now_policy;  // and the policy it is judged by
+static _Thread_local const char *now_run;   // the Onsay-Run it came with, passed on with every call it makes, so whoever
+                                            // started it, like the app, knows which of its runs a call is part of
 
 // 4. Each call of the computer's a script makes but pure computing, a request to its address, like /files/read, judged
 //    by the policy for whoever sent the script. At the command line, the owner's.
@@ -449,6 +452,7 @@ static val *sent(run *r, const char *url, val *values, int asked) {
   double began = pl_now();
   buf_json(&body, values);
   rec_set(a, headers, "Content-Type", v_cstr(a, "application/json"));
+  if (now_run) rec_set(a, headers, "Onsay-Run", v_cstr(a, now_run));
   sign_request(a, headers, "POST", url, body.s, body.n);
   val *got = pl_http(a, "POST", url, headers, body.s, body.n, set.ms / 1000, &error);
   val *status = rec_get(got, "status");
@@ -898,7 +902,9 @@ static int called(arena *a, const char *method, const char *where, val *headers,
     buf_fmt(out, ",\"key\":\"ed25519:%s\"}", part.s ? part.s : "");
     buf_free(&part);
   } else {
+    now_run = text_or(headers, "onsay-run", NULL);
     status = answer(a, where, body, n, &who, out);
+    now_run = NULL;
     why = status == 403 ? "no grant lets them in" : NULL;
   }
   logged(a, "in", who.name, where, status < 400, why, status >= 400 ? out->s : NULL, (pl_now() - began) * 1000);
