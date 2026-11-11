@@ -76,12 +76,17 @@ const opened = (m) => {
 ////////// 2. THE STAND-IN //////////
 
 const logs = [], echoed = []
+const relay = []   // calls for the floor, handed over in the answer to its next held post
 const stand = http.createServer((req, res) => {
   let body = ''
   req.on('data', (d) => { body += d })
   req.on('end', () => {
     const json = (status, v) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(v)) }
-    if (req.url === '/logs') { logs.push({ ...opened(JSON.parse(body)), when: Date.now() }); return json(200, { kept: 1, next: 1 }) }
+    if (req.url === '/logs') {
+      const m = JSON.parse(body)
+      logs.push({ ...opened(m), when: Date.now() })
+      return json(200, { kept: 1, next: 1, calls: m.hold ? relay.splice(0) : [] })
+    }
     if (req.url.startsWith('/echo')) { echoed.push({ path: req.url, body: JSON.parse(body || 'null'), signed: checks(req, body) }); return json(200, { path: req.url, got: JSON.parse(body || 'null') }) }
     if (req.url === '/broken') return json(500, { error: 'it broke over there' })
     if (req.url === '/ask') {
@@ -112,6 +117,21 @@ const ECHO = '"Says what it was sent back."\nfn hello(a, b) "Says it back." {}\n
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
 const policy = (grants) => writeFileSync(`${HOME}/policy.json`, JSON.stringify({ grants }))
 const lines = () => readFileSync(`${HOME}/requests.log`, 'utf8').trim().split('\n').map((l) => JSON.parse(l))
+// Every line the floor posted to Onsay.
+const posted = () => logs.flatMap((x) => x.text.split('\n')).filter(Boolean).map((l) => JSON.parse(l))
+// A call sent through Onsay, as the stand-in hands it over, and its answer once the floor posts it.
+let relays = 0
+const relayed = async (path, body, key) => {
+  const id = `req_${++relays}`
+  const headers = { host: `127.0.0.1:${FLOOR}`, ...(key ? signed(key, publicOf(key), 'POST', URL_ + path, body) : {}) }
+  relay.push({ id, method: 'POST', path, headers, body })
+  for (let i = 0; i < 40; i++) {
+    const answer = posted().find((l) => l.way === 'answer' && l.id === id)
+    if (answer) return answer
+    await pause(100)
+  }
+  return null
+}
 const pause = (ms) => new Promise((r) => setTimeout(r, ms))
 
 const CASES = [
@@ -219,7 +239,7 @@ const CASES = [
     return logs.length > 0 && logs.every((x) => x.ok) && /"way":"in"/.test(all) && /"way":"call"/.test(all)
   }],
   ['what is offered reaches Onsay as its OpenAPI, never where it answers', async () => {
-    const lines = logs.flatMap((x) => x.text.trim().split('\n')).map((l) => JSON.parse(l)).filter((l) => l.way === 'offered')
+    const lines = posted().filter((l) => l.way === 'offered')
     const last = lines.at(-1)
     return !!last && last.lingos[0].name === 'echo' && !!last.lingos[0].openapi.paths['/echo/hello'] && !JSON.stringify(last).includes('127.0.0.1')
   }],
@@ -228,6 +248,13 @@ const CASES = [
     await call('/', 'return 1')
     for (let i = 0; i < 30 && logs.length === had; i++) await pause(100)
     return logs.length > had && logs.at(-1).when - asked < 1900
+  }],
+  ['a call through Onsay is checked like one from the port, and its answer comes straight back', async () => {
+    policy([])
+    const mine = await relayed('/', 'return 6 * 7', OWNER)
+    const theirs = await relayed('/', 'return echo.hi()')
+    const l = lines()
+    return mine?.status === 200 && mine.body === '42' && theirs?.status === 403 && l.some((x) => x.caller === 'through Onsay' && !x.allowed)
   }],
 ]
 

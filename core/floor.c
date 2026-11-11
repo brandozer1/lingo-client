@@ -7,9 +7,10 @@
 // 2. Callers    a signer's key, the owner, and the policy
 // 3. Offers     the table of lingos offered here: what each does and where it answers, made from its own code
 // 4. Calls      each call a script makes: checked, then answered here or sent where it goes, signed
-// 5. Log        every request, a line of home/requests.log, sent to Onsay sealed whenever a connection works
+// 5. Log        every request, a line of home/requests.log, sent to Onsay sealed whenever a connection works, its
+//               answer bringing the calls that came for this computer through Onsay
 // 6. Running    a call's script compiled and run, one at a time, within its limits
-// 7. Port       calls coming in, as web requests
+// 7. Port       calls coming in, as web requests or through Onsay, each taken the same way
 // 8. Main       the command line
 
 #ifndef _WIN32
@@ -46,6 +47,7 @@
 #define SEND_EVERY 20
 #endif
 #define SEND_MOST 3600   // the longest it waits after a try that didn't go, doubling the wait each time
+#define HOLD_MOST 60   // seconds Onsay may keep a post, waiting for a call for this computer, before it answers
 #define LOG_MOST (4 << 20)   // bytes the log, or what waits to be sent, may grow to before it is cut to its newest half
 #define HEAD (64 << 10)   // the most a call's first line and headers may be
 #define BODY_ROOM (4 << 20)   // and its body
@@ -560,25 +562,16 @@ static void logged(arena *a, const char *way, const char *who, const char *route
   buf_free(&all);
 }
 
-/* 5. What waits, sealed so only Onsay can read it and signed by this computer, POSTed to Onsay's log box:
-      {key, name, eph, nonce, box, sig}. The seal is X25519 with Onsay's key turned to it and a fresh key of this one's,
-      the shared secret hashed with both into a ChaCha20-Poly1305 key (RFC 8439); sig is this computer's Ed25519
-      signature over eph, nonce and box. Kept to try again when it doesn't go. How many seconds to wait before the next
-      try: what Onsay's answer says in next, SEND_EVERY with nothing to send, and when it doesn't go, twice the last wait,
-      up to SEND_MOST. */
-static double send_log(double last) {
-  arena *a = arena_new();
-  buf lines = { 0 };
+/* 5. Lines of the log, sealed so only Onsay can read them and signed by this computer, POSTed to Onsay's log box:
+      {key, name, hold, eph, nonce, box, sig}. The seal is X25519 with Onsay's key turned to it and a fresh key of this
+      one's, the shared secret hashed with both into a ChaCha20-Poly1305 key (RFC 8439); sig is this computer's Ed25519
+      signature over eph, nonce and box. With hold, Onsay may keep it until a call for this computer comes, up to
+      HOLD_MOST seconds, so calls reach a computer nothing can reach directly, over plain web requests every system has.
+      Onsay's answer, a record, or NULL when it didn't go. */
+static val *posted(arena *a, const char *lines, size_t n, int hold) {
   unsigned char onsay[32], theirs[32], eph[32], mine[32], shared[32], key[32], nonce[12], sig[64], me[32];
   buf raw = { 0 };
-  pl_enter(log_gate);
-  buf_add(&lines, waiting.s ? waiting.s : "", waiting.n);
-  pl_leave(log_gate);
-  if (!lines.n || !key_bytes(ONSAY_KEY, onsay) || !key_of("device", 1, me)) {
-    buf_free(&lines);
-    arena_free(a);
-    return SEND_EVERY;
-  }
+  if (!key_bytes(ONSAY_KEY, onsay) || !key_of("device", 1, me)) return NULL;
   crypto_eddsa_to_x25519(theirs, onsay);
   pl_random(eph, 32);
   crypto_x25519_public_key(mine, eph);
@@ -588,20 +581,21 @@ static double send_log(double last) {
   buf_add(&raw, (char *)theirs, 32);
   sha256(raw.s, raw.n, key);
   pl_random(nonce, sizeof nonce);
-  unsigned char *box = malloc(lines.n + 16);
+  unsigned char *box = malloc(n + 16);
   crypto_aead_ctx ctx;
   crypto_aead_init_ietf(&ctx, key, nonce);
-  crypto_aead_write(&ctx, box, box + lines.n, NULL, 0, (unsigned char *)lines.s, lines.n);
+  crypto_aead_write(&ctx, box, box + n, NULL, 0, (const unsigned char *)lines, n);
   raw.n = 0;
   buf_add(&raw, (char *)mine, 32);
   buf_add(&raw, (char *)nonce, sizeof nonce);
-  buf_add(&raw, (char *)box, lines.n + 16);
+  buf_add(&raw, (char *)box, n + 16);
   key_sign("device", raw.s, raw.n, sig);
   buf body = { 0 };
   buf part = { 0 };
   base64(&part, me, 32);
   buf_fmt(&body, "{\"key\":\"ed25519:%s\",\"name\":", part.s);
   buf_json_str(&body, set.name, strlen(set.name));
+  buf_fmt(&body, ",\"hold\":%s", hold ? "true" : "false");
   part.n = 0;
   base64(&part, mine, 32);
   buf_fmt(&body, ",\"eph\":\"%s\"", part.s);
@@ -609,7 +603,7 @@ static double send_log(double last) {
   base64(&part, nonce, sizeof nonce);
   buf_fmt(&body, ",\"nonce\":\"%s\"", part.s);
   part.n = 0;
-  base64(&part, box, lines.n + 16);
+  base64(&part, box, n + 16);
   buf_fmt(&body, ",\"box\":\"%s\"", part.s);
   part.n = 0;
   base64(&part, sig, 64);
@@ -617,28 +611,57 @@ static double send_log(double last) {
   val *headers = v_rec(a);
   buf error = { 0 };
   rec_set(a, headers, "Content-Type", v_cstr(a, "application/json"));
-  val *got = pl_http(a, "POST", ONSAY "/logs", headers, body.s, body.n, 10, &error);
+  val *got = pl_http(a, "POST", ONSAY "/logs", headers, body.s, body.n, hold ? HOLD_MOST + 10 : 10, &error);
   val *status = rec_get(got, "status");
-  double wait = last * 2 < SEND_MOST ? last * 2 : SEND_MOST;
+  val *said = NULL;
   if (status && status->k == V_NUM && status->n == 200) {
     const char *text = text_or(got, "text", "");
-    val *next = rec_get(json_parse(a, text, strlen(text), NULL), "next");
-    wait = next && next->k == V_NUM && next->n >= 1 ? next->n : SEND_EVERY;
-    pl_enter(log_gate);
-    size_t gone = lines.n <= waiting.n ? lines.n : waiting.n;
-    memmove(waiting.s, waiting.s + gone, waiting.n - gone);
-    waiting.n -= gone;
-    pl_leave(log_gate);
+    said = json_parse(a, text, strlen(text), NULL);
+    if (!said || said->k != V_REC) said = v_rec(a);
   }
   crypto_wipe(eph, 32);
   crypto_wipe(shared, 32);
   crypto_wipe(key, 32);
   free(box);
-  buf_free(&lines);
   buf_free(&raw);
   buf_free(&body);
   buf_free(&part);
   buf_free(&error);
+  return said;
+}
+
+static void relayed(void *arg);
+
+/* 5. What waits, posted and held for calls. How many seconds to wait before the next post: what Onsay's answer says in
+      next, and when it doesn't go, twice the last wait, at least SEND_EVERY and up to SEND_MOST. Each call in Onsay's
+      answer is taken on its own thread, and offer asks for the table again, which Onsay lost. */
+static double send_log(double last) {
+  arena *a = arena_new();
+  buf lines = { 0 };
+  pl_enter(log_gate);
+  buf_add(&lines, waiting.s ? waiting.s : "", waiting.n);
+  pl_leave(log_gate);
+  val *said = posted(a, lines.s ? lines.s : "", lines.n, 1);
+  double wait = last < SEND_EVERY ? SEND_EVERY : last * 2;
+  if (wait > SEND_MOST) wait = SEND_MOST;
+  if (said) {
+    val *next = rec_get(said, "next");
+    val *calls = rec_get(said, "calls");
+    val *offer = rec_get(said, "offer");
+    wait = next && next->k == V_NUM && next->n >= 0 ? next->n : SEND_EVERY;
+    pl_enter(log_gate);
+    size_t gone = lines.n <= waiting.n ? lines.n : waiting.n;
+    memmove(waiting.s, waiting.s + gone, waiting.n - gone);
+    waiting.n -= gone;
+    pl_leave(log_gate);
+    if (offer && truthy(offer)) offered_sent();
+    for (size_t i = 0; calls && calls->k == V_LIST && i < calls->l.n; i++) {
+      buf one = { 0 };
+      buf_json(&one, calls->l.v[i]);
+      pl_thread(relayed, one.s);
+    }
+  }
+  buf_free(&lines);
   arena_free(a);
   return wait;
 }
@@ -811,9 +834,42 @@ static void respond(pl_conn *c, int status, const char *body, size_t n) {
   buf_free(&out);
 }
 
-/* One call, on its own thread: a web request's first line, headers and body of Content-Length, read whole. Its caller is
-   whoever signed it (RFC 9421), else anyone, ip and its address, with the badge it carries in Onsay-Badge; an address
-   never lets anyone in. GET / says what this is and its key, so an owner can add it to their record. */
+/* A call, however it came: its method, path, headers by lower case name and body, and where it came from, like
+   ip 127.0.0.1. Its caller is whoever signed it (RFC 9421), else anyone from there, with the badge it carries in
+   Onsay-Badge; where it came from never lets anyone in. GET / says what this is and its key, so an owner can add it to
+   their record. Logged. Its status, and its body in out. */
+static int called(arena *a, const char *method, const char *where, val *headers, const char *body, size_t n,
+    const char *from, buf *out) {
+  double began = pl_now();
+  const char *bad = NULL;
+  const char *why = NULL;
+  int status = 401;
+  caller who = { NULL, 0, 0, NULL };
+  who.name = from;
+  if (rec_get(headers, "signature-input")) bad = signer(a, headers, method, where, v_text(a, body, n), &who);
+  if (!bad && rec_get(headers, "onsay-badge")) who.badge = badge_of(a, text_or(headers, "onsay-badge", ""), &who.begun, &bad);
+  if (bad) {
+    buf_str(out, "{\"error\":");
+    buf_json_str(out, bad, strlen(bad));
+    buf_chr(out, '}');
+  } else if (!strcmp(method, "GET") && !strcmp(where, "/")) {
+    unsigned char key[32];
+    buf part = { 0 };
+    status = 200;
+    if (key_of("device", 1, key)) base64(&part, key, 32);
+    buf_fmt(out, "{\"floor\":\"" FLOOR_VERSION "\",\"name\":");
+    buf_json_str(out, set.name, strlen(set.name));
+    buf_fmt(out, ",\"key\":\"ed25519:%s\"}", part.s ? part.s : "");
+    buf_free(&part);
+  } else {
+    status = answer(a, where, body, n, &who, out);
+    why = status == 403 ? "no grant lets them in" : NULL;
+  }
+  logged(a, "in", who.name, where, status < 400, why, status >= 400 ? out->s : NULL, (pl_now() - began) * 1000);
+  return status;
+}
+
+// One web request, on its own thread: its first line, headers and body of Content-Length, read whole, and called from its ip.
 static void visitor(void *arg) {
   visit v = *(visit *)arg;
   free(arg);
@@ -825,9 +881,7 @@ static void visitor(void *arg) {
   int status = 400;
   int got = 1;
   size_t size = 0;
-  double began = pl_now();
   val *headers = v_rec(a);
-  caller who = { NULL, 0, 0, NULL };
   while (got && !(end = in.s ? strstr(in.s, "\r\n\r\n") : NULL) && in.n < HEAD) got = pl_get(v.c, &in, QUIET);
   size_t method = end ? strspn(in.s, "ABCDEFGHIJKLMNOPQRSTUVWXYZ") : 0;
   size_t path = method && in.s[method] == ' ' && in.s[method + 1] == '/' ? strcspn(in.s + method + 1, " \r\n") : 0;
@@ -854,38 +908,61 @@ static void visitor(void *arg) {
   if (!bad && in.n - from < size) bad = "Its body was shorter than its Content-Length";
   else if (!bad && !utf8_ok(in.s + from, size)) bad = "Its body isn't text: lingo script, or JSON";
 
-  const char *where = bad ? "/" : v_text(a, in.s + method + 1, path)->t.s;
-  const char *why = NULL;
-  if (!bad) {
-    val *body = v_text(a, in.s + from, size);
-    who.name = arena_fmt(a, "ip %s", v.from.s ? v.from.s : "");
-    if (rec_get(headers, "signature-input")) bad = signer(a, headers, v_text(a, in.s, method)->t.s, where, body, &who);
-    if (!bad && rec_get(headers, "onsay-badge")) who.badge = badge_of(a, text_or(headers, "onsay-badge", ""), &who.begun, &bad);
-    if (bad) status = 401;
-  }
+  const char *ip = arena_fmt(a, "ip %s", v.from.s ? v.from.s : "");
   if (bad) {
     buf_str(&out, "{\"error\":");
     buf_json_str(&out, bad, strlen(bad));
     buf_chr(&out, '}');
-  } else if (!strncmp(in.s, "GET / ", 6)) {
-    unsigned char key[32];
-    buf part = { 0 };
-    status = 200;
-    if (key_of("device", 1, key)) base64(&part, key, 32);
-    buf_fmt(&out, "{\"floor\":\"" FLOOR_VERSION "\",\"name\":");
-    buf_json_str(&out, set.name, strlen(set.name));
-    buf_fmt(&out, ",\"key\":\"ed25519:%s\"}", part.s ? part.s : "");
-    buf_free(&part);
+    logged(a, "in", ip, "/", 0, NULL, out.s, 0);
   } else {
-    status = answer(a, where, in.s + from, size, &who, &out);
-    why = status == 403 ? "no grant lets them in" : NULL;
+    const char *where = v_text(a, in.s + method + 1, path)->t.s;
+    status = called(a, v_text(a, in.s, method)->t.s, where, headers, in.s + from, size, ip, &out);
   }
-  logged(a, "in", who.name ? who.name : "", where, status < 400, why, status >= 400 ? out.s : NULL, (pl_now() - began) * 1000);
   respond(v.c, status, out.s ? out.s : "", out.n);
   pl_drop(v.c);
   buf_free(&in);
   buf_free(&out);
   buf_free(&v.from);
+  arena_free(a);
+}
+
+/* A call that came for this computer through Onsay, {id, method, path, headers, body}, on its own thread: called like one
+   from the port, and its answer sent straight back, a line {way: answer, id, status, body}, kept with what waits to be
+   sent when that doesn't go. */
+static void relayed(void *arg) {
+  char *text = arg;
+  arena *a = arena_new();
+  val *call = json_parse(a, text, strlen(text), NULL);
+  val *given = rec_get(call, "headers");
+  val *base64ed = rec_get(call, "base64");
+  val *headers = v_rec(a);
+  val *line = v_rec(a);
+  const char *body = text_or(call, "body", "");
+  buf out = { 0 };
+  buf said = { 0 };
+  int status = 400;
+  free(text);
+  for (size_t i = 0; given && given->k == V_REC && i < given->r.n; i++) {
+    val *v = given->r.v[i];
+    if (v->k == V_TEXT) header_add(a, headers, given->r.key[i], strlen(given->r.key[i]), v->t.s, v->t.len);
+  }
+  if (base64ed && truthy(base64ed))
+    buf_str(&out, "{\"error\":\"Its body isn't text: lingo script, or JSON\"}");
+  else
+    status = called(a, text_or(call, "method", "POST"), text_or(call, "path", "/"), headers, body, strlen(body), "through Onsay", &out);
+  rec_set(a, line, "way", v_cstr(a, "answer"));
+  rec_set(a, line, "id", rec_get(call, "id") ? rec_get(call, "id") : NOTHING);
+  rec_set(a, line, "status", v_num(a, status));
+  rec_set(a, line, "body", v_text(a, out.s ? out.s : "", out.n));
+  buf_json(&said, line);
+  buf_chr(&said, '\n');
+  if (!posted(a, said.s, said.n, 0)) {
+    pl_enter(log_gate);
+    buf_add(&waiting, said.s, said.n);
+    pl_leave(log_gate);
+  }
+  buf_free(&out);
+  buf_free(&said);
   arena_free(a);
 }
 
