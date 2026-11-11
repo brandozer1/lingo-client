@@ -7,6 +7,8 @@
 #                               or later, and libcurl, which it loads as it starts, so it builds here with nothing of
 #                               Linux's installed
 # What is only made on the way, like win64.o, tlds.h, builtins.h and standard.h, goes in obj/.
+# A program's words on stderr are not a failure here, even when what runs this stops on errors: each step's exit code is.
+$ErrorActionPreference = "Continue"
 $zig = (Get-Command zig -ErrorAction SilentlyContinue).Source
 if (-not $zig -and $env:LOCALAPPDATA) { $zig = Get-ChildItem "$env:LOCALAPPDATA\zig" -Recurse -Filter zig.exe -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName }
 if (-not $zig) { Write-Error "zig wasn't found. Get it from ziglang.org/download"; exit 1 }
