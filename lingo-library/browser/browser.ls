@@ -275,12 +275,24 @@ fn _installed() "Where LibreWolf is on this computer, \{version, windows, folder
   return p
 }
 
-fn _begin() "A socket to the running browser with a session begun on it, as \{socket, place}, LibreWolf fetched and started first when it isn't running." {
+fn _begin() "A socket to the running browser with a session begun on it, as \{socket, place}, LibreWolf fetched and started first when it isn't running, and started again when it runs out of sight and should be seen, or the other way round." {
   p = _installed()
+  hidden = _hidden()
+  was = _kept("hidden")
   s = _reached(p)
-  if s != nothing {return {socket: s, place: p}}
+  if s != nothing and (was == nothing or was == hidden) {return {socket: s, place: p}}
+  if s != nothing {
+    try {_asked(s, "session.end")} catch e {}
+    socket.close(s)
+    pid = std.number(_kept("pid") ?? "")
+    if pid != nothing {
+      try {commands.stop(pid)} catch e {}
+    }
+    compute.wait(1)
+  }
   flags = "--no-remote --remote-debugging-port 0 --profile " + (p.windows ? "\"" + p.profile + "\"" : _quoted(p.profile, false))
-  if _hidden() {flags = "--headless " + flags}
+  if hidden {flags = "--headless " + flags}
+  _keep("hidden", hidden)
   ready = p.profile + "/WebDriverBiDiServer.json"
   if p.windows {
     done = commands.run("Remove-Item -LiteralPath " + _quoted(ready, true) + " -ErrorAction SilentlyContinue\n[Console]::Out.Write((Start-Process -FilePath " + _quoted(p.exe, true) + " -ArgumentList " + _quoted(flags, true) + " -PassThru).Id)")
@@ -321,9 +333,11 @@ fn _reached(p) "A socket to the browser with a session begun, or nothing when it
   return s
 }
 
-fn _hidden() "Whether it works out of sight, which it does unless its show setting is on." {
+fn _hidden() "Whether it works out of sight, which it does unless the person is watching the to-do it works for (chat.showing) or its show setting is on." {
+  watched = false
+  try {watched = chat.showing() == true} catch e {}
   shown = setting("show")
-  return not (shown == true or text.lower(std.text(shown ?? "")) in ["true", "on", "yes", "1"])
+  return not (watched or shown == true or text.lower(std.text(shown ?? "")) in ["true", "on", "yes", "1"])
 }
 
 fn _finish(b) "Out of sight, every tab shown on a screen of its own, Browser tab 1 and on, as the picture LibreWolf itself drew of it, a JPEG of what is in view, then the session ended, so the next call can begin one, and the socket closed. With its window shown there is no screen, and a computer without screens shows nothing." {

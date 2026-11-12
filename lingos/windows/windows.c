@@ -1146,7 +1146,8 @@ static void key(HWND to, WORD vk, int up) {
 /* The hand: Onsay's arrow, drawn by the app, glides along an eased curve to every place he acts. real_mode:
      0  virtual, the default: the user's mouse is never touched. UI Automation, else click messages (some apps ignore them)
      1  real: the real mouse rides the same curve and clicks for real
-   How input acts, set with input.modes and kept as two of the onsay lingo's settings, in home/settings/onsay.json:
+   How input acts, set with input.modes for the run that calls it alone, each run starting unseen, so work the person
+   isn't watching never shows while work they are watching does:
      headless   true: nothing on screen moves. Clicks and keys go to the app's controls in the background, as UI Automation
                 and window messages, no window comes to the front, and the real mouse is never used, whatever real_mode
                 says. What can't be done that way is done in front for that one action (or_in_front). true, the default
@@ -1157,17 +1158,16 @@ static int hand_x, hand_y, hand_known;
 static HWND worked;    // the window headless input last went to, where headless keys go
 static HWND forward;   // the window an action that can't be done headless is for, brought to the front for it
 static int shown;      // 1 while that action is done in front: not headless, and followed
+static _Thread_local int unseen = 1, unfollowed = 1;   // this run's headless and no_follow
 
 static int headless(run *r) {
-  if (shown) return 0;
-  val *v = lingo_setting(r->a, "onsay", "headless");
-  return !v || v->k != V_BOOL || truthy(v);
+  (void)r;
+  return !shown && unseen;
 }
 
 static int following(run *r) {
-  if (shown) return 1;
-  val *v = lingo_setting(r->a, "onsay", "no_follow");
-  return v && v->k == V_BOOL && !truthy(v);
+  (void)r;
+  return shown || !unfollowed;
 }
 
 /* What can't be done headless ends here instead of going on: h is the window it is for, brought to the front, or NULL
@@ -1452,13 +1452,14 @@ static val *mouse_mode(run *r, val **a) {
   return v_cstr(r->a, real_mode ? "real" : "virtual");
 }
 
-// Each mode given is kept until changed again, and both are given back as they are now.
+// Each mode given holds for the rest of this run, and both are given back as they are now.
 static val *input_modes(run *r, val **a) {
   const char *names[] = { "headless", "no_follow" };
+  int *modes[] = { &unseen, &unfollowed };
   for (int i = 0; i < 2; i++) {
     if (a[i]->k == V_NOTHING) continue;
     if (a[i]->k != V_BOOL) fail(r, "phrase", "%s is true or false", names[i]);
-    if (!lingo_set("onsay", names[i], a[i])) fail(r, "phrase", "this computer couldn't save how input acts");
+    *modes[i] = truthy(a[i]);
   }
   val *out = v_rec(r->a);
   put(r, out, "headless", VBOOL(headless(r)));

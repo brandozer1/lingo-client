@@ -46,6 +46,7 @@ fn ask(prompt, messages=nothing, model=nothing) "The AI agent answers what the p
     picture = nothing
     said += [m]
     if m.tool_calls == nothing {return _ended(m.content, messages, said, start)}
+    _shown()
     asking = nothing
     for c in m.tool_calls {
       args = {}
@@ -89,6 +90,12 @@ fn _thought(me, said, picture, last) "The model's next message, from the person'
     compute.wait(2)
     return ai.chat(told, _described(), me.model)
   }
+}
+
+fn _shown() "Whether the person is watching this to-do's work, asked as each turn's tools run, so a change they make while it works holds from the next turn: watched, he works in front of them, the real mouse and windows coming forward, his hand following each action; else unseen. Unseen where there is no chat to ask or no screen to show it on." {
+  watched = false
+  try {watched = chat.showing() == true} catch e {}
+  try {input.modes(not watched, not watched)} catch e {}
 }
 
 fn _stepped(name, a) "What a tool call is doing, in a few plain words, for the person's chat." {

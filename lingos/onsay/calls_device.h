@@ -27,7 +27,7 @@ CALL("input", "none", "cursor(how: text=nothing) -> text: says which pointer Ons
      "and some apps. real moves and clicks the real mouse and works everywhere. Given how, it changes until changed again. "
      "Headless, in input.modes, never uses the real mouse, but for an action it has to do in front", mouse_mode)
 CALL("input", "none", "modes(headless: bool=nothing, no_follow: bool=nothing) -> {headless: bool, no_follow: bool}: says how Onsay's "
-     "input acts, or changes it, kept until changed again. It moves and clicks nothing. headless, on by default: nothing on screen "
+     "input acts in this run, or changes it for the rest of the run, each run starting with both on. It moves and clicks nothing. headless, on by default: nothing on screen "
      "moves, clicks and keys go to the app in the background, no window comes to the front and the user's mouse and keyboard "
      "are never taken; some apps ignore that, and what can't be done that way is done in front for that one action, the pointer "
      "showing, with a step saying why, then headless again. no_follow, on by default: no "
