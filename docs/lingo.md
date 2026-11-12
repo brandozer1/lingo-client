@@ -272,7 +272,8 @@ saved = use("https://api.example.com/v1/items", {name: "milk"})
 - **A lingo at an address:** a place, then the lingo and its function: a computer, `laptop.brandon`, then the lingo's
   route and the function, `test/find`, the path its lingo client answers, `main` at the route alone, and the query any
   values. Onsay finds the place by its name. It runs where it lives, and only its answer comes back.
-- **A lingo on this computer:** the lingo and its function alone, `browser/tabs`, with no computer in front. One kept here
+- **A lingo on this computer:** the lingo and its function alone, `browser/tabs`, with no computer in front, or one of
+  this computer's own calls, `input/move_in`. One kept here, and an own call,
   runs right here, as whoever runs the script, the call judged by the policy as theirs; one offered at an address is sent
   there. Its values by name are matched to its function's, as at its route.
 - **An MCP tool:** the server's URL and the tool after a `#`.
@@ -734,7 +735,7 @@ can write in a few lines is a standard function instead, written in Lingo on thi
 | `socket.open(url, headers=nothing)`, `send(socket, text)`, `receive(socket, seconds=30)`, `close(socket)` | A WebSocket, needing `net`, for a service that talks both ways, like a browser driven over WebDriver BiDi. A request can't wait for a message the way a socket does |
 | `connection.open(address)`, `send(connection, data)`, `receive(connection, seconds=30)`, `close(connection)`, `listen(address)`, `accept(listener, seconds=30)` | Bytes over a connection, needing `net`: the floor every protocol is written on. Its address says its kind, `tcp://example.com:80` or `udp://10.0.0.5:53` |
 | `badge.read()` | Who called the request running, `{caller, data}`, and the data of the badge it came with, a later grant's written over an earlier's: what a session would keep, carried by the request instead (`core/README.md`, Who may do what) |
-| `lingo.list()` | Every lingo running on the computer but those built in, `{name, about, functions: [{name, does}]}`, so an agent knows what is here |
+| `lingo.list()` | Everything on the computer an agent can call by name, `{name, about, functions: [{name, does}]}`: its own groups first, like `input` and `window`, each call's `does` its values and what it does, then every lingo offered. `std` and `lingo` aren't listed |
 | `lingo.code(name)` | A lingo's code, `{code, openapi}`, its openapi.json as its maker writes it, to change it or learn from it |
 | `lingo.save(name, code, openapi=nothing)` | A lingo written or changed as a folder in the lingos folder, started and read again at once, needing `lingos`: its functions, or why it can't run, like its code's first mistake. How agents keep what they work out |
 

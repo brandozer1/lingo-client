@@ -428,12 +428,43 @@ static val *lingo_offer(run *r, val **a) {
   return out;
 }
 
-/* 3. lingo.list(): every lingo offered here, {name, about, functions: [{name, does}]}, from its OpenAPI, its helpers
-      left out. */
+/* 3. lingo.list(): every lingo here, {name, about, functions: [{name, does}]}: this computer's own groups first, like
+      input and window, each call's does its values and what it does, then every lingo offered, from its OpenAPI, its
+      helpers left out. std and lingo, part of the language, aren't listed. */
 static val *lingo_list(run *r, val **a) {
   val *table = offers(r->a);
   val *out = v_list(r->a);
+  val *groups = v_rec(r->a);
   (void)a;
+  for (size_t k = 0; k <= BUILT_IN; k++) {
+    val *ps = native_phrases(r->a, k);
+    for (size_t i = 0; i < ps->l.n; i++) {
+      const char *id = text_or(ps->l.v[i], "id", "");
+      const char *dot = strchr(id, '.');
+      if (!dot) continue;
+      const char *group = arena_fmt(r->a, "%.*s", (int)(dot - id), id);
+      if (!strcmp(group, "std") || !strcmp(group, "lingo")) continue;
+      val *one = rec_get(groups, group);
+      if (!one) {
+        one = v_rec(r->a);
+        rec_set(r->a, one, "name", v_cstr(r->a, group));
+        rec_set(r->a, one, "about", v_cstr(r->a, "Onsay's own calls on this computer"));
+        rec_set(r->a, one, "functions", v_list(r->a));
+        rec_set(r->a, groups, group, one);
+        list_push(r->a, out, one);
+      }
+      buf line = { 0 };
+      val *params = rec_get(ps->l.v[i], "params");
+      buf_chr(&line, '(');
+      for (size_t p = 0; params && p < params->l.n; p++) buf_fmt(&line, "%s%s", p ? ", " : "", text_or(params->l.v[p], "name", ""));
+      buf_fmt(&line, ") %s", text_or(ps->l.v[i], "does", ""));
+      val *f = v_rec(r->a);
+      rec_set(r->a, f, "name", v_cstr(r->a, dot + 1));
+      rec_set(r->a, f, "does", v_text(r->a, line.s, line.n));
+      buf_free(&line);
+      list_push(r->a, rec_get(one, "functions"), f);
+    }
+  }
   for (size_t i = 0; i < table->r.n; i++) {
     val *one = v_rec(r->a);
     val *functions = v_list(r->a);
@@ -534,19 +565,20 @@ static val *run_script(arena *a, const char *script, val *values, const caller *
 static const char *called_as(arena *a, const char *path, val *given, val *values);
 
 /* A call of an address from here: a web address sent to as it is, a lingo offered here sent where it answers, a lingo
-   kept here run here, as whoever runs this, the call judged as theirs, and any other, like a lingo on another computer,
-   reached through Onsay. */
+   kept here or one of this computer's own calls, like input/move_in, run here, as whoever runs this, the call judged as
+   theirs, and any other, like a lingo on another computer, reached through Onsay. */
 static val *used(run *r, const char *address, val *values) {
   size_t n = strcspn(address, "/");
   const char *name = arena_fmt(r->a, "%.*s", (int)n, address);
   const char *where = offered_at(r->a, name);
+  const char *own = address[n] == '/' ? arena_fmt(r->a, "%s.%.*s", name, (int)strcspn(address + n + 1, "/?"), address + n + 1) : "";
   if (!strncmp(address, "http://", 7) || !strncmp(address, "https://", 8)) return sent(r, address, values, 0);
   if (where) return sent(r, arena_fmt(r->a, "%s%s", where, address + n), values, 0);
-  if (address[n] == '/' && rec_get(rec_get(offers(r->a), name), "code")) {
+  if (address[n] == '/' && (rec_get(rec_get(offers(r->a), name), "code") || phrase_find(own))) {
     val *in = v_list(r->a);
     const char *script = called_as(r->a, address, values && (values->k == V_REC || values->k == V_LIST) ? values : v_rec(r->a), in);
     const char *id = script + strlen("return ");
-    may(r, arena_fmt(r->a, "%.*s", (int)strcspn(id, "("), id));
+    if (!phrase_find(own)) may(r, arena_fmt(r->a, "%.*s", (int)strcspn(id, "("), id));   // an own call judges itself
     caller who = now;
     val *policy_was = now_policy;
     const char *code = NULL;

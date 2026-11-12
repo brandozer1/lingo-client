@@ -312,6 +312,12 @@ const CASES = [
     const theirs = await call('/', 'return use("tally/twice", {x: 5})', { key: STRANGER })
     return mine.status === 200 && mine.json === 10 && theirs.status === 403
   }],
+  ['use() of one of this computer\'s own calls runs it here, and lingo.list shows those calls with the lingos', async () => {
+    const found = await call('/', 'return use("std/find", {in: "abc", what: "c"})', owner)
+    const list = await call('/', 'return lingo.list()', owner)
+    const compute = list.json?.find?.((l) => l.name === 'compute')
+    return found.json === 2 && !!compute?.functions.some((f) => f.name === 'wait') && !list.json.some((l) => l.name === 'std')
+  }],
   ['lingo.list gives every lingo offered with its functions, and lingo.code the code of one kept here', async () => {
     const list = await call('/', 'return lingo.list()', owner)
     const tally = list.json?.find?.((l) => l.name === 'tally')
