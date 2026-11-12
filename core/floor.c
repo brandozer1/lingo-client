@@ -609,9 +609,12 @@ static val *setting_(run *r, val **a) {
 static pl_gate *log_gate;
 static buf waiting;   // lines not yet sent to Onsay
 static long log_size = -1;
+static _Thread_local const char *now_program;   // the program on this computer the call on this thread came from
 
-// A line of home/requests.log, and kept to send: {at, way, ms, caller, route, allowed, why, error}. way is in, a call that
-// came in; call, a call a script made; out, one sent from here.
+/* A line of home/requests.log, and kept to send: {at, way, ms, caller, program, route, allowed, why, error}. way is in, a
+   call that came in; call, a call a script made; out, one sent from here. program is the file of the program on this
+   computer that made a call coming in, and on each call its script made, when the port can tell, so the person can be
+   asked about that program by name. */
 static void logged(arena *a, const char *way, const char *who, const char *route, int allowed, const char *why,
     const char *error, double ms) {
   val *line = v_rec(a);
@@ -624,6 +627,7 @@ static void logged(arena *a, const char *way, const char *who, const char *route
   rec_set(a, line, "way", v_cstr(a, way));
   if (ms) rec_set(a, line, "ms", v_num(a, ms));
   rec_set(a, line, "caller", v_cstr(a, who && *who ? who : "this computer"));
+  if (now_program && strcmp(way, "out")) rec_set(a, line, "program", v_cstr(a, now_program));
   rec_set(a, line, "route", v_cstr(a, route));
   rec_set(a, line, "allowed", VBOOL(allowed));
   if (why) rec_set(a, line, "why", v_cstr(a, why));
@@ -1044,6 +1048,9 @@ static void visitor(void *arg) {
   else if (!bad && !utf8_ok(in.s + from, size)) bad = "Its body isn't text: lingo script, or JSON";
 
   const char *ip = arena_fmt(a, "ip %s", v.from.s ? v.from.s : "");
+  buf program = { 0 };
+  if (pl_program(v.c, &program)) now_program = v_text(a, program.s, program.n)->t.s;
+  buf_free(&program);
   if (bad) {
     buf_str(&out, "{\"error\":");
     buf_json_str(&out, bad, strlen(bad));
@@ -1053,6 +1060,7 @@ static void visitor(void *arg) {
     const char *where = v_text(a, in.s + method + 1, path)->t.s;
     status = called(a, v_text(a, in.s, method)->t.s, where, headers, in.s + from, size, ip, &out);
   }
+  now_program = NULL;
   respond(v.c, status, out.s ? out.s : "", out.n);
   pl_drop(v.c);
   buf_free(&in);

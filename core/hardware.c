@@ -757,6 +757,62 @@ void pl_drop(pl_conn *c) {
   free(c);
 }
 
+/* The program on this computer at the other end of a tcp connection that came in on 127.0.0.1: the connection's row in
+   Windows' table of tcp connections names its process, and the process its file. GetExtendedTcpTable is found as it is
+   first wanted, so nothing new is linked. */
+typedef struct { DWORD state, local, local_port, remote, remote_port, pid; } tcp_row;
+typedef DWORD(WINAPI *tcp_table_fn)(void *, DWORD *, BOOL, ULONG, int, ULONG);
+
+// An address's port and IPv4 address, as the IPv4 table writes them, an IPv4 one on a socket taking IPv6 too
+// (::ffff:a.b.c.d) as its IPv4 self. 0 for a true IPv6 address.
+static int four_of(struct sockaddr_storage *s, u_short *port, ULONG *addr) {
+  if (s->ss_family == AF_INET) {
+    *port = ((struct sockaddr_in *)s)->sin_port;
+    *addr = ((struct sockaddr_in *)s)->sin_addr.s_addr;
+    return 1;
+  }
+  struct sockaddr_in6 *six = (struct sockaddr_in6 *)s;
+  if (s->ss_family != AF_INET6 || !IN6_IS_ADDR_V4MAPPED(&six->sin6_addr)) return 0;
+  *port = six->sin6_port;
+  memcpy(addr, six->sin6_addr.s6_addr + 12, 4);
+  return 1;
+}
+
+int pl_program(pl_conn *c, buf *out) {
+  static tcp_table_fn table_of;
+  struct sockaddr_storage peer, self;
+  int n = sizeof peer;
+  int m = sizeof self;
+  u_short their_port, our_port;
+  ULONG theirs, ours;
+  if (!table_of) table_of = (tcp_table_fn)(void *)GetProcAddress(LoadLibraryW(L"iphlpapi.dll"), "GetExtendedTcpTable");
+  if (!table_of || getpeername(c->s, (struct sockaddr *)&peer, &n) || getsockname(c->s, (struct sockaddr *)&self, &m) ||
+      !four_of(&peer, &their_port, &theirs) || !four_of(&self, &our_port, &ours) || theirs != htonl(INADDR_LOOPBACK))
+    return 0;
+  DWORD size = 0;
+  table_of(NULL, &size, FALSE, AF_INET, 5, 0);   // 5: every connection with its process
+  DWORD *t = malloc(size + 4096);
+  DWORD pid = 0;
+  size += 4096;
+  if (t && !table_of(t, &size, FALSE, AF_INET, 5, 0)) {
+    tcp_row *row = (tcp_row *)(t + 1);
+    for (DWORD i = 0; i < t[0] && !pid; i++)
+      if (row[i].local == theirs && (u_short)row[i].local_port == their_port && (u_short)row[i].remote_port == our_port)
+        pid = row[i].pid;
+  }
+  free(t);
+  HANDLE p = pid ? OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid) : NULL;
+  wchar_t path[MAX_PATH * 2];
+  DWORD len = sizeof path / sizeof *path;
+  int found = p && QueryFullProcessImageNameW(p, 0, path, &len);
+  if (p) CloseHandle(p);
+  if (!found) return 0;
+  char narrow[MAX_PATH * 6];
+  int k = WideCharToMultiByte(CP_UTF8, 0, path, (int)len, narrow, sizeof narrow, NULL, NULL);
+  buf_add(out, narrow, (size_t)k);
+  return k > 0;
+}
+
 #endif
 
 //////////////////// 12. LINUX ////////////////////
@@ -1601,6 +1657,13 @@ void pl_drop(pl_conn *c) {
   shutdown(c->s, SHUT_WR);
   close(c->s);
   free(c);
+}
+
+// Not told here yet: which program a connection on this computer comes from.
+int pl_program(pl_conn *c, buf *out) {
+  (void)c;
+  (void)out;
+  return 0;
 }
 
 ////////// 7. ANDROID //////////

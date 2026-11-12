@@ -388,6 +388,8 @@ int pl_get(pl_conn *c, buf *out, double seconds);             // what comes next
                                                               // for ever with 0; 0 once closed or quiet that long
 void pl_shut(pl_conn *c);
 void pl_drop(pl_conn *c);                                     // what was put goes first, then it closes and is freed
+int pl_program(pl_conn *c, buf *out);                         // the program on this computer a connection that came in
+                                                              // is from, its file's whole path, or 0 when it can't tell
 
 #ifdef __ANDROID__
 // What only the app around the core can do on Android, asked of it by name with a JSON record: the web, links, what is

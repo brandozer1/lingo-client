@@ -258,6 +258,11 @@ const CASES = [
     const r = await call('/', 'return 1 +')
     return r.status === 400 && r.json.code === 'compile' && r.json.error.length > 0
   }],
+  ['a call from a program on this computer is logged with that program\'s file, so the person can be asked about it by name', async () => {
+    await call('/', 'return 1')
+    const last = lines().filter((l) => l.way === 'in').at(-1)
+    return process.platform !== 'win32' || /node(\.exe)?$/i.test(last?.program ?? '')
+  }],
   ['a script past its steps is stopped', async () => {
     const r = await call('/', 'while true {}')
     return r.status === 500 && r.json.code === 'limit'
