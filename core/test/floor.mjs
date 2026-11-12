@@ -222,6 +222,12 @@ const CASES = [
     const r = await call('/', 'whats the weather in rome', owner)
     return r.status === 200 && r.json === 'sunny in Rome'
   }],
+  ['text with fences runs only what is in its lingo fences, and a mistake in them names its line', async () => {
+    const doc = 'This adds two numbers, if it rains or not.\n\n```lingo\n// the sum\nx = 2 + 3\n```\n\nThen it says it.\n\n```js\nnope(\n```\n\n```\nreturn "it is {x}"\n```\n'
+    const bad = 'Some words.\n```lingo\nx = = 1\nreturn x\n```'
+    const [r, b] = [await call('/', doc, owner), await call('/', bad, owner)]
+    return r.status === 200 && r.json === 'it is 5' && b.json.code === 'compile' && /line 3/.test(b.json.error)
+  }],
   ['what doesn\'t compile and finds nothing is the compile error it was', async () => {
     const r = await call('/', 'return 1 +', owner)
     return r.status >= 400 && r.json.code === 'compile'

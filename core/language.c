@@ -1058,6 +1058,39 @@ static char *compile_dup(arena *a, const char *s, size_t n) {
 }
 
 static char *buf_dup(arena *a, buf *b) { return compile_dup(a, b->s ? b->s : "", b->n); }
+
+/* Text with fences, the way an AI writes, words around code: only what is in its fences marked lingo, or marked nothing,
+   is code. The rest is read as spaces, its lines kept, so a mistake still names its line. Text with no fences is all
+   code, as it is. A script is unfenced before it is wrapped as fn main, and a lingo's file as it is read. */
+static const char *unfenced(arena *a, const char *code, size_t n) {
+  char *only = NULL;
+  int open = 0, lingo = 0;
+  for (size_t i = 0; i < n;) {
+    size_t end = i;
+    while (end < n && code[end] != '\n') end++;
+    size_t k = i;
+    while (k < end && (code[k] == ' ' || code[k] == '\t')) k++;
+    if (end - k >= 3 && !memcmp(code + k, "```", 3)) {
+      if (!only) {
+        only = compile_dup(a, code, n);
+        for (size_t j = 0; j < n; j++)
+          if (only[j] != '\n') only[j] = ' ';
+      }
+      if (!open) {
+        size_t from = k;
+        size_t to = end;
+        while (from < end && (code[from] == '`' || code[from] == ' ' || code[from] == '\t')) from++;
+        while (to > from && (code[to - 1] == ' ' || code[to - 1] == '\t' || code[to - 1] == '\r')) to--;
+        lingo = to == from || (to - from == 5 && !memcmp(code + from, "lingo", 5));
+      }
+      open = !open;
+    } else if (only && open && lingo) {
+      memcpy(only + i, code + i, end - i);
+    }
+    i = end + 1;
+  }
+  return only ? only : code;
+}
 static val *T(arena *a, const char *s) { return v_cstr(a, s); }
 static int is_text(val *v, const char *s) { return v && v->k == V_TEXT && !strcmp(v->t.s, s); }
 static int tagged(val *v, const char *tag) { return v && v->k == V_LIST && v->l.n && is_text(v->l.v[0], tag); }
@@ -2097,6 +2130,7 @@ static val *paths(cx *c, val *program) {
 // 2.
 static val *parse_with(cx *c, const char *code, size_t n) {
   arena *a = c->a;
+  code = unfenced(a, code, n);
   tokens ts;
   if (!lex(c, code, n, &ts)) return NULL;
   ps p = { c, ts.t, ts.n, 0 };

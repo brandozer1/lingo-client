@@ -835,7 +835,7 @@ static val *run_script(arena *a, const char *script, val *values, const caller *
     buf_fmt(&code_text, "%sa%zu", i ? ", " : "", i);
     rec_set(a, input, arena_fmt(a, "a%zu", i), values->l.v[i]);
   }
-  buf_fmt(&code_text, ") {\n%s\n}\n", script);
+  buf_fmt(&code_text, ") {%s\n}\n", unfenced(a, script, strlen(script)));
   for (size_t i = 0; i < sizeof STANDARD / sizeof *STANDARD; i++) {
     val *e = v_rec(a);
     rec_set(a, e, "file", v_cstr(a, arena_fmt(a, "%s.ls", STANDARD[i].name)));

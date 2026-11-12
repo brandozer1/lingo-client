@@ -46,6 +46,23 @@ fn f(n){if n<2{return n}return f(n-1)+f(n-2)}return f(15)
 
 **Comments** start with `//` and run to the end of the line. They are only comments: what a lingo or a function is and does is plain text in its code (section 2), so it keeps its place however the code is laid out.
 
+**Words around code.** Code may be written the way an AI answers, as text with the code in fences: a line starting
+with three backticks opens one and the next such line closes it. Only what is in fences marked `lingo`, or marked
+nothing, is code, joined in order; the words around them and fences of other languages, like `js`, are read as
+spaces, so a mistake still names its line. Text with no fences is all code, as always. A script and a lingo's `.ls`
+file read the same way. The words and comments never run, but they stay in the text that was sent, which says why the
+code is there and what it is for:
+
+````
+This plans a day out. Rain changes everything, so the weather comes first.
+
+```lingo
+// rain means indoor places, else outdoor ones
+kind = weather.now(a0).sky == "rain" ? "museums" : "parks"
+return maps.search("{kind} in {a0}")
+```
+````
+
 **Names** are letters, digits and `_`, not starting with a digit: `total`, `row_2`, `_tmp`. Case matters.
 
 **Keywords** (18 words, plus `null`, which means the same as `nothing`):
