@@ -272,6 +272,9 @@ saved = use("https://api.example.com/v1/items", {name: "milk"})
 - **A lingo at an address:** a place, then the lingo and its function: a computer, `laptop.brandon`, then the lingo's
   route and the function, `test/find`, the path its lingo client answers, `main` at the route alone, and the query any
   values. Onsay finds the place by its name. It runs where it lives, and only its answer comes back.
+- **A lingo on this computer:** the lingo and its function alone, `browser/tabs`, with no computer in front. One kept here
+  runs right here, as whoever runs the script, the call judged by the policy as theirs; one offered at an address is sent
+  there. Its values by name are matched to its function's, as at its route.
 - **An MCP tool:** the server's URL and the tool after a `#`.
 - **A plain web address**, any address on the web: a plain web request, a GET
   with no values and a POST of the values as JSON with some. The answer is read as JSON when it says it is JSON, else it

@@ -530,13 +530,33 @@ static val *asked(run *r, val *question) {
   return sent(r, ONSAY "/search/ask", question, 1);
 }
 
-/* A call of an address from here: a web address sent to as it is, a lingo offered here sent where it answers, and any
-   other, like a lingo on another computer, reached through Onsay. */
+static val *run_script(arena *a, const char *script, val *values, const caller *who, const char **code, const char **message);
+static const char *called_as(arena *a, const char *path, val *given, val *values);
+
+/* A call of an address from here: a web address sent to as it is, a lingo offered here sent where it answers, a lingo
+   kept here run here, as whoever runs this, the call judged as theirs, and any other, like a lingo on another computer,
+   reached through Onsay. */
 static val *used(run *r, const char *address, val *values) {
   size_t n = strcspn(address, "/");
-  const char *where = offered_at(r->a, arena_fmt(r->a, "%.*s", (int)n, address));
+  const char *name = arena_fmt(r->a, "%.*s", (int)n, address);
+  const char *where = offered_at(r->a, name);
   if (!strncmp(address, "http://", 7) || !strncmp(address, "https://", 8)) return sent(r, address, values, 0);
   if (where) return sent(r, arena_fmt(r->a, "%s%s", where, address + n), values, 0);
+  if (address[n] == '/' && rec_get(rec_get(offers(r->a), name), "code")) {
+    val *in = v_list(r->a);
+    const char *script = called_as(r->a, address, values && (values->k == V_REC || values->k == V_LIST) ? values : v_rec(r->a), in);
+    const char *id = script + strlen("return ");
+    may(r, arena_fmt(r->a, "%.*s", (int)strcspn(id, "("), id));
+    caller who = now;
+    val *policy_was = now_policy;
+    const char *code = NULL;
+    const char *message = NULL;
+    val *got = run_script(r->a, script, in, &who, &code, &message);
+    now = who;
+    now_policy = policy_was;
+    if (!got) fail(r, code, "%s", message ? message : "it failed");
+    return got;
+  }
   val *q = v_rec(r->a);
   rec_set(r->a, q, "address", v_cstr(r->a, address));
   rec_set(r->a, q, "values", values);
@@ -896,6 +916,40 @@ static val *run_script(arena *a, const char *script, val *values, const caller *
   return got;
 }
 
+/* /group/name with its values, a list in order or a record by name, as the script return group.name(a0, a1, ...), the
+   values in order put in values: one of this computer's own calls by its names, an offered function's in the order its
+   schema lists them, else the record as its one value. */
+static const char *called_as(arena *a, const char *path, val *given, val *values) {
+  buf call = { 0 };
+  for (const char *p = path + (*path == '/'); *p && *p != '?'; p++) buf_chr(&call, *p == '/' ? '.' : *p);
+  phrase *ph = call.s ? phrase_find(call.s) : NULL;
+  if (given->k == V_LIST)
+    for (size_t i = 0; i < given->l.n; i++) list_push(a, values, given->l.v[i]);
+  for (int i = 0; given->k == V_REC && ph && i < ph->count; i++) {
+    val *v = rec_get(given, ph->params[i]);
+    list_push(a, values, v ? v : NOTHING);
+  }
+  const char *dot = call.s ? strchr(call.s, '.') : NULL;
+  val *offer = dot && !ph ? rec_get(offers(a), arena_fmt(a, "%.*s", (int)(dot - call.s), call.s)) : NULL;
+  const char *where[] = { "openapi", "paths", NULL, "post", "requestBody", "content", "application/json", "schema", "properties" };
+  where[2] = dot ? arena_fmt(a, "/%.*s/%s", (int)(dot - call.s), call.s, dot + 1) : "";
+  val *props = offer;
+  for (size_t k = 0; props && k < sizeof where / sizeof *where; k++) props = rec_get(props, where[k]);
+  for (size_t i = 0; given->k == V_REC && props && props->k == V_REC && i < props->r.n; i++) {
+    val *v = rec_get(given, props->r.key[i]);
+    list_push(a, values, v ? v : NOTHING);
+  }
+  if (given->k == V_REC && !ph && !(props && props->k == V_REC)) list_push(a, values, given);
+  buf b = { 0 };
+  buf_fmt(&b, "return %s(", call.s ? call.s : "");
+  for (size_t i = 0; i < values->l.n; i++) buf_fmt(&b, "%sa%zu", i ? ", " : "", i);
+  buf_chr(&b, ')');
+  const char *script = v_text(a, b.s, b.n)->t.s;
+  buf_free(&b);
+  buf_free(&call);
+  return script;
+}
+
 /* A call: a script, or /group/name with its values, a JSON list in order or a record by name for one of this computer's
    own calls, which becomes return group.name(a0, a1, ...). Its status and body, JSON. */
 static int answer(arena *a, const char *path, const char *body, size_t n, const caller *who, buf *out) {
@@ -908,38 +962,11 @@ static int answer(arena *a, const char *path, const char *body, size_t n, const 
   } else {
     const char *problem = NULL;
     val *given = n ? json_parse(a, body, n, &problem) : v_list(a);
-    buf call = { 0 };
-    for (const char *p = path + 1; *p && *p != '?'; p++) buf_chr(&call, *p == '/' ? '.' : *p);
-    phrase *ph = call.s ? phrase_find(call.s) : NULL;
     if (problem || !given || (given->k != V_LIST && given->k != V_REC)) {
-      buf_free(&call);
       buf_str(out, "{\"error\":\"Its values are a JSON list in order, or a record by name\"}");
       return 400;
     }
-    if (given->k == V_LIST) values = given;
-    for (int i = 0; given->k == V_REC && ph && i < ph->count; i++) {
-      val *v = rec_get(given, ph->params[i]);
-      list_push(a, values, v ? v : NOTHING);
-    }
-    // An offered function's values by name, in the order its schema lists them, else the record as its one value.
-    const char *dot = call.s ? strchr(call.s, '.') : NULL;
-    val *offer = dot && !ph ? rec_get(offers(a), arena_fmt(a, "%.*s", (int)(dot - call.s), call.s)) : NULL;
-    const char *where[] = { "openapi", "paths", NULL, "post", "requestBody", "content", "application/json", "schema", "properties" };
-    where[2] = dot ? arena_fmt(a, "/%.*s/%s", (int)(dot - call.s), call.s, dot + 1) : "";
-    val *props = offer;
-    for (size_t k = 0; props && k < sizeof where / sizeof *where; k++) props = rec_get(props, where[k]);
-    for (size_t i = 0; given->k == V_REC && props && props->k == V_REC && i < props->r.n; i++) {
-      val *v = rec_get(given, props->r.key[i]);
-      list_push(a, values, v ? v : NOTHING);
-    }
-    if (given->k == V_REC && !ph && !(props && props->k == V_REC)) list_push(a, values, given);
-    buf b = { 0 };
-    buf_fmt(&b, "return %s(", call.s ? call.s : "");
-    for (size_t i = 0; i < values->l.n; i++) buf_fmt(&b, "%sa%zu", i ? ", " : "", i);
-    buf_chr(&b, ')');
-    script = v_text(a, b.s, b.n)->t.s;
-    buf_free(&b);
-    buf_free(&call);
+    script = called_as(a, path, given, values);
   }
   val *got = run_script(a, script, values, who, &code, &message);
   if (got) {

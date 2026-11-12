@@ -307,6 +307,11 @@ const CASES = [
     const table = JSON.parse(readFileSync(`${HOME}/offered.json`, 'utf8'))
     return tally.status === 200 && sums.status === 200 && direct.json === 42 && through.json === 4 && !table.tally.address && !!table.tally.code
   }],
+  ['use() of a lingo kept here runs it here, its values by name, and a stranger is refused it', async () => {
+    const mine = await call('/', 'return use("tally/twice", {x: 5})', owner)
+    const theirs = await call('/', 'return use("tally/twice", {x: 5})', { key: STRANGER })
+    return mine.status === 200 && mine.json === 10 && theirs.status === 403
+  }],
   ['lingo.list gives every lingo offered with its functions, and lingo.code the code of one kept here', async () => {
     const list = await call('/', 'return lingo.list()', owner)
     const tally = list.json?.find?.((l) => l.name === 'tally')
@@ -337,10 +342,12 @@ const CASES = [
 const ROOT = `${WINDOWS_HOME}/install`, sha = (b) => crypto.createHash('sha256').update(b).digest('hex')
 const LIBRARY = fileURLToPath(new URL('../../lingo-library', import.meta.url))
 const WINDOWS_CASES = [
-  ['the agent and ai lingos the app ships are kept here, offered with their code, and read by the compiler whole', async () => {
-    const ai = await call('/lingo/offer', { name: 'ai', code: readFileSync(`${LIBRARY}/ai/ai.ls`, 'utf8') }, owner)
-    const agent = await call('/lingo/offer', { name: 'agent', code: readFileSync(`${LIBRARY}/agent/agent.ls`, 'utf8') }, owner)
-    return ai.status === 200 && agent.status === 200 && agent.json.some((f) => f.name === 'ask')
+  ['the lingos the app ships are kept here, offered with their code, and read by the compiler whole', async () => {
+    const offered = []
+    for (const name of ['ai', 'agent', 'coding', 'browser']) {
+      offered.push(await call('/lingo/offer', { name, code: readFileSync(`${LIBRARY}/${name}/${name}.ls`, 'utf8') }, owner))
+    }
+    return offered.every((r) => r.status === 200) && offered[1].json.some((f) => f.name === 'ask')
   }],
   ['the update lingo puts the newest release Onsay signed beside the one running, each file checked, and applies it', async () => {
     rmSync(ROOT, { recursive: true, force: true })
