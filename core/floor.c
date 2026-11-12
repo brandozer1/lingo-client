@@ -561,7 +561,7 @@ static val *asked(run *r, val *question) {
   return sent(r, ONSAY "/search/ask", question, 1);
 }
 
-static val *run_script(arena *a, const char *script, val *values, const caller *who, const char **code, const char **message);
+static val *run_script(arena *a, const char *script, val *values, val *given, const caller *who, const char **code, const char **message);
 static const char *called_as(arena *a, const char *path, val *given, val *values);
 
 /* A call of an address from here: a web address sent to as it is, a lingo offered here sent where it answers, a lingo
@@ -583,7 +583,7 @@ static val *used(run *r, const char *address, val *values) {
     val *policy_was = now_policy;
     const char *code = NULL;
     const char *message = NULL;
-    val *got = run_script(r->a, script, in, &who, &code, &message);
+    val *got = run_script(r->a, script, in, NULL, &who, &code, &message);
     now = who;
     now_policy = policy_was;
     if (!got) fail(r, code, "%s", message ? message : "it failed");
@@ -875,9 +875,9 @@ static int names_lingo(const char *text, const char *name) {
 /* A script run for who: compiled as the body of fn main(a0, a1, ...) in call.ls, against the standard functions, the
    lingos kept here that it names, and those they name in turn, and this computer's own calls, and run with values as
    a0, a1 and on, within the limits. Its value, or NULL with code and message. Each runs on its own thread, side by side.
-   SEARCHED is what runs for one that doesn't compile. */
+   SEARCHED is what runs for one that doesn't compile, given given, values by name, else its values. */
 #define SEARCHED "return lingo.run(a0, a1)"
-static val *run_script(arena *a, const char *script, val *values, const caller *who, const char **code, const char **message) {
+static val *run_script(arena *a, const char *script, val *values, val *given, const caller *who, const char **code, const char **message) {
   buf code_text = { 0 };
   val *stacked = v_list(a);
   val *input = v_rec(a);
@@ -931,9 +931,9 @@ static val *run_script(arena *a, const char *script, val *values, const caller *
     const char *why = *message;
     val *asking = v_list(a);
     list_push(a, asking, v_cstr(a, script));
-    list_push(a, asking, input);
+    list_push(a, asking, given ? given : input);
     ways_tried = 0;
-    val *got = run_script(a, SEARCHED, asking, who, code, message);
+    val *got = run_script(a, SEARCHED, asking, NULL, who, code, message);
     if (got || ways_tried) return got;
     *message = why;
   }
@@ -989,7 +989,13 @@ static int answer(arena *a, const char *path, const char *body, size_t n, const 
   const char *message = NULL;
   const char *script = NULL;
   val *values = v_list(a);
-  if (!strcmp(path, "/")) {
+  val *given = NULL;
+  // A script may come as {script, values}: values by name, like a chat's messages, for the search when it isn't Lingo.
+  val *sent = !strcmp(path, "/") && n && *body == '{' ? json_parse(a, body, n, NULL) : NULL;
+  if (sent && sent->k == V_REC && rec_get(sent, "script") && rec_get(sent, "script")->k == V_TEXT) {
+    script = rec_get(sent, "script")->t.s;
+    given = rec_get(sent, "values") && rec_get(sent, "values")->k == V_REC ? rec_get(sent, "values") : v_rec(a);
+  } else if (!strcmp(path, "/")) {
     script = v_text(a, body, n)->t.s;
   } else {
     const char *problem = NULL;
@@ -1000,7 +1006,7 @@ static int answer(arena *a, const char *path, const char *body, size_t n, const 
     }
     script = called_as(a, path, given, values);
   }
-  val *got = run_script(a, script, values, who, &code, &message);
+  val *got = run_script(a, script, values, given, who, &code, &message);
   if (got) {
     buf_json(out, got);
     return 200;

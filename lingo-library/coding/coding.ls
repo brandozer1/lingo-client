@@ -34,10 +34,7 @@ fn ask(task, folder, messages=nothing, mode="build") "A coding agent: does a sof
   for step in 1..40 {
     said = _compacted(said)
     last = step == 40 or compute.now() - began > 480
-    // The person always gets an answer in words, never an error.
-    try {m = _think(place, said, last ? nothing : _tools(mode), last)} catch e {
-      return _ended("I couldn't reach an AI just now, so I stopped here. Send it again in a moment and I'll pick up where I left off.", messages, added, state)
-    }
+    m = _think(place, said, last ? nothing : _tools(mode), last)
     said += [m]
     added += [m]
     if m.tool_calls == nothing {return _ended(m.content, messages, added, state)}

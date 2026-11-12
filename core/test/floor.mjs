@@ -119,6 +119,7 @@ const stand = http.createServer((req, res) => {
         ] })
       }
       if (q.ask === 'whats the weather in rome') return json(200, { value: [{ address: `${here}/weather`, inputs: { city: 'Rome' } }] })
+      if (q.ask === 'the weather where I am') return json(200, { value: [{ address: `${here}/weather`, inputs: { city: q.values.messages?.[0]?.content } }] })
       return json(200, { value: [] })
     }
     json(404, { error: 'nothing here' })
@@ -227,6 +228,10 @@ const CASES = [
     const bad = 'Some words.\n```lingo\nx = = 1\nreturn x\n```'
     const [r, b] = [await call('/', doc, owner), await call('/', bad, owner)]
     return r.status === 200 && r.json === 'it is 5' && b.json.code === 'compile' && /line 3/.test(b.json.error)
+  }],
+  ['a script sent with values by name, like a chat, gives the search those values when it isn\'t Lingo', async () => {
+    const r = await call('/', { script: 'the weather where I am', values: { messages: [{ role: 'user', content: 'Oslo' }] } }, owner)
+    return r.status === 200 && r.json === 'sunny in Oslo'
   }],
   ['what doesn\'t compile and finds nothing is the compile error it was', async () => {
     const r = await call('/', 'return 1 +', owner)
