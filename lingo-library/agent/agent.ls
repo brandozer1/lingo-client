@@ -36,11 +36,18 @@ fn ask(prompt, messages=nothing, model=nothing) "The AI agent answers what the p
   for turn in 1..60 {
     // Out of turns or time, about 7 of the 10 minutes a run may take, it says how far it got, so the work can go on.
     last = turn == 60 or compute.now() - began > 420
+    // The person always gets an answer in words, never an error: one that can't be worked through says so plainly.
     try {
       m = _thought(me, said, picture, last)
     } catch e {
-      if picture == nothing {fail e}
-      m = _thought(me, said + [{role: "user", content: "That picture couldn't be shown: this AI may not take pictures. Read the words instead."}], nothing, last)
+      try {
+        if picture == nothing {fail e}
+        m = _thought(me, said + [{role: "user", content: "That picture couldn't be shown: this AI may not take pictures. Read the words instead."}], nothing, last)
+      } catch e2 {
+        why = std.text(e2)
+        if "key" in why or "Sign in" in why or "subscri" in why {return _ended(why, messages, said, start)}
+        return _ended("I couldn't reach an AI just now, so I stopped here. Send it again in a moment and I'll pick up where I left off.", messages, said, start)
+      }
     }
     picture = nothing
     said += [m]
@@ -69,7 +76,7 @@ fn ask(prompt, messages=nothing, model=nothing) "The AI agent answers what the p
 
 ////////// HELPERS //////////
 
-fn _thought(me, said, picture, last) "The model's next message, from the person's AI with the agent's guide and tools: a picture, a JPEG in base64, goes with this one turn and is never kept in the conversation, and last asks it to stop and say how far it got. Asked once more when it fails for any reason but the key or the account, since a slow or busy model often answers the second time. A picture that fails is left to ask to go on without it." {
+fn _thought(me, said, picture, last) "The model's next message, from the person's AI with the agent's guide and tools: a picture, a JPEG in base64, goes with this one turn and is never kept in the conversation, and last asks it to stop and say how far it got. When the AI here fails for any reason but the key or the account, the next best AIs the lingo search finds are asked, 3 tries in all. A picture that fails is left to ask to go on without it." {
   told = [{role: "system", content: _guide(me)}] + said
   if picture != nothing {
     told += [{role: "user", content: [
@@ -85,9 +92,25 @@ fn _thought(me, said, picture, last) "The model's next message, from the person'
   } catch e {
     why = std.text(e)
     if picture != nothing or "key" in why or "Sign in" in why or "subscri" in why {fail e}
-    try {chat.step("The AI was slow to answer, so I'm asking again")} catch x {}
-    compute.wait(2)
-    return ai.chat(told, _described(), me.model)
+    try {chat.step("The AI didn't answer, so I'm trying another")} catch x {}
+    others = []
+    try {
+      for w in lingo.ways("An AI model for a lingo's own agent: the model's next message for a conversation of chat messages in OpenAI's format, which may call the tools it is given", {}) ?? [] {
+        if not text.ends_with(std.text(w.address), "agent/ask") {others += [w.address]}
+      }
+    } catch x {}
+    for address in std.slice(others, 0, 2) {
+      try {
+        a = use(address, {messages: told, tools: _described()})
+        m = a.choices != nothing ? a.choices[0].message : a
+        if m.content != nothing or m.tool_calls != nothing {
+          out = {role: "assistant", content: m.content ?? ""}
+          if m.tool_calls != nothing {out.tool_calls = m.tool_calls}
+          return out
+        }
+      } catch x {}
+    }
+    fail e
   }
 }
 
