@@ -20,16 +20,19 @@ this one, `bin/floor.exe` and `bin/linux-*/floor`, and tested by `test/floor.mjs
 
 | Call | What it does |
 |------|--------------|
-| `POST /`, lingo script as its body | runs it, its value as JSON. Each of the computer's own calls it makes but pure computing is a request to `/group/name`, like `/lingo/use`, judged by the policy for whoever sent the script |
-| `POST /group/name`, values as JSON | the same as the script `return group.name(...)`: a list in order, or a record by name for one of this computer's own calls |
+| `POST /`, any text as its body, or `{script, values}` | the one input (below): Lingo is run, anything else goes to the lingo search with its values by name. Each of the computer's own calls it makes but pure computing is a request to `/group/name`, like `/lingo/use`, judged by the policy for whoever sent it |
+| `POST /any/path`, values as JSON or text | the one input too: a path to a lingo or group open here is the script `return group.name(...)`, a list in order or a record by name; a path with nothing open at it goes to the lingo search as it came |
 | `POST /lingo/offer`, `{name, code, address}` | a lingo offering itself here: its code, or only its functions' signatures, read by the compiler into what it does, and the address its calls are sent to. Kept in `home/offered.json`, its table, and sent to Onsay as each lingo's OpenAPI, never its address. A call of an offered lingo, `echo.hello(...)`, goes there, signed by this floor. With no code, it is taken away; one of this computer's own groups can't be offered |
 | `GET /` | what it is, `{floor, name, key}`, its own key for an owner to add to their record |
 
-It is the compiler and the lingo search in one. `lingo(...)` asks Onsay's index (`POST /search/ask`, in list mode) for
-the ways that answer it, best first, and calls each from here until one answers, at most three, passing over a way that
-needs an input nobody gave. A script that doesn't compile, a character missing or not Lingo at all, is asked of the
-search the same way, its values by name, and the answer comes back as if it had compiled; nothing found, or a caller
-who may not search, it is the compile error it was. `use(...)` of a name nothing here answers goes through Onsay.
+**The one input.** Whatever comes, a path, an address, Lingo, a prompt, data, is handled in one order, like DNS: first,
+code ready to send, a path to something open here, or a way the search found for this same request before; then, text
+the compiler can run; else the request as it came goes to the lingo search. `lingo(...)` is that search: it asks Onsay's
+index (`POST /search/ask`, in list mode) for the ways that answer it, best first, and calls each from here until one
+answers, at most three, passing over a way that needs an input nobody gave. The way that answered is kept as ready code,
+in memory, by the request as it came, when every value given goes into it by its own name; it is dropped when it fails,
+after a day, and all of them when what is offered changes. Nothing found, or a caller who may not search, it is what it
+was: the compile error, or nothing at that path. `use(...)` of a name nothing here answers goes through Onsay.
 
 Its settings (`floor.json`): `home`, `port`, `name`, `owner` (a key or a handle), `keys` (signers known by key),
 `steps` and `ms`. On the command line, `floor <settings> key` gives its key and `floor <settings> run <script>` runs a

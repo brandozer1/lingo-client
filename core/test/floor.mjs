@@ -75,7 +75,7 @@ const opened = (m) => {
 
 ////////// 2. THE STAND-IN //////////
 
-const logs = [], echoed = []
+const logs = [], echoed = [], asks = []   // asks: what the lingo search was asked
 const relay = []   // calls for the floor, handed over in the answer to its next held post
 // The newest release, signed as Onsay signs it unless forged, and its files by name.
 const release = { version: '9.9.9', files: [] }, shipped = {}
@@ -107,6 +107,7 @@ const stand = http.createServer((req, res) => {
     // The lingo search: the ways it finds, best first, in list mode, or a call relayed to its address.
     if (req.url === '/search/ask') {
       const q = JSON.parse(body)
+      asks.push(q)
       const here = `http://127.0.0.1:${ONSAY_PORT}`
       if (q.address === 'weather.tester/now') return json(200, { value: 'raining' })
       if (q.mode !== 'list') return json(200, { error: 'the floor asks for ways', code: 'type' })
@@ -119,6 +120,7 @@ const stand = http.createServer((req, res) => {
         ] })
       }
       if (q.ask === 'whats the weather in rome') return json(200, { value: [{ address: `${here}/weather`, inputs: { city: 'Rome' } }] })
+      if (q.ask === '/forecast/today') return json(200, { value: [{ address: `${here}/weather`, inputs: { city: q.values.city } }] })
       if (q.ask === 'the weather where I am') return json(200, { value: [{ address: `${here}/weather`, inputs: { city: q.values.messages?.[0]?.content } }] })
       return json(200, { value: [] })
     }
@@ -232,6 +234,25 @@ const CASES = [
   ['a script sent with values by name, like a chat, gives the search those values when it isn\'t Lingo', async () => {
     const r = await call('/', { script: 'the weather where I am', values: { messages: [{ role: 'user', content: 'Oslo' }] } }, owner)
     return r.status === 200 && r.json === 'sunny in Oslo'
+  }],
+  ['a path with nothing open at it goes to the lingo search as it came, its values by name', async () => {
+    const r = await call('/forecast/today', { city: 'Quito' }, owner)
+    return r.status === 200 && r.json === 'sunny in Quito' && asks.at(-1).ask === '/forecast/today'
+  }],
+  ['the same request again goes straight to the way found for it, ready code, with no search, its values given anew', async () => {
+    const had = asks.length
+    const r = await call('/forecast/today', { city: 'Lima' }, owner)
+    return r.status === 200 && r.json === 'sunny in Lima' && asks.length === had
+  }],
+  ['a way the search read a value from isn\'t kept, so the next conversation is searched again', async () => {
+    const had = asks.length
+    const r = await call('/', { script: 'the weather where I am', values: { messages: [{ role: 'user', content: 'Lima' }] } }, owner)
+    return r.status === 200 && r.json === 'sunny in Lima' && asks.length === had + 1
+  }],
+  ['a path with nothing at it that the search can\'t place says so, and a stranger isn\'t searched for', async () => {
+    const had = asks.length
+    const [mine, theirs] = [await call('/nothing/here', {}, owner), await call('/nothing/here', {}, { key: STRANGER })]
+    return mine.status === 404 && /nothing at \/nothing\/here/.test(mine.json.error) && theirs.status >= 400 && asks.length === had + 1
   }],
   ['what doesn\'t compile and finds nothing is the compile error it was', async () => {
     const r = await call('/', 'return 1 +', owner)

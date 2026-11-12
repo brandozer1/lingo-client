@@ -297,6 +297,47 @@ static val *policy(arena *a) {
 ////////// 3. OFFERS //////////
 
 static pl_gate *offer_gate;
+
+/* Ready code: the way the lingo search found for a request, {address, inputs} as JSON, kept by the request as it came, so
+   the same request goes straight there next time, the way DNS keeps an answer. One is dropped when it fails or after
+   READY_FOR, and every one when what is offered here changes. */
+#define READY 256
+#define READY_FOR 86400
+static struct { char *key, *way; double at; } ready[READY];
+static size_t ready_next;
+static pl_gate *ready_gate;
+
+// The way kept for a request, in a's memory, or NULL.
+static const char *ready_find(arena *a, const char *key) {
+  const char *way = NULL;
+  pl_enter(ready_gate);
+  for (size_t i = 0; i < READY && !way; i++)
+    if (ready[i].key && !strcmp(ready[i].key, key) && pl_now() - ready[i].at < READY_FOR) way = v_cstr(a, ready[i].way)->t.s;
+  pl_leave(ready_gate);
+  return way;
+}
+
+// A request's way kept, or with no way dropped, or with no request every one dropped.
+static void ready_keep(const char *key, const char *way) {
+  pl_enter(ready_gate);
+  size_t slot = ready_next;
+  for (size_t i = 0; i < READY; i++) {
+    if (!ready[i].key || (key && strcmp(ready[i].key, key))) continue;
+    free(ready[i].key);
+    free(ready[i].way);
+    ready[i].key = ready[i].way = NULL;
+    slot = i;
+  }
+  if (key && way) {
+    free(ready[slot].key);
+    free(ready[slot].way);
+    ready[slot].key = strdup(key);
+    ready[slot].way = strdup(way);
+    ready[slot].at = pl_now();
+    if (slot == ready_next) ready_next = (ready_next + 1) % READY;
+  }
+  pl_leave(ready_gate);
+}
 static void offered_sent(void);
 static val *natives(arena *a);
 
@@ -423,6 +464,7 @@ static val *lingo_offer(run *r, val **a) {
   int ok = pl_write(arena_fmt(ra, "%s/offered.json", set.root), text.s, text.n);
   buf_free(&text);
   pl_leave(offer_gate);
+  ready_keep(NULL, NULL);
   if (!ok) fail(r, "phrase", "This computer couldn't keep what was offered");
   offered_sent();
   return out;
@@ -561,7 +603,7 @@ static val *asked(run *r, val *question) {
   return sent(r, ONSAY "/search/ask", question, 1);
 }
 
-static val *run_script(arena *a, const char *script, val *values, val *given, const caller *who, const char **code, const char **message);
+static val *run_script(arena *a, const char *script, val *values, const caller *who, const char **code, const char **message);
 static const char *called_as(arena *a, const char *path, val *given, val *values);
 
 /* A call of an address from here: a web address sent to as it is, a lingo offered here sent where it answers, a lingo
@@ -583,7 +625,7 @@ static val *used(run *r, const char *address, val *values) {
     val *policy_was = now_policy;
     const char *code = NULL;
     const char *message = NULL;
-    val *got = run_script(r->a, script, in, NULL, &who, &code, &message);
+    val *got = run_script(r->a, script, in, &who, &code, &message);
     now = who;
     now_policy = policy_was;
     if (!got) fail(r, code, "%s", message ? message : "it failed");
@@ -600,7 +642,8 @@ static val *used(run *r, const char *address, val *values) {
    an input nobody gave is passed over. Its answer, or the last way's failure, or unknown when none was found. Each way
    tried is a line of the log, so Onsay learns which work. */
 #define WAYS_MOST 3
-static _Thread_local int ways_tried;   // ways the last lingo(...) on this thread called, for a script that didn't compile
+static _Thread_local int ways_tried;   // ways the last lingo(...) on this thread called, for a request the search was given
+static _Thread_local const char *way_found;   // the way that answered it, {address, inputs} as JSON, kept as ready code
 static val *lingo_run(run *r, val **a) {
   val *q = v_rec(r->a);
   rec_set(r->a, q, "ask", a[0]);
@@ -608,6 +651,7 @@ static val *lingo_run(run *r, val **a) {
   rec_set(r->a, q, "gives", a[2]);
   rec_set(r->a, q, "mode", v_cstr(r->a, "list"));
   ways_tried = 0;
+  way_found = NULL;
   val *ways = asked(r, q);
   volatile int tried = 0;
   for (volatile size_t i = 0; ways->k == V_LIST && i < ways->l.n && tried < WAYS_MOST; i++) {
@@ -624,6 +668,10 @@ static val *lingo_run(run *r, val **a) {
     if (!setjmp(t.j)) {
       val *got = used(r, text_or(way, "address", ""), inputs ? inputs : v_rec(r->a));
       r->trap = prev;
+      buf found = { 0 };
+      buf_json(&found, way);
+      way_found = v_text(r->a, found.s, found.n)->t.s;
+      buf_free(&found);
       return got;
     }
     r->trap = prev;
@@ -874,10 +922,9 @@ static int names_lingo(const char *text, const char *name) {
 
 /* A script run for who: compiled as the body of fn main(a0, a1, ...) in call.ls, against the standard functions, the
    lingos kept here that it names, and those they name in turn, and this computer's own calls, and run with values as
-   a0, a1 and on, within the limits. Its value, or NULL with code and message. Each runs on its own thread, side by side.
-   SEARCHED is what runs for one that doesn't compile, given given, values by name, else its values. */
-#define SEARCHED "return lingo.run(a0, a1)"
-static val *run_script(arena *a, const char *script, val *values, val *given, const caller *who, const char **code, const char **message) {
+   a0, a1 and on, within the limits. Its value, or NULL with code and message, compile when it isn't Lingo. Each runs on
+   its own thread, side by side. */
+static val *run_script(arena *a, const char *script, val *values, const caller *who, const char **code, const char **message) {
   buf code_text = { 0 };
   val *stacked = v_list(a);
   val *input = v_rec(a);
@@ -923,20 +970,6 @@ static val *run_script(arena *a, const char *script, val *values, val *given, co
   }
   val *inst = lingo_load(a, natives(a), stacked, message);
   val *program = inst ? lingo_call(a, inst, "call.main") : NULL;
-  /* What doesn't compile, a character missing or not Lingo at all, is asked of the lingo search, its values by name, and
-     what it finds is the answer, as if the compiler had done it. Unless a way it found was called and failed, which is
-     then the failure, it is the compile error it was: nothing found, the search out of reach, or a caller who may not
-     search. */
-  if (!program && strcmp(script, SEARCHED)) {
-    const char *why = *message;
-    val *asking = v_list(a);
-    list_push(a, asking, v_cstr(a, script));
-    list_push(a, asking, given ? given : input);
-    ways_tried = 0;
-    val *got = run_script(a, SEARCHED, asking, NULL, who, code, message);
-    if (got || ways_tried) return got;
-    *message = why;
-  }
   if (!program) {
     *code = "compile";
     return NULL;
@@ -982,31 +1015,95 @@ static const char *called_as(arena *a, const char *path, val *given, val *values
   return script;
 }
 
-/* A call: a script, or /group/name with its values, a JSON list in order or a record by name for one of this computer's
-   own calls, which becomes return group.name(a0, a1, ...). Its status and body, JSON. */
+/* The one input: whatever came, a path like /test/data with its values, or text, Lingo, a prompt or anything else, as
+   {script, values} when it carries values by name, like a chat's messages. Like DNS, in order:
+     1. code ready to send: a path to something open here, a lingo kept or offered or one of this computer's own groups,
+        is called; else a way the search found for this same request before is used again
+     2. text the compiler can run is run
+     3. anything else, or anything that failed to compile on the way, goes to the lingo search as it came, which tries
+        the next best way when one fails, and the way that answered is kept as ready code
+   Each is judged as the caller's, the search too, so a caller who may not search gets what it was: the compile error,
+   or nothing at that path. Its status and body, JSON. */
+#define SEARCHED "return lingo.run(a0, a1)"
 static int answer(arena *a, const char *path, const char *body, size_t n, const caller *who, buf *out) {
-  const char *code = NULL;
+  const char *code = "unknown";
   const char *message = NULL;
-  const char *script = NULL;
+  const char *text = NULL;     // the request as it came: what ready code is kept by and the search is asked
+  const char *script = NULL;   // what the compiler runs
   val *values = v_list(a);
-  val *given = NULL;
-  // A script may come as {script, values}: values by name, like a chat's messages, for the search when it isn't Lingo.
-  val *sent = !strcmp(path, "/") && n && *body == '{' ? json_parse(a, body, n, NULL) : NULL;
-  if (sent && sent->k == V_REC && rec_get(sent, "script") && rec_get(sent, "script")->k == V_TEXT) {
-    script = rec_get(sent, "script")->t.s;
-    given = rec_get(sent, "values") && rec_get(sent, "values")->k == V_REC ? rec_get(sent, "values") : v_rec(a);
-  } else if (!strcmp(path, "/")) {
-    script = v_text(a, body, n)->t.s;
+  val *given = v_rec(a);       // its values by name, for the search
+  val *got = NULL;
+  int root = !strcmp(path, "/");
+  val *sent = n ? json_parse(a, body, n, NULL) : NULL;
+  if (root && sent && sent->k == V_REC && rec_get(sent, "script") && rec_get(sent, "script")->k == V_TEXT) {
+    text = script = rec_get(sent, "script")->t.s;
+    if (rec_get(sent, "values") && rec_get(sent, "values")->k == V_REC) given = rec_get(sent, "values");
+  } else if (root) {
+    text = script = v_text(a, body, n)->t.s;
   } else {
-    const char *problem = NULL;
-    val *given = n ? json_parse(a, body, n, &problem) : v_list(a);
-    if (problem || !given || (given->k != V_LIST && given->k != V_REC)) {
-      buf_str(out, "{\"error\":\"Its values are a JSON list in order, or a record by name\"}");
-      return 400;
+    text = path;
+    if (!sent || (sent->k != V_LIST && sent->k != V_REC)) {
+      sent = v_list(a);
+      if (n) list_push(a, sent, v_text(a, body, n));
     }
-    script = called_as(a, path, given, values);
+    if (sent->k == V_REC) given = sent;
+    else if (sent->l.n) rec_set(a, given, "values", sent);
+    size_t len = strcspn(path + 1, "/?");
+    const char *group = arena_fmt(a, "%.*s.", (int)len, path + 1);
+    int open = rec_get(offers(a), arena_fmt(a, "%.*s", (int)len, path + 1)) != NULL;
+    for (size_t k = 0; k <= BUILT_IN && !open; k++) {
+      val *ps = native_phrases(a, k);
+      for (size_t i = 0; i < ps->l.n && !open; i++) open = !strncmp(text_or(ps->l.v[i], "id", ""), group, len + 1);
+    }
+    if (open) script = called_as(a, path, sent, values);
   }
-  val *got = run_script(a, script, values, given, who, &code, &message);
+
+  // 1. A path to something open here.
+  if (!root && script) {
+    got = run_script(a, script, values, who, &code, &message);
+    if (got || strcmp(code, "compile")) goto said;
+  }
+  // 1. A way found for this same request before, its inputs given anew where this request gives them.
+  const char *kept = ready_find(a, text);
+  val *way = kept ? json_parse(a, kept, strlen(kept), NULL) : NULL;
+  if (way && way->k == V_REC) {
+    val *inputs = rec_get(way, "inputs") && rec_get(way, "inputs")->k == V_REC ? rec_get(way, "inputs") : v_rec(a);
+    for (size_t i = 0; i < given->r.n; i++) rec_set(a, inputs, given->r.key[i], given->r.v[i]);
+    val *call = v_list(a);
+    list_push(a, call, rec_get(way, "address") ? rec_get(way, "address") : v_cstr(a, ""));
+    list_push(a, call, inputs);
+    got = run_script(a, "return lingo.use(a0, a1)", call, who, &code, &message);
+    if (got || !strcmp(code, "denied")) goto said;
+    ready_keep(text, NULL);
+  }
+  // 2. Text the compiler can run.
+  if (root) {
+    got = run_script(a, script, values, who, &code, &message);
+    if (got || strcmp(code, "compile")) goto said;
+  }
+  // 3. The lingo search, given the request as it came. Nothing found, or a caller who may not search, is what it was.
+  {
+    const char *was = message;
+    const char *was_code = code;
+    val *asking = v_list(a);
+    list_push(a, asking, v_cstr(a, text));
+    list_push(a, asking, given);
+    ways_tried = 0;
+    way_found = NULL;
+    got = run_script(a, SEARCHED, asking, who, &code, &message);
+    // Kept only when each value given goes into the way by its own name, so using it again with new ones is the same
+    // as searching again; a value the search read something from, like a city out of the messages, isn't.
+    val *found = got && way_found ? rec_get(json_parse(a, way_found, strlen(way_found), NULL), "inputs") : NULL;
+    int same = found && found->k == V_REC;
+    for (size_t i = 0; same && i < given->r.n; i++) same = rec_get(found, given->r.key[i]) != NULL;
+    if (same) ready_keep(text, way_found);
+    if (!got && !ways_tried) {
+      code = was_code;
+      message = was ? was : arena_fmt(a, "There's nothing at %s", path);
+    }
+  }
+
+said:
   if (got) {
     buf_json(out, got);
     return 200;
@@ -1200,6 +1297,7 @@ int main(int argc, char **argv) {
   nonce_gate = pl_gate_new();
   log_gate = pl_gate_new();
   offer_gate = pl_gate_new();
+  ready_gate = pl_gate_new();
   native_begin(0);
   std_phrases();
   phrase_add("lingo", "net", "run(ask: text, values: record=nothing, gives: text=\"\")", lingo_run);
