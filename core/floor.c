@@ -515,9 +515,15 @@ static val *lingo_list(run *r, val **a) {
       val *op = rec_get(paths->r.v[k], "post");
       const char *slash = strrchr(paths->r.key[k], '/');
       if (!op || rec_get(op, "x-lingo-internal")) continue;
+      val *takes = rec_get(rec_get(rec_get(rec_get(rec_get(op, "requestBody"), "content"), "application/json"), "schema"), "properties");
+      buf line = { 0 };
+      buf_chr(&line, '(');
+      for (size_t p = 0; takes && takes->k == V_REC && p < takes->r.n; p++) buf_fmt(&line, "%s%s", p ? ", " : "", takes->r.key[p]);
+      buf_fmt(&line, ") %s", text_or(op, "description", ""));
       val *f = v_rec(r->a);
       rec_set(r->a, f, "name", v_cstr(r->a, slash ? slash + 1 : paths->r.key[k]));
-      rec_set(r->a, f, "does", v_cstr(r->a, text_or(op, "description", "")));
+      rec_set(r->a, f, "does", v_text(r->a, line.s, line.n));
+      buf_free(&line);
       list_push(r->a, functions, f);
     }
     rec_set(r->a, one, "name", v_cstr(r->a, table->r.key[i]));
@@ -638,14 +644,52 @@ static val *used(run *r, const char *address, val *values) {
   return asked(r, q);
 }
 
-/* lingo.run(ask, values, gives), what lingo(...) is: the lingo search, built in. Onsay's index gives the ways that answer
-   it, best first, nothing run there, and each is called from here until one answers, at most WAYS_MOST. A way that needs
-   an input nobody gave is passed over. Its answer, or the last way's failure, or unknown when none was found. Each way
-   tried is a line of the log, so Onsay learns which work. */
+/* lingo.run(ask, values, gives), what lingo(...) is: the one input, inside a script. Text that is Lingo is compiled and
+   run right here, as whoever runs this, and its value given back, or its failure as it is. Anything else, like words, is
+   asked of the lingo search, built in: Onsay's index gives the ways that answer it, best first, nothing run there, and
+   each is called from here until one answers, at most WAYS_MOST. A way that needs an input nobody gave is passed over.
+   Its answer, or the last way's failure. When it was neither Lingo nor anything the search found, it fails with the
+   compile error and what the search said, so code with a mistake can be fixed. Each way tried is a line of the log, so
+   Onsay learns which work. */
 #define WAYS_MOST 3
 static _Thread_local int ways_tried;   // ways the last lingo(...) on this thread called, for a request the search was given
 static _Thread_local const char *way_found;   // the way that answered it, {address, inputs} as JSON, kept as ready code
+static _Thread_local int compiled;   // the request the next lingo.run is given already failed to compile, in answer()
+static val *searched_ways(run *r, val **a);
 static val *lingo_run(run *r, val **a) {
+  const char *wrong = NULL;   // the compile error, when it wasn't Lingo
+  int asked_already = compiled;
+  compiled = 0;
+  if (a[0]->k == V_TEXT && !asked_already) {
+    caller who = now;
+    val *policy_was = now_policy;
+    const char *code = NULL;
+    const char *message = NULL;
+    val *got = run_script(r->a, a[0]->t.s, v_list(r->a), &who, &code, &message);
+    now = who;
+    now_policy = policy_was;
+    if (got) return got;
+    if (strcmp(code, "compile")) fail(r, code, "%s", message ? message : "it failed");
+    wrong = message;
+  }
+  trap_t t;
+  void *volatile prev = r->trap;
+  volatile int depth = r->depth;
+  r->trap = &t;
+  if (setjmp(t.j)) {
+    r->trap = prev;
+    r->depth = depth;
+    if (!wrong || ways_tried || !strcmp(r->code, "limit") || !strcmp(r->code, "stopped")) rethrow(r);
+    const char *said = arena_fmt(r->a, "%.*s", (int)r->message.n, r->message.s ? r->message.s : "");
+    fail(r, "compile", "%s. Read as words instead, the lingo search said: %s", wrong, said);
+  }
+  val *out = searched_ways(r, a);
+  r->trap = prev;
+  return out;
+}
+
+// The lingo search, from here: the ways Onsay's index gives, each called until one answers (lingo.run).
+static val *searched_ways(run *r, val **a) {
   val *q = v_rec(r->a);
   rec_set(r->a, q, "ask", a[0]);
   rec_set(r->a, q, "values", a[1]);
@@ -1097,7 +1141,9 @@ static int answer(arena *a, const char *path, const char *body, size_t n, const 
     list_push(a, asking, given);
     ways_tried = 0;
     way_found = NULL;
+    compiled = 1;
     got = run_script(a, SEARCHED, asking, who, &code, &message);
+    compiled = 0;
     // Kept only when each value given goes into the way by its own name, so using it again with new ones is the same
     // as searching again; a value the search read something from, like a city out of the messages, isn't.
     val *found = got && way_found ? rec_get(json_parse(a, way_found, strlen(way_found), NULL), "inputs") : NULL;

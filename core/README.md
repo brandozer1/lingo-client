@@ -27,7 +27,9 @@ this one, `bin/floor.exe` and `bin/linux-*/floor`, and tested by `test/floor.mjs
 
 **The one input.** Whatever comes, a path, an address, Lingo, a prompt, data, is handled in one order, like DNS: first,
 code ready to send, a path to something open here, or a way the search found for this same request before; then, text
-the compiler can run; else the request as it came goes to the lingo search. `lingo(...)` is that search: it asks Onsay's
+the compiler can run; else the request as it came goes to the lingo search. `lingo(...)` is the same one input inside a
+script: text that is Lingo is compiled and run right here, as whoever runs the script, and anything else is searched; code
+with a mistake that the search can't place either fails with its compile error, so it can be fixed. The search asks Onsay's
 index (`POST /search/ask`, in list mode) for the ways that answer it, best first, and calls each from here until one
 answers, at most three, passing over a way that needs an input nobody gave. The way that answered is kept as ready code,
 in memory, by the request as it came, when every value given goes into it by its own name; it is dropped when it fails,

@@ -353,7 +353,9 @@ https://api.example.com/v1/x answered 404 Not Found: no such item
 weather = lingo("the weather in a city", {city: "Paris"}, "the forecast")
 ```
 
-`lingo(ask, values, gives)` asks for something to be done in words, instead of naming a phrase. `ask` is what is wanted,
+`lingo(ask, values, gives)` asks for something to be done in words, instead of naming a phrase. It is the lingo client's
+one input, so `ask` may be Lingo too: Lingo is compiled and run right here at once, as whoever runs the program, and gives
+its value back, and only what isn't Lingo goes on to Onsay as below. An agent can send all its work this way. `ask` is what is wanted,
 `values` is a record of the values to work with, and `gives` is what should come back. Only `ask` is needed. Any of them
 may be worked out while the program runs, like a goal an AI chose: `lingo(goal, {city: city})`.
 

@@ -1,4 +1,4 @@
-"A web browser for lingos and agents: opens pages, reads them, clicks, types, runs scripts and takes screenshots, in LibreWolf, a fully open source Firefox with no telemetry, out of sight unless its show setting is on."
+"A web browser for lingos and agents: opens pages, reads them, clicks, types, runs scripts and takes screenshots, in LibreWolf, a fully open source Firefox with no telemetry, always out of sight, its tabs drawn on Onsay's screens."
 // 1. open(url, tab=nothing)               -> {tab, title, url}: a page opened, in the open tab, the tab given, or a new
 //                                            one for "new"
 // 2. read(tab=nothing)                    -> {title, url, text, links, fields}: what the page shows, its links and its
@@ -6,12 +6,13 @@
 // 3. click(words, tab=nothing)            -> {clicked, title, url}: the link or button showing those words clicked
 // 4. type(text, into=nothing, tab=nothing) -> {field, title, url}: text typed into the field with that label, else the
 //                                            one with the focus. A new line presses Enter
-// 5. run(script, tab=nothing)             -> any: JavaScript run in the page, and its value
+// 5. run(script, tab=nothing)             -> any: JavaScript run in the page, and its value, return allowed
 // 6. screenshot(tab=nothing)              -> {path}: a picture of the page, saved as a PNG file
 // 7. tabs()                               -> [{tab, title, url}]: every tab open
 // 8. close(tab=nothing)                   -> nothing: a tab closed, the open one when none is given
 // 9. render(html, tab=nothing)            -> {tab, title}: a page of HTML and CSS of the lingo's own laid out, in the
 //                                            open tab, the tab given, or a new one for "new"
+// 10. find(selector, tab=nothing)         -> [{tag, text, attributes, box}]: the page's elements matching a CSS selector
 // tab is a tab's number, from 1 in the browser's order, as open and tabs give it, and the open one, the last one used,
 // when left out.
 //
@@ -21,9 +22,10 @@
 // into Firefox, through the lingo client's socket calls: each call starts it when it isn't running, opens a socket to it,
 // begins a session, does its work and ends the session, so later calls find the same browser and its tabs. Out of
 // sight, as each call ends, every tab shows on a screen of its own, Browser tab 1 and on, beside the to-do it works for,
-// so the person can watch: the picture LibreWolf itself drew of what is in view, exactly as a browser shows it. Its
-// settings: show, on to see its window, and folder, where it keeps LibreWolf, else lingo-browser in AppData\Local on
-// Windows and ~/.local/share on Linux. A download that stops partway carries on from there next time.
+// so the person can watch: the picture LibreWolf itself drew of what is in view, exactly as a browser shows it. It always
+// runs headless; where its screens show, in Onsay's chat or a window of their own, the app sets by Show your work, so
+// toggling it changes only how the tabs are shown, never the tabs. Its setting: folder, where it keeps LibreWolf, else
+// lingo-browser in AppData\Local on Windows and ~/.local/share on Linux. A download that stops partway carries on from there next time.
 
 ////////// 1. THE BROWSER //////////
 
@@ -55,6 +57,27 @@ fn read(tab: whole? "the tab's number, else the open one" = nothing) -> {title: 
       "  links: [...document.links].filter(seen).map((a) => (\{text: said(a), url: a.href\})).filter((l) => l.text),",
       "  fields: [...document.querySelectorAll('input:not([type=hidden]), textarea, select')].filter(seen).map((f) => (\{label: named(f), type: f.type, value: value(f)\}))",
       "\});"
+    ], "\n"))
+  } catch e {
+    _finish(b)
+    fail e
+  }
+  _finish(b)
+  return out
+}
+
+fn find(selector: text "a CSS selector, like .board .piece, button or [aria-label]", tab: whole? "the tab's number, else the open one" = nothing) -> [{tag: text, text: text, attributes: record, box: {x: number, y: number, w: number, h: number}}] "The elements of the web page that match a CSS selector, at most 200: each its tag, its words, its attributes, like class, id, href, aria-label and data- ones, and where it shows on the page. To read how a page is built when its words alone don't say it, like the pieces on a game board." {
+  b = _begin()
+  try {
+    t = _tabbed(b, tab)
+    out = _page(b, t.id, text.join([
+      "const all = [...document.querySelectorAll(" + std.to_json(std.text(selector)) + ")].slice(0, 200);",
+      "return JSON.stringify(all.map((e) => \{",
+      "  const r = e.getBoundingClientRect();",
+      "  const attributes = \{\};",
+      "  for (const a of e.attributes) attributes[a.name] = a.value.slice(0, 300);",
+      "  return \{tag: e.tagName.toLowerCase(), text: said(e).slice(0, 300), attributes, box: \{x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height)\}\};",
+      "\}));"
     ], "\n"))
   } catch e {
     _finish(b)
@@ -128,11 +151,15 @@ fn type(text: text "what to type, a new line pressing Enter to send a search or 
   return out
 }
 
-fn run(script: text "JavaScript run as a script, its last statement its value", tab: whole? "the tab's number, else the open one" = nothing) -> any "Runs JavaScript in the web page and gives its value, a promise's once it settles: for what reading, clicking and typing can't do, like pulling a table out of a page or scrolling it." {
+fn run(script: text "JavaScript run in the page: an expression, or statements with return for the value, await allowed", tab: whole? "the tab's number, else the open one" = nothing) -> any "Runs JavaScript in the web page and gives its value, a promise's once it settles: for what reading, clicking and typing can't do, like pulling data out of a page, clicking by selector or scrolling it." {
   b = _begin()
   try {
     t = _tabbed(b, tab)
-    got = _asked(b.socket, "script.evaluate", {expression: std.text(script), target: {context: t.id}, awaitPromise: true})
+    js = std.text(script)
+    got = _asked(b.socket, "script.evaluate", {expression: js, target: {context: t.id}, awaitPromise: true})
+    if got.type == "exception" and "return" in js {
+      got = _asked(b.socket, "script.evaluate", {expression: "(async () => \{\n" + js + "\n\})()", target: {context: t.id}, awaitPromise: true})
+    }
     if got.type == "exception" {fail "The script failed: {got.exceptionDetails.text}"}
     out = _plain(got.result)
   } catch e {
@@ -275,12 +302,10 @@ fn _installed() "Where LibreWolf is on this computer, \{version, windows, folder
   return p
 }
 
-fn _begin() "A socket to the running browser with a session begun on it, as \{socket, place}, LibreWolf fetched and started first when it isn't running, and started again when it runs out of sight and should be seen, or the other way round." {
+fn _begin() "A socket to the running browser with a session begun on it, as \{socket, place}, LibreWolf fetched and started first, headless, when it isn't running. One an older version started with its window shown is started again headless." {
   p = _installed()
-  hidden = _hidden()
-  was = _kept("hidden")
   s = _reached(p)
-  if s != nothing and (was == nothing or was == hidden) {return {socket: s, place: p}}
+  if s != nothing and _kept("hidden") != false {return {socket: s, place: p}}
   if s != nothing {
     try {_asked(s, "session.end")} catch e {}
     socket.close(s)
@@ -290,9 +315,8 @@ fn _begin() "A socket to the running browser with a session begun on it, as \{so
     }
     compute.wait(1)
   }
-  flags = "--no-remote --remote-debugging-port 0 --profile " + (p.windows ? "\"" + p.profile + "\"" : _quoted(p.profile, false))
-  if hidden {flags = "--headless " + flags}
-  _keep("hidden", hidden)
+  flags = "--headless --no-remote --remote-debugging-port 0 --profile " + (p.windows ? "\"" + p.profile + "\"" : _quoted(p.profile, false))
+  _keep("hidden", true)
   ready = p.profile + "/WebDriverBiDiServer.json"
   if p.windows {
     done = commands.run("Remove-Item -LiteralPath " + _quoted(ready, true) + " -ErrorAction SilentlyContinue\n[Console]::Out.Write((Start-Process -FilePath " + _quoted(p.exe, true) + " -ArgumentList " + _quoted(flags, true) + " -PassThru).Id)")
@@ -333,23 +357,14 @@ fn _reached(p) "A socket to the browser with a session begun, or nothing when it
   return s
 }
 
-fn _hidden() "Whether it works out of sight, which it does unless the person is watching the to-do it works for (chat.showing) or its show setting is on." {
-  watched = false
-  try {watched = chat.showing() == true} catch e {}
-  shown = setting("show")
-  return not (watched or shown == true or text.lower(std.text(shown ?? "")) in ["true", "on", "yes", "1"])
-}
-
-fn _finish(b) "Out of sight, every tab shown on a screen of its own, Browser tab 1 and on, as the picture LibreWolf itself drew of it, a JPEG of what is in view, then the session ended, so the next call can begin one, and the socket closed. With its window shown there is no screen, and a computer without screens shows nothing." {
-  if _hidden() {
-    try {
-      tabs = _asked(b.socket, "browsingContext.getTree", {maxDepth: 0}).contexts
-      for n in 1..std.length(tabs) {
-        shot = {context: tabs[n - 1].context, format: {type: "image/jpeg", quality: 0.8}}
-        screen.show(screen.open("Browser tab {n}"), _asked(b.socket, "browsingContext.captureScreenshot", shot).data)
-      }
-    } catch e {}
-  }
+fn _finish(b) "Every tab shown on a screen of its own, Browser tab 1 and on, as the picture LibreWolf itself drew of it, a JPEG of what is in view, then the session ended, so the next call can begin one, and the socket closed. A computer without screens shows nothing." {
+  try {
+    tabs = _asked(b.socket, "browsingContext.getTree", {maxDepth: 0}).contexts
+    for n in 1..std.length(tabs) {
+      shot = {context: tabs[n - 1].context, format: {type: "image/jpeg", quality: 0.8}}
+      screen.show(screen.open("Browser tab {n}"), _asked(b.socket, "browsingContext.captureScreenshot", shot).data)
+    }
+  } catch e {}
   try {_asked(b.socket, "session.end")} catch e {}
   socket.close(b.socket)
 }

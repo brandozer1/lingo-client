@@ -259,6 +259,15 @@ const CASES = [
     const r = await call('/', 'return 1 +', owner)
     return r.status >= 400 && r.json.code === 'compile'
   }],
+  ['lingo(...) in a script is the one input too: Lingo runs right here, words go to the search', async () => {
+    const had = asks.length
+    const [code, words] = [await call('/', 'return lingo("return 2 + 3", {})', owner), await call('/', 'return lingo("whats the weather in rome", {})', owner)]
+    return code.status === 200 && code.json === 5 && asks.length === had + 1 && words.json === 'sunny in Rome'
+  }],
+  ["and code with a mistake that the search can't place either says the compile error, to fix it", async () => {
+    const r = await call('/', 'return lingo("return 1 +", {})', owner)
+    return r.status >= 400 && r.json.code === 'compile' && /Read as words instead/.test(r.json.error)
+  }],
   ["words the search can't place come back as what it said, for the person", async () => {
     const r = await call('/', 'hello there', owner)
     return r.status === 404 && r.json.code === 'nothing' && r.json.error === 'Your computers are all off right now. Open Onsay on one and ask again.'
