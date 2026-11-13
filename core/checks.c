@@ -134,12 +134,15 @@ static int covers(const char *address, const char *here, const char *path, int l
 }
 
 
-// Whether grant g lets path in: in date, one of its allow covering it and none of its except.
+// Whether grant g lets path in: a version this computer knows, 1, when it says one, in date, one of its allow covering
+// it and none of its except.
 static int opens(val *g, const char *here, const char *path, int listing) {
   val *allow = rec_get(g, "allow");
   val *except = rec_get(g, "except");
   val *until = rec_get(g, "until");
+  val *v = rec_get(g, "v");
   int in = 0;
+  if (v && !(v->k == V_NUM && v->n == 1)) return 0;
   if (until && until->k == V_NUM && until->n < pl_now()) return 0;
   for (size_t i = 0; allow && allow->k == V_LIST && !in && i < allow->l.n; i++)
     in = allow->l.v[i]->k == V_TEXT && covers(allow->l.v[i]->t.s, here, path, listing);
@@ -152,7 +155,9 @@ static int opens(val *g, const char *here, const char *path, int listing) {
 /* Whether the caller may reach path, or any of a lingo's route when listing, by the policy p: the owner always; anyone
    else by a grant in the policy naming them, or by the badge they came with, when its first grant is the owner's own or
    handed on by someone a policy grant names and lets pass it on, every grant opens path, and its last is for the
-   caller. The control routes, /.lingo/, take only the owner or a badge it began. why says what decided. */
+   caller. A caller with a badge is judged by the badge alone, the owner too, so a run handed on from one computer to
+   the next never borrows the authority of a computer on the way. The control routes, /.lingo/, take only the owner or
+   a badge it began. why says what decided. */
 static int let_in(arena *a, val *p, const caller *c, const char *path, int listing, const char **why) {
   val *grants = v_list(a);
   int control = !strncmp(path, "/.lingo/", 8);
@@ -166,11 +171,11 @@ static int let_in(arena *a, val *p, const caller *c, const char *path, int listi
     for (size_t i = 0; some && some->k == V_LIST && i < some->l.n; i++)
       if (!k || *text_or(some->l.v[i], "to", "") != '/') list_push(a, grants, some->l.v[i]);
   }
-  if (c->owner) {
+  if (c->owner && !c->badge) {
     *why = "the owner";
     return 1;
   }
-  for (size_t i = 0; !control && grants && grants->k == V_LIST && i < grants->l.n; i++) {
+  for (size_t i = 0; !control && !c->badge && grants && grants->k == V_LIST && i < grants->l.n; i++) {
     val *g = grants->l.v[i];
     if (names(text_or(g, "to", ""), c->name) && opens(g, here, path, listing)) {
       *why = arena_fmt(a, "grant: %s", text_or(g, "to", ""));
@@ -198,17 +203,25 @@ static int let_in(arena *a, val *p, const caller *c, const char *path, int listi
 }
 
 
-/* 4. A badge checked: the base64 of a JSON list of grants, each handing on the one before. Every signature checks out
-      against its signer's key, this computer's own or the one on its record, over the sig before it and the grant as
+/* 4. A badge checked: the base64 of a JSON list of grants, each handing on the one before. Every grant is version 1,
+      v, the one this computer knows, so a newer one fails closed. Every signature checks out against its signer's key,
+      this computer's own, by its name or its key, or the one on its record, over the sig before it and the grant as
       Onsay signs, and each grant but the last lets pass on to the next's signer. Its grants, begun set when the owner
       signed the first, or NULL with why. */
 static val *badge_of(arena *a, const char *text, int *begun, const char **why) {
   buf raw = { 0 };
   buf name = { 0 };
+  buf self = { 0 };
+  unsigned char mine[32];
   val *b = unbase64(text, strlen(text), &raw) ? json_parse(a, raw.s ? raw.s : "", raw.n, NULL) : NULL;
   const char *before = "";
+  int keyed_here = key_of("device", 0, mine);
   buf_free(&raw);
   onsay_name(&name);
+  if (keyed_here) {
+    buf_str(&self, "ed25519:");
+    base64(&self, mine, 32);
+  }
   *why = NULL;
   if (!b || b->k != V_LIST || !b->l.n) *why = "Its badge isn't one: the base64 of a list of grants";
   for (size_t i = 0; !*why && i < b->l.n; i++) {
@@ -216,21 +229,24 @@ static val *badge_of(arena *a, const char *text, int *begun, const char **why) {
     val *bare = v_rec(a);
     const char *by = text_or(g, "by", "");
     const char *sig = text_or(g, "sig", "");
-    int own = !strcmp(by, "this computer") || (name.s && !strcmp(by, name.s));
+    val *v = rec_get(g, "v");
+    int own = keyed_here && ((name.n && !strcmp(by, name.s)) || !strcmp(by, self.s));
     val *who = own || g->k != V_REC ? NULL : keyed(a, by);
     const char *their = text_or(who, "key", "");
-    unsigned char mine[32];
     buf key = { 0 };
     buf said = { 0 };
     buf message = { 0 };
-    int known = own ? key_of("device", 0, mine)
-                    : !strncmp(their, "ed25519:", 8) && unbase64(their + 8, strlen(their + 8), &key) && key.n == 32;
+    int known = own || (!strncmp(their, "ed25519:", 8) && unbase64(their + 8, strlen(their + 8), &key) && key.n == 32);
     for (size_t k = 0; g->k == V_REC && k < g->r.n; k++)
       if (strcmp(g->r.key[k], "sig")) rec_set(a, bare, g->r.key[k], g->r.v[k]);
     buf_str(&message, before);
     canonical(&message, bare);
     if (g->k != V_REC || !*text_or(g, "to", ""))
       *why = "Each grant in its badge says who it is for, in to";
+    else if (!v)
+      *why = arena_fmt(a, "Its badge's grant by %s says no version, v, so it can't be read", by);
+    else if (!(v->k == V_NUM && v->n == 1))
+      *why = arena_fmt(a, "Its badge's grant by %s is a version this computer doesn't know", by);
     else if (!known)
       *why = arena_fmt(a, "There's no key known for %s, who signed its badge", by);
     else if (!unbase64(sig, strlen(sig), &said) || said.n != 64 ||
@@ -246,13 +262,14 @@ static val *badge_of(arena *a, const char *text, int *begun, const char **why) {
     buf_free(&message);
   }
   buf_free(&name);
+  buf_free(&self);
   return *why ? NULL : b;
 }
 
 
-/* 8. A badge made here, signed by this computer's key: one grant {by, to, allow, except, pass, until, data, sig}, by this
-      computer's name, or this computer before it signs in, for public, everything and a day unless g says, stapled on
-      to g's badge when it has one. As base64, to send, or NULL with why. */
+/* 8. A badge made here, signed by this computer's key: one grant {v, by, to, allow, except, pass, until, data, sig},
+      version 1, by this computer's name, or its key itself, ed25519:<base64>, before it has one, for public, everything
+      and a day unless g says, stapled on to g's badge when it has one. As base64, to send, or NULL with why. */
 static val *badge_make(arena *a, val *g, const char **why) {
   val *list = v_list(a);
   val *grant = v_rec(a);
@@ -273,9 +290,18 @@ static val *badge_make(arena *a, val *g, const char **why) {
     }
     list = old;
   }
+  if (!key_of("device", 1, key)) {
+    *why = "This computer couldn't make or use its key";
+    return NULL;
+  }
   onsay_name(&name);
+  if (!name.n) {
+    buf_str(&name, "ed25519:");
+    base64(&name, key, 32);
+  }
   list_push(a, everything, v_cstr(a, "/"));
-  rec_set(a, grant, "by", v_cstr(a, name.s ? name.s : "this computer"));
+  rec_set(a, grant, "v", v_num(a, 1));
+  rec_set(a, grant, "by", v_text(a, name.s, name.n));
   rec_set(a, grant, "to", v_cstr(a, "public"));
   rec_set(a, grant, "allow", everything);
   rec_set(a, grant, "until", v_num(a, floor(pl_now()) + 86400));
@@ -288,7 +314,7 @@ static val *badge_make(arena *a, val *g, const char **why) {
   }
   buf_str(&message, list->l.n ? text_or(list->l.v[list->l.n - 1], "sig", "") : "");
   canonical(&message, grant);
-  int made = key_of("device", 1, key) && key_sign("device", message.s, message.n, sig);
+  int made = key_sign("device", message.s, message.n, sig);
   buf_free(&message);
   if (!made) {
     *why = "This computer couldn't make or use its key";
@@ -317,8 +343,9 @@ static pl_gate *nonce_gate;   // keeps the nonces, which calls coming in on thei
 
 
 /* 4. Who signed a request, by HTTP Message Signatures (RFC 9421) with Ed25519. Its Signature-Input covers @method,
-   @target-uri and content-digest at least, and says when it was made, its nonce and the signer's keyid, like
-   laptop.brandon, whose key the running native lingo that looks keys up gives (key in lingo_hooks). It must check out,
+   @target-uri and content-digest at least, and onsay-badge when it carries one, and says when it was made, its nonce
+   and the signer's keyid, like laptop.brandon, whose key the running native lingo that looks keys up gives (key in
+   lingo_hooks). It must check out,
    be made within 5 minutes, its nonce new in that time, and its Content-Digest the body's sha-256. Its @target-uri is
    x-forwarded-proto (else http), :// x-forwarded-host (else host), and x-forwarded-uri (else the path), so one passed on
    by a proxy is checked as it was sent. Fills in c, or gives why not. */
@@ -339,6 +366,7 @@ static const char *signer(arena *a, val *h, const char *method, const char *path
   buf key = { 0 };
   unsigned char sum[32];
   int covers = 0;
+  int badge_covered = 0;
   double created = 0;
   double now = pl_now();
   if (!eq || eq[1] != '(' || !close)
@@ -362,6 +390,7 @@ static const char *signer(arena *a, val *h, const char *method, const char *path
       value = text_or(h, id, NULL);
     if (!value) missing = id;
     covers += !strcmp(id, "@method") + !strcmp(id, "@target-uri") + !strcmp(id, "content-digest");
+    badge_covered |= !strcmp(id, "onsay-badge");
     buf_fmt(&base, "\"%s\": %s\n", id, value ? value : "");
     p += n + 1;
   }
@@ -388,6 +417,8 @@ static const char *signer(arena *a, val *h, const char *method, const char *path
     why = arena_fmt(a, "Its signature covers %s, which it hasn't", missing);
   else if (covers < 3)
     why = "Its signature must cover @method, @target-uri and content-digest";
+  else if (rec_get(h, "onsay-badge") && !badge_covered)
+    why = "Its signature must cover its Onsay-Badge, so the badge can't be lifted onto another request";
   else if (!keyid || !nonce || !created)
     why = "Its Signature-Input needs created, nonce and keyid";
   else if (created < now - 300 || created > now + 300)
@@ -496,8 +527,9 @@ static val *header_names(arena *a, val *h) {
 
 
 /* 5. A request this computer sends, signed by its own key (RFC 9421), the other side of signer: Content-Digest, and a
-      Signature-Input over @method, @target-uri and content-digest, made now with a new nonce, its keyid this computer's
-      name, or its key itself, ed25519:<base64>, before it has one. Added to headers; 0 when it has no key. */
+      Signature-Input over @method, @target-uri and content-digest, and the Onsay-Badge already in headers when there is
+      one, made now with a new nonce, its keyid this computer's name, or its key itself, ed25519:<base64>, before it has
+      one. Added to headers; 0 when it has no key. */
 static int sign_request(arena *a, val *headers, const char *method, const char *url, const char *body, size_t n) {
   unsigned char sum[32];
   unsigned char key[32];
@@ -521,10 +553,12 @@ static int sign_request(arena *a, val *headers, const char *method, const char *
   buf_chr(&digest, ':');
   pl_random(nonce, sizeof nonce);
   base64(&once, nonce, sizeof nonce);
-  buf_fmt(&params, "(\"@method\" \"@target-uri\" \"content-digest\");created=%.0f;nonce=\"%s\";keyid=\"%s\"",
-      floor(pl_now()), once.s, keyid.s);
-  buf_fmt(&base, "\"@method\": %s\n\"@target-uri\": %s\n\"content-digest\": %s\n\"@signature-params\": %s", method, url,
-      digest.s, params.s);
+  const char *badge = text_or(headers, "Onsay-Badge", NULL);
+  buf_fmt(&params, "(\"@method\" \"@target-uri\" \"content-digest\"%s);created=%.0f;nonce=\"%s\";keyid=\"%s\"",
+      badge ? " \"onsay-badge\"" : "", floor(pl_now()), once.s, keyid.s);
+  buf_fmt(&base, "\"@method\": %s\n\"@target-uri\": %s\n\"content-digest\": %s\n", method, url, digest.s);
+  if (badge) buf_fmt(&base, "\"onsay-badge\": %s\n", badge);
+  buf_fmt(&base, "\"@signature-params\": %s", params.s);
   int ok = key_sign("device", base.s, base.n, sig);
   if (ok) {
     buf_str(&said, "sig=:");

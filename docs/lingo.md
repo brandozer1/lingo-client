@@ -110,6 +110,9 @@ fn name(value: type "what it is" = default, ...) -> type "what it does" { ...ste
   `k is text, but this is number`.
 - **Text after the values,** or after `-> type`, is what the function does, and text after a value's name and type is
   what that value is: plain text, with no `{}` in it. They are what people and the lingo search read (section 11).
+- **A price,** last before the body: `costs 5`, credits a call, or `costs at least 2`, the least it takes, like an
+  auction's reserve. With none it is free. It is sent with what is offered, as `price`, `{amount: 5}` or
+  `{minimum: 2}`. `costs`, `at` and `least` mean this only there, so they stay free as names everywhere else.
 - **A function whose name starts with `_`** is the lingo's own: its other functions call it, but it is never shared,
   and Onsay lists it nowhere.
 
@@ -737,7 +740,10 @@ can write in a few lines is a standard function instead, written in Lingo on thi
 | `socket.open(url, headers=nothing)`, `send(socket, text)`, `receive(socket, seconds=30)`, `close(socket)` | A WebSocket, needing `net`, for a service that talks both ways, like a browser driven over WebDriver BiDi. A request can't wait for a message the way a socket does |
 | `connection.open(address)`, `send(connection, data)`, `receive(connection, seconds=30)`, `close(connection)`, `listen(address)`, `accept(listener, seconds=30)` | Bytes over a connection, needing `net`: the floor every protocol is written on. Its address says its kind, `tcp://example.com:80` or `udp://10.0.0.5:53` |
 | `badge.read()` | Who called the request running, `{caller, data}`, and the data of the badge it came with, a later grant's written over an earlier's: what a session would keep, carried by the request instead (`core/README.md`, Who may do what) |
-| `lingo.list()` | Everything on the computer an agent can call by name, `{name, about, functions: [{name, does}]}`: its own groups first, like `input` and `window`, each call's `does` its values and what it does, then every lingo offered. `std` and `lingo` aren't listed |
+| `badge.give(to, allow, until=nothing, data=nothing)` | The run's badge with a narrower grant by this computer stapled on, as base64 to send. A run with no badge gets a new one only when it is the owner's. A wider grant gains nothing |
+| `badge.as(badge, code)` | Code run under a badge instead of the run's own, refused unless it is the run's own badge with grants stapled on (any, for the owner's run with none) |
+| `badge.may(address)` | Whether a call to that address on this computer, like `files/read`, would be let in for the run now, without making it |
+| `lingo.list()` | Everything on the computer an agent can call by name, `{name, about, functions: [{name, does, price}]}`, `price` only when it isn't free: its own groups first, like `input` and `window`, each call's `does` its values and what it does, then every lingo offered. `std` and `lingo` aren't listed |
 | `lingo.code(name)` | A lingo's code, `{code, openapi}`, its openapi.json as its maker writes it, to change it or learn from it |
 | `lingo.save(name, code, openapi=nothing)` | A lingo written or changed as a folder in the lingos folder, started and read again at once, needing `lingos`: its functions, or why it can't run, like its code's first mistake. How agents keep what they work out |
 

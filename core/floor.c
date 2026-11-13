@@ -8,8 +8,9 @@
 // 1. Settings   its settings file: home, port, name, owner, keys, steps and ms, and the lingos built in
 // 2. Callers    a signer's key, the owner, and the policy
 // 3. Offers     the table of lingos offered here: what each does and where it answers, made from its own code
-// 4. Calls      each call a script makes: checked, then answered here or sent where it goes, signed, and the lingo
-//               search, lingo(...), which calls from here the ways Onsay's index finds
+// 4. Calls      each call a script makes: checked, then answered here or sent where it goes, signed, with the badge
+//               its run holds handed on; the lingo search, lingo(...), which calls from here the ways Onsay's index
+//               finds; and the badge calls, read, give, as and may
 // 5. Log        every request, a line of home/requests.log, sent to Onsay sealed whenever a connection works, its
 //               answer bringing the calls that came for this computer through Onsay
 // 6. Running    a call's script compiled and run, one at a time, within its limits
@@ -32,7 +33,7 @@
 #include "monocypher.h"
 #include "monocypher-ed25519.h"
 
-#define FLOOR_VERSION "0.2.0"   // and the format of its log, said first in every post
+#define FLOOR_VERSION "0.3.0"   // and the format of its log, said first in every post
 
 /* Onsay, built in: where its resolve endpoint and its log box are, and its public key, which what it signs is checked
    against and the log is sealed to. The test build asks test/floor.mjs, which signs with the test key. */
@@ -345,8 +346,9 @@ static val *natives(arena *a);
 /* The table, home/offered.json: {name: {address, code, about, settings, functions}}, read as each call comes, so a change
    holds at once. code is the lingo as it was offered, run here when it has no address, else only its signatures, its
    calls sent to the address. settings are the names of those its code reads. functions are the compiler's listing of
-   it, each {name, does, inputs, gives, internal}: inputs its values as JSON Schema, gives the type of what it gives,
-   when its code says, and internal a helper's, one whose name starts with _. */
+   it, each {name, does, inputs, gives, internal, price}: inputs its values as JSON Schema, gives the type of what it
+   gives, when its code says, internal a helper's, one whose name starts with _, and price what its code says it costs,
+   {amount} or {minimum} in credits, left out when it is free. */
 static val *offers(arena *a) {
   buf text = { 0 };
   val *t = pl_read(arena_fmt(a, "%s/offered.json", set.root), &text) ? json_parse(a, text.s, text.n, NULL) : NULL;
@@ -406,6 +408,7 @@ static val *lingo_offer(run *r, val **a) {
       rec_set(ra, f, "inputs", rec_get(p, "inputSchema") ? rec_get(p, "inputSchema") : v_rec(ra));
       if (rec_get(p, "gives")) rec_set(ra, f, "gives", rec_get(p, "gives"));
       rec_set(ra, f, "internal", VBOOL(internal));
+      if (rec_get(p, "price")) rec_set(ra, f, "price", rec_get(p, "price"));
       list_push(ra, functions, f);
       if (internal) continue;
       val *one = v_rec(ra);
@@ -427,9 +430,10 @@ static val *lingo_offer(run *r, val **a) {
   return out;
 }
 
-/* 3. lingo.list(): every lingo here, {name, about, functions: [{name, does}]}: this computer's own groups first, like
-      input and window, each call's does its values and what it does, then every lingo offered, from its functions in
-      the table, its helpers left out. std and lingo, part of the language, aren't listed. */
+/* 3. lingo.list(): every lingo here, {name, about, functions: [{name, does, price}]}: this computer's own groups first,
+      like input and window, each call's does its values and what it does, then every lingo offered, from its functions
+      in the table, its helpers left out, each with its price when it has one. std and lingo, part of the language,
+      aren't listed. */
 static val *lingo_list(run *r, val **a) {
   val *table = offers(r->a);
   val *out = v_list(r->a);
@@ -479,6 +483,7 @@ static val *lingo_list(run *r, val **a) {
       val *f = v_rec(r->a);
       rec_set(r->a, f, "name", v_cstr(r->a, text_or(one_kept, "name", "")));
       rec_set(r->a, f, "does", v_text(r->a, line.s, line.n));
+      if (rec_get(one_kept, "price")) rec_set(r->a, f, "price", rec_get(one_kept, "price"));
       buf_free(&line);
       list_push(r->a, functions, f);
     }
@@ -525,17 +530,56 @@ void may(run *r, const char *id) {
   if (!in) fail(r, "denied", "%s can't make %s here: no grant lets them", now.name, id);
 }
 
+// The badge the run on this thread holds, as base64 to send. Only when it holds one.
+static const char *badge_text(arena *a) {
+  buf json = { 0 };
+  buf out = { 0 };
+  buf_json(&json, now.badge);
+  base64(&out, (unsigned char *)json.s, json.n);
+  const char *text = v_text(a, out.s, out.n)->t.s;
+  buf_free(&json);
+  buf_free(&out);
+  return text;
+}
+
 /* One call sent where it goes, signed by this computer: values as JSON in a POST, and its answer, the JSON its body is.
-   A record with error, or a status of 400 or more, is the call's failure. */
+   A record with error, or a status of 400 or more, is the call's failure. A run that holds a badge sends it on, with
+   this computer's own grant stapled on, so the one receiving lets in only what the run could reach: for a web address,
+   to public, allowing its path; for a call through Onsay to another computer, to that computer, allowing the address;
+   pass, so it can go on further inside that, and for 5 minutes. Asking the search for ways sends none. The request's
+   signature covers it. */
 static val *sent(run *r, const char *url, val *values, int asked) {
   arena *a = r->a;
   val *headers = v_rec(a);
   buf body = { 0 };
   buf error = { 0 };
   double began = pl_now();
-  buf_json(&body, values);
   rec_set(a, headers, "Content-Type", v_cstr(a, "application/json"));
   if (now_run) rec_set(a, headers, "Onsay-Run", v_cstr(a, now_run));
+  const char *address = asked ? text_or(values, "address", NULL) : NULL;
+  if (now.badge && (!asked || address)) {
+    val *g = v_rec(a);
+    val *allow = v_list(a);
+    const char *why = NULL;
+    const char *to = "public";
+    if (address) {
+      to = arena_fmt(a, "%.*s", (int)strcspn(address, "/"), address);
+    } else {
+      const char *host = strstr(url, "://");
+      const char *path = host ? strchr(host + 3, '/') : NULL;
+      address = path ? arena_fmt(a, "%.*s", (int)strcspn(path, "?"), path) : "/";
+    }
+    list_push(a, allow, v_cstr(a, address));
+    rec_set(a, g, "badge", v_cstr(a, badge_text(a)));
+    rec_set(a, g, "to", v_cstr(a, to));
+    rec_set(a, g, "allow", allow);
+    rec_set(a, g, "pass", VBOOL(1));
+    rec_set(a, g, "until", v_num(a, floor(pl_now()) + 300));
+    val *badge = badge_make(a, g, &why);
+    if (!badge) fail(r, "phrase", "%s", why);
+    rec_set(a, headers, "Onsay-Badge", badge);
+  }
+  buf_json(&body, values);
   sign_request(a, headers, "POST", url, body.s, body.n);
   val *got = pl_http(a, "POST", url, headers, body.s, body.n, set.ms / 1000, &error);
   val *status = rec_get(got, "status");
@@ -723,6 +767,75 @@ static val *setting_(run *r, val **a) {
   return searched(r, "settings.get", values, "unknown", "Nothing keeps settings here: no lingo called settings is offered");
 }
 
+// badge.read(): who called the run, and the data of every grant of the badge it holds, a later grant's over an earlier's.
+static val *badge_read(run *r, val **a) {
+  val *out = v_rec(r->a);
+  val *data = v_rec(r->a);
+  (void)a;
+  for (size_t i = 0; now.badge && i < now.badge->l.n; i++) {
+    val *d = rec_get(now.badge->l.v[i], "data");
+    for (size_t k = 0; d && d->k == V_REC && k < d->r.n; k++) rec_set(r->a, data, d->r.key[k], d->r.v[k]);
+  }
+  rec_set(r->a, out, "caller", v_cstr(r->a, now.name ? now.name : "this computer"));
+  rec_set(r->a, out, "data", data);
+  return out;
+}
+
+/* badge.give(to, allow, until, data): the badge the run holds with a grant by this computer stapled on, as base64. A
+   run with no badge gets a new one only when it is the owner's. A wider grant gains nothing, since every grant in a
+   badge must allow an address for it to be let in. */
+static val *badge_give(run *r, val **a) {
+  val *g = v_rec(r->a);
+  const char *why = NULL;
+  if (!now.badge && !now.owner) fail(r, "denied", "Only a run that holds a badge, or the owner's, can give one");
+  if (now.badge) rec_set(r->a, g, "badge", v_cstr(r->a, badge_text(r->a)));
+  rec_set(r->a, g, "to", a[0]);
+  rec_set(r->a, g, "allow", a[1]);
+  if (a[2]->k != V_NOTHING) rec_set(r->a, g, "until", a[2]);
+  if (a[3]->k != V_NOTHING) rec_set(r->a, g, "data", a[3]);
+  val *badge = badge_make(r->a, g, &why);
+  if (!badge) fail(r, "type", "%s", why);
+  return badge;
+}
+
+/* badge.as(badge, code): code, Lingo, run under badge instead of what the run holds, its value given back. The badge
+   must check out and be a narrowing of the run's: the run's own badge with grants stapled on, or any, for the owner's
+   run with none. */
+static val *badge_as(run *r, val **a) {
+  int begun = 0;
+  const char *why = NULL;
+  val *b = badge_of(r->a, a[0]->t.s, &begun, &why);
+  if (!b) fail(r, "denied", "%s", why);
+  int narrower = now.owner;
+  if (now.badge) narrower = b->l.n >= now.badge->l.n;
+  for (size_t i = 0; now.badge && narrower && i < now.badge->l.n; i++)
+    narrower = !strcmp(text_or(b->l.v[i], "sig", ""), text_or(now.badge->l.v[i], "sig", ""));
+  if (!narrower) fail(r, "denied", "That badge reaches more than this run holds, so code can't run under it");
+  caller who = { now.name, 0, begun, b };
+  caller was = now;
+  val *policy_was = now_policy;
+  const char *code = NULL;
+  const char *message = NULL;
+  val *got = run_script(r->a, a[1]->t.s, v_list(r->a), &who, &code, &message);
+  now = was;
+  now_policy = policy_was;
+  if (!got) fail(r, code, "%s", message ? message : "it failed");
+  return got;
+}
+
+// badge.may(address): whether a call to address on this computer, like files/read, would be let in for the run now.
+static val *badge_may(run *r, val **a) {
+  const char *address = a[0]->t.s;
+  char *route = arena_fmt(r->a, "/%s", address + (*address == '/'));
+  const char *why = NULL;
+  // A call's name, like files.read, is its route, /files/read.
+  if (!strchr(address, '/'))
+    for (char *x = route; *x; x++)
+      if (*x == '.') *x = '/';
+  if (!now.name) return VBOOL(1);
+  return VBOOL(let_in(r->a, now_policy, &now, route, 0, &why));
+}
+
 ////////// 5. LOG //////////
 
 static pl_gate *log_gate;
@@ -898,8 +1011,8 @@ static double send_log(double last) {
 }
 
 /* 5. The table as Onsay indexes it, {way: offered, lingos: [{name, code, about, settings, functions: [{name, does,
-      inputs, gives, internal}]}]}, never where they answer, this computer's own calls first, as the lingo onsay, each
-      function <group>.<call>. Posted on a thread of its own, as it starts, each time the table changes and when Onsay
+      inputs, gives, internal, price}]}]}, never where they answer, this computer's own calls first, as the lingo onsay,
+      free, each function <group>.<call>. Posted on a thread of its own, as it starts, each time the table changes and when Onsay
       asks, so it reaches Onsay at once and never waits on a held post. One at a time, each reading the table as it goes,
       so the last to reach Onsay is the newest. Kept with what waits to be sent when it doesn't go. */
 static void offered_sent(void *arg) {
@@ -1412,8 +1525,24 @@ int main(int argc, char **argv) {
       "code or its functions' signatures, and where its calls are sent, or with no address its code kept to run here, "
       "giving back its functions; with no code, taken away",
       lingo_offer);
-  phrase_add("lingo", "none", "list() -> [{name: text, about: text, functions: [{name: text, does: text}]}]: every lingo offered here", lingo_list);
+  phrase_add("lingo", "none", "list() -> [{name: text, about: text, functions: [{name: text, does: text, price?: record}]}]: every lingo offered "
+      "here, a function's price {amount} or {minimum} in credits when it isn't free", lingo_list);
   phrase_add("lingo", "none", "code(name: text) -> text?: the code of a lingo kept here, nothing for one that answers elsewhere", lingo_code);
+  phrase_add("badge", "none",
+      "read() -> {caller: text, data: record}: who called the run, and the data of the badge it holds, a later grant's "
+      "written over an earlier's",
+      badge_read);
+  phrase_add("badge", "none",
+      "give(to: text, allow: [text], until: number=nothing, data: record=nothing) -> text: the run's badge with a "
+      "narrower grant stapled on, for to, allowing allow, as base64 to send",
+      badge_give);
+  phrase_add("badge", "none",
+      "as(badge: text, code: text): code, Lingo, run under badge instead of the run's own, refused when it reaches more",
+      badge_as);
+  phrase_add("badge", "none",
+      "may(address: text) -> bool: whether a call to that address on this computer, like files/read, would be let in now, "
+      "without making it",
+      badge_may);
   for (size_t i = 0; i < BUILT_IN; i++) {
     native_begin(i + 1);
     built_in[i].add();

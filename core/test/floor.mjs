@@ -31,26 +31,35 @@ const canonical = (v) => Array.isArray(v) ? `[${v.map(canonical).join(',')}]`
     : JSON.stringify(v ?? null)
 const digest = (body) => `sha-256=:${crypto.createHash('sha256').update(body).digest('base64')}:`
 
-// The headers of a request signed by key (RFC 9421), keyid its name or its key itself.
-const signed = (key, keyid, method, url, body = '') => {
-  const params = `("@method" "@target-uri" "content-digest");created=${Math.floor(Date.now() / 1000)};nonce="${crypto.randomBytes(8).toString('hex')}";keyid="${keyid}"`
-  const base = `"@method": ${method}\n"@target-uri": ${url}\n"content-digest": ${digest(body)}\n"@signature-params": ${params}`
-  return { 'content-digest': digest(body), 'signature-input': `sig=${params}`, signature: `sig=:${crypto.sign(null, Buffer.from(base), key).toString('base64')}:` }
+// The headers of a request signed by key (RFC 9421), keyid its name or its key itself, its badge covered when it has one.
+const signed = (key, keyid, method, url, body = '', badge) => {
+  const covered = badge ? ' "onsay-badge"' : ''
+  const params = `("@method" "@target-uri" "content-digest"${covered});created=${Math.floor(Date.now() / 1000)};nonce="${crypto.randomBytes(8).toString('hex')}";keyid="${keyid}"`
+  const badgeLine = badge ? `"onsay-badge": ${badge}\n` : ''
+  const base = `"@method": ${method}\n"@target-uri": ${url}\n"content-digest": ${digest(body)}\n${badgeLine}"@signature-params": ${params}`
+  const headers = { 'content-digest': digest(body), 'signature-input': `sig=${params}`, signature: `sig=:${crypto.sign(null, Buffer.from(base), key).toString('base64')}:` }
+  return badge ? { ...headers, 'onsay-badge': badge } : headers
 }
 
-// Whether a request the floor sent checks out: its signature by the key its keyid names, over what it covers.
+// Whether a request the floor sent checks out: its signature by the key its keyid names, over what it covers, its badge
+// among them when it carries one.
 const checks = (req, body) => {
   const input = req.headers['signature-input'] ?? '', sig = (req.headers.signature ?? '').match(/sig=:(.*):/)?.[1]
   const params = input.slice(4), keyid = params.match(/keyid="([^"]*)"/)?.[1] ?? ''
   if (!sig || !keyid.startsWith('ed25519:')) return false
-  const base = `"@method": ${req.method}\n"@target-uri": http://${req.headers.host}${req.url}\n"content-digest": ${req.headers['content-digest']}\n"@signature-params": ${params}`
+  const values = { '@method': req.method, '@target-uri': `http://${req.headers.host}${req.url}`, 'content-digest': req.headers['content-digest'], 'onsay-badge': req.headers['onsay-badge'] }
+  const ids = params.slice(1, params.indexOf(')')).split(' ').map((id) => id.slice(1, -1))
+  if (req.headers['onsay-badge'] && !ids.includes('onsay-badge')) return false
+  const base = ids.map((id) => `"${id}": ${values[id]}\n`).join('') + `"@signature-params": ${params}`
   const key = crypto.createPublicKey({ key: Buffer.concat([Buffer.from('302a300506032b6570032100', 'hex'), Buffer.from(keyid.slice(8), 'base64')]), format: 'der', type: 'spki' })
   return req.headers['content-digest'] === digest(body) && !!sig && crypto.verify(null, Buffer.from(base), key, Buffer.from(sig, 'base64'))
 }
 
-// A badge, its grants handed on: staple(given, grant, key) adds grant to given, signed over the sig before it and the grant.
-const staple = (given, grant, key) => {
+// A badge, its grants handed on: staple(given, grant, key) adds grant to given, version 1 unless it says, signed over the
+// sig before it and the grant.
+const staple = (given, one, key) => {
   const list = given ? JSON.parse(Buffer.from(given, 'base64').toString()) : []
+  const grant = { v: 1, ...one }
   const sig = crypto.sign(null, Buffer.from((list.at(-1)?.sig ?? '') + canonical(grant)), key).toString('base64')
   return Buffer.from(JSON.stringify([...list, { ...grant, sig }])).toString('base64')
 }
@@ -101,7 +110,7 @@ const stand = http.createServer((req, res) => {
       return res.end(file)
     }
     if (req.url === '/echo/slow') return setTimeout(() => json(200, 'slow'), 1500)
-    if (req.url.startsWith('/echo')) { echoed.push({ path: req.url, body: JSON.parse(body || 'null'), signed: checks(req, body), run: req.headers['onsay-run'] }); return json(200, { path: req.url, got: JSON.parse(body || 'null') }) }
+    if (req.url.startsWith('/echo')) { echoed.push({ path: req.url, body: JSON.parse(body || 'null'), signed: checks(req, body), run: req.headers['onsay-run'], badge: req.headers['onsay-badge'] }); return json(200, { path: req.url, got: JSON.parse(body || 'null') }) }
     if (req.url === '/broken') return json(500, { error: 'it broke over there' })
     if (req.url === '/weather') return json(200, `sunny in ${JSON.parse(body).city}`)
     // The lingo search: the ways it finds, best first, in list mode, or a call relayed to its address.
@@ -135,7 +144,7 @@ const stand = http.createServer((req, res) => {
 let URL_ = `http://127.0.0.1:${FLOOR}`
 const call = async (path, body, { key, keyid, badge, run, method = 'POST' } = {}) => {
   const text = typeof body === 'string' ? body : body === undefined ? '' : JSON.stringify(body)
-  const headers = { ...(key ? signed(key, keyid ?? publicOf(key), method, URL_ + path, text) : {}), ...(badge ? { 'onsay-badge': badge } : {}), ...(run ? { 'onsay-run': run } : {}) }
+  const headers = { ...(key ? signed(key, keyid ?? publicOf(key), method, URL_ + path, text, badge) : {}), ...(badge ? { 'onsay-badge': badge } : {}), ...(run ? { 'onsay-run': run } : {}) }
   const r = await fetch(URL_ + path, { method, headers, body: method === 'GET' ? undefined : text })
   const got = await r.text()
   let parsed
@@ -302,6 +311,63 @@ const CASES = [
     const [a, b] = [await call('/', 'return use("echo/x", {})', { badge: theirs }), await call('/', 'return use("echo/x", {})', { badge: changed })]
     return a.status === 403 && b.status === 401
   }],
+  ['a grant with no version, or one this floor doesn\'t know, makes its badge a 401', async () => {
+    const none = staple(null, { v: undefined, by: publicOf(OWNER), to: 'public', allow: ['/lingo/use'] }, OWNER)
+    const newer = staple(null, { v: 2, by: publicOf(OWNER), to: 'public', allow: ['/lingo/use'] }, OWNER)
+    const [a, b] = [await call('/', 'return use("echo/v", {})', { badge: none }), await call('/', 'return use("echo/v", {})', { badge: newer })]
+    return a.status === 401 && /no version/.test(a.json.error) && b.status === 401 && /doesn't know/.test(b.json.error)
+  }],
+  ['badge.may says whether a call would be let in for the run, without making it', async () => {
+    const badge = staple(null, { by: publicOf(OWNER), to: 'public', allow: ['/lingo/use'] }, OWNER)
+    const had = echoed.length
+    const held = await call('/', 'return [badge.may("lingo/use"), badge.may("/lingo/offer"), badge.may("lingo.use")]', { badge })
+    const [mine, theirs] = [await call('/', 'return badge.may("files/read")', owner), await call('/', 'return badge.may("lingo/use")')]
+    return same(held.json, [true, false, true]) && mine.json === true && theirs.json === false && echoed.length === had
+  }],
+  ['badge.give staples on a narrower grant, a wider one gains nothing, and a run with no badge but the owner\'s gives none', async () => {
+    const badge = staple(null, { by: publicOf(OWNER), to: 'public', allow: ['/lingo'], pass: true }, OWNER)
+    const script = 'narrow = badge.give("public", ["/lingo/use"])\nwide = badge.give("public", ["/"])\n' +
+      'return [badge.as(narrow, "return [badge.may(\\"lingo/use\\"), badge.may(\\"lingo/offer\\")]"), badge.as(wide, "return badge.may(\\"files/read\\")")]'
+    const r = await call('/', script, { badge })
+    const theirs = await call('/', 'return badge.give("public", ["/"])')
+    return same(r.json, [[true, false], false]) && theirs.status === 403
+  }],
+  ['badge.as refuses a badge that reaches more than the run holds', async () => {
+    const held = staple(null, { by: publicOf(OWNER), to: 'public', allow: ['/lingo/use'] }, OWNER)
+    const other = staple(null, { by: publicOf(OWNER), to: 'public', allow: ['/'] }, OWNER)
+    const r = await call('/', `return badge.as("${other}", "return 1")`, { badge: held })
+    const theirs = await call('/', `return badge.as("${other}", "return 1")`)
+    const mine = await call('/', `return badge.as("${other}", "return badge.may(\\"files/read\\")")`, owner)
+    return r.status === 403 && /reaches more/.test(r.json.error) && theirs.status === 403 && mine.json === true
+  }],
+  ['a run that holds a badge sends it on, this floor\'s own grant stapled on, narrowed to the address called', async () => {
+    const held = staple(null, { by: publicOf(OWNER), to: 'public', allow: ['/lingo/use', '/echo'], pass: true }, OWNER)
+    const key = (await call('/', undefined, { method: 'GET' })).json.key
+    const r = await call('/', 'return use("echo/onward", {})', { badge: held })
+    const sent = echoed.at(-1)
+    const list = JSON.parse(Buffer.from(sent.badge ?? '', 'base64').toString() || '[]')
+    const { sig, ...last } = list.at(-1) ?? {}
+    const signer = crypto.createPublicKey({ key: Buffer.concat([Buffer.from('302a300506032b6570032100', 'hex'), Buffer.from(key.slice(8), 'base64')]), format: 'der', type: 'spki' })
+    const checksOut = !!sig && crypto.verify(null, Buffer.from(list[0].sig + canonical(last)), signer, Buffer.from(sig, 'base64'))
+    const first = JSON.parse(Buffer.from(held, 'base64').toString())[0]
+    return r.status === 200 && sent.path === '/echo/onward' && sent.signed && list.length === 2 && list[0].sig === first.sig &&
+      last.v === 1 && last.by === key && last.to === 'public' && same(last.allow, ['/echo/onward']) && last.pass === true &&
+      last.until <= Date.now() / 1000 + 301 && checksOut
+  }],
+  ['a request\'s signature covers its badge: one swapped after signing, or not covered, is a 401', async () => {
+    const held = staple(null, { by: publicOf(OWNER), to: 'public', allow: ['/lingo/use'] }, OWNER)
+    const other = staple(null, { by: publicOf(OWNER), to: 'public', allow: ['/'] }, OWNER)
+    const body = 'return use("echo/s", {})'
+    const send = async (headers) => {
+      const x = await fetch(URL_ + '/', { method: 'POST', headers, body })
+      return { status: x.status, json: await x.json() }
+    }
+    const good = await send(signed(JAMES, 'laptop.james', 'POST', URL_ + '/', body, held))
+    const swapped = await send({ ...signed(JAMES, 'laptop.james', 'POST', URL_ + '/', body, held), 'onsay-badge': other })
+    const bare = await send({ ...signed(JAMES, 'laptop.james', 'POST', URL_ + '/', body), 'onsay-badge': held })
+    return good.status === 200 && swapped.status === 401 && /doesn't check out/.test(swapped.json.error) &&
+      bare.status === 401 && /must cover its Onsay-Badge/.test(bare.json.error)
+  }],
   ['a signature that doesn\'t check out is a 401', async () => {
     const headers = signed(OWNER, publicOf(OWNER), 'POST', URL_ + '/', 'return 1')
     const r = await fetch(URL_ + '/', { method: 'POST', headers, body: 'return 2' })
@@ -347,8 +413,31 @@ const CASES = [
     for (let i = 0; i < 30 && !posted().some((l) => l.run === 'run_format' && l.way === 'in'); i++) await pause(100)
     const heads = logs.map((x) => JSON.parse(x.text.split('\n')[0]))
     const line = posted().find((l) => l.run === 'run_format' && l.way === 'in')
-    return heads.every((h) => h.way === 'format' && h.format === '0.2.0' && /^(windows|linux)/.test(h.facts.os) && h.facts.cores > 0 && h.facts.memory > 0) &&
+    return heads.every((h) => h.way === 'format' && h.format === '0.3.0' && /^(windows|linux)/.test(h.facts.os) && h.facts.cores > 0 && h.facts.memory > 0) &&
       line?.input === 'return 6 * 7' && line.output === '42'
+  }],
+  ['prices in a lingo\'s code reach Onsay with what is offered, a free function has none, and the words stay names elsewhere', async () => {
+    const code = '"Priced."\nfn now(city: text "a city\'s name") -> text "The weather now." costs 5 {return city}\n' +
+      'fn ask(prompt: text) -> text "An answer." costs at least 2 {return prompt}\nfn free() {return 1}\nfn costs(at, least) {return at + least}'
+    const offered = await call('/lingo/offer', { name: 'priced', code }, owner)
+    let last
+    for (let i = 0; i < 30 && !last; i++) {
+      last = posted().filter((l) => l.way === 'offered').at(-1)?.lingos.find((l) => l.name === 'priced')
+      if (!last) await pause(50)
+    }
+    const fn = (name) => last?.functions.find((f) => f.name === name)
+    const own = posted().filter((l) => l.way === 'offered').at(-1)?.lingos.find((l) => l.name === 'onsay')
+    const listed = (await call('/', 'return lingo.list()', owner)).json.find((l) => l.name === 'priced')
+    const sum = await call('/priced/costs', [1, 2], owner)
+    return offered.status === 200 && same(fn('now')?.price, { amount: 5 }) && same(fn('ask')?.price, { minimum: 2 }) && !('price' in fn('free')) &&
+      !('price' in fn('costs')) && own.functions.every((f) => !('price' in f)) &&
+      same(listed.functions.find((f) => f.name === 'now').price, { amount: 5 }) && sum.json === 3
+  }],
+  ['a costs with no price, or a price below 0, is a compile error in plain words', async () => {
+    const none = await call('/lingo/offer', { name: 'bad', code: 'fn x() costs {return 1}' }, owner)
+    const below = await call('/lingo/offer', { name: 'bad', code: 'fn x() costs at least -1 {return 1}' }, owner)
+    return none.status >= 400 && /a price in credits after costs/.test(none.json.error) &&
+      below.status >= 400 && /a price in credits after costs/.test(below.json.error)
   }],
   ['a change to what is offered reaches Onsay at once, not at the next post', async () => {
     const count = () => posted().filter((l) => l.way === 'offered').length

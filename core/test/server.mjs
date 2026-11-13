@@ -140,17 +140,22 @@ const digest = (body) => crypto.createHash('sha256').update(body).digest('base64
 // A badge as base64, its grants handed on: badge(given, grant, key) staples grant on to given, signed by key over the sig
 // before it and the grant as Onsay signs it.
 const badgeOf = (text) => JSON.parse(Buffer.from(text, 'base64').toString())
-const staple = (given, grant, key) => {
+const staple = (given, one, key) => {
   const list = given ? badgeOf(given) : []
+  const grant = { v: 1, ...one }
   const sig = crypto.sign(null, Buffer.from((list.at(-1)?.sig ?? '') + canonical(grant)), key).toString('base64')
   return Buffer.from(JSON.stringify([...list, { ...grant, sig }])).toString('base64')
 }
 
 /* The headers of a request signed by a device, keyid like laptop.tester, as its proxy passes it on: HTTP Message
-   Signatures (RFC 9421) over @method, @target-uri and content-digest, the target as the device sent it. */
+   Signatures (RFC 9421) over @method, @target-uri and content-digest, and onsay-badge when more carries one, the target
+   as the device sent it. */
 const signedBy = (device, keyid, method, path, body = '', more = {}) => {
-  const host = 'api.onsay.dev', d = `sha-256=:${digest(body)}:`, params = `("@method" "@target-uri" "content-digest");created=${Math.floor(Date.now() / 1000)};nonce="${crypto.randomBytes(8).toString('hex')}";keyid="${keyid}"`
-  const base = `"@method": ${method}\n"@target-uri": https://${host}${path}\n"content-digest": ${d}\n"@signature-params": ${params}`
+  const badge = more['onsay-badge']
+  const covered = badge ? ' "onsay-badge"' : ''
+  const host = 'api.onsay.dev', d = `sha-256=:${digest(body)}:`, params = `("@method" "@target-uri" "content-digest"${covered});created=${Math.floor(Date.now() / 1000)};nonce="${crypto.randomBytes(8).toString('hex')}";keyid="${keyid}"`
+  const badgeLine = badge ? `"onsay-badge": ${badge}\n` : ''
+  const base = `"@method": ${method}\n"@target-uri": https://${host}${path}\n"content-digest": ${d}\n${badgeLine}"@signature-params": ${params}`
   return { 'x-forwarded-for': '198.18.0.5, 10.0.0.1', 'x-forwarded-host': host, 'x-forwarded-proto': 'https', 'content-digest': d, 'signature-input': `on=${params}`,
     signature: `on=:${crypto.sign(null, Buffer.from(base), DEVICES[device]).toString('base64')}:`, ...more }
 }
@@ -695,7 +700,7 @@ const WEB_CASES = [
     const old = (await control('badge', { allow: ['/memo'], until: 1 })).json
     const go = (badge, more = {}) => web('/memo/recall?k=milk', { headers: { 'onsay-badge': badge, ...more } })
     const [a, b, c] = [await go(passed), await go(old), await go(kept)]
-    const d = await send('/memo/recall?k=milk', undefined, { as: undefined, headers: { ...signedBy('phone', 'phone.james', 'GET', '/memo/recall?k=milk'), 'onsay-badge': kept } })
+    const d = await send('/memo/recall?k=milk', undefined, { as: undefined, headers: signedBy('phone', 'phone.james', 'GET', '/memo/recall?k=milk', '', { 'onsay-badge': kept }) })
     return a.status === 401 && /isn't handed on/.test(a.json?.error) && b.status === 404 && c.status === 404 && d.status === 200 && d.json === '2 litres'
   }],
   ['badge: a lingo reads who called and the badge\'s data, by badge.read()', async () => {

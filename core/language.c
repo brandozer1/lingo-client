@@ -1039,7 +1039,7 @@ static int fits(arena *a, val *x, const char *words) {
 // 1. lex(c, s, n, out)                  -> text to tokens
 // 2. parse_with(c, code, n)             -> tokens to a tree, checked against the phrases it may use
 // 3. listing(a, file, code, why)        -> a lingo written in Lingo, its listing made from its code: every fn, the
-//                                          comments above each, its about, and the settings it reads
+//                                          comments above each, its price, its about, and the settings it reads
 // 4. lingo_call(a, inst, fn)            -> a program that calls one function, every Lingo function it reaches pulled in
 // 5. lingo_load(a, natives, stacked)    -> every lingo a computer has, each compiled against all of them, with what each
 //                                          function needs and how many lingo(...) calls it makes
@@ -2055,6 +2055,24 @@ static val *program(ps *p) {
         if (!ok) return NULL;
       }
       const char *does = says(p);
+      // Its price, costs 5 or costs at least 2, in credits; with none it is free. These words mean it only here.
+      token *t = peek(p, 0);
+      if (t && t->k == ID && !strcmp(t->v, "costs")) {
+        const char *kind = "amount";
+        token *least = peek(p, 2);
+        p->i++;
+        t = peek(p, 0);
+        if (t && t->k == ID && !strcmp(t->v, "at") && least && least->k == ID && !strcmp(least->v, "least")) {
+          kind = "minimum";
+          p->i += 2;
+          t = peek(p, 0);
+        }
+        if (!t || t->k != NUM) return expected(p, "a price in credits after costs, 0 or more, like costs 5 or costs at least 2");
+        p->i++;
+        val *price = v_rec(a);
+        rec_set(a, price, kind, v_num(a, t->num));
+        rec_set(a, f, "price", price);
+      }
       GET(body, block(p));
       rec_set(a, f, "params", ps_);
       rec_set(a, f, "body", body);
@@ -2256,6 +2274,7 @@ static val *listing(arena *a, const char *file, val *code, const char **why) {
     rec_set(a, ph, "params", params);
     rec_set(a, ph, "does", rec_get(fn, "does") ? rec_get(fn, "does") : T(a, ""));
     if (rec_get(fn, "gives")) rec_set(a, ph, "gives", rec_get(fn, "gives"));
+    if (rec_get(fn, "price")) rec_set(a, ph, "price", rec_get(fn, "price"));
     if (fname[0] == '_') rec_set(a, ph, "internal", VBOOL(1));
     list_push(a, phrases, ph);
   }

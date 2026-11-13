@@ -102,12 +102,13 @@ is a 401 that says why. Anyone not let in gets a 404, as if the lingo weren't th
 **A grant** is one permission slip: "I, `by`, let `to` reach `allow`, until `until`".
 
 ```json
-{ "by": "desk.brandon", "to": "alice", "allow": ["/notes"], "except": ["/notes/private"], "pass": true,
+{ "v": 1, "by": "desk.brandon", "to": "alice", "allow": ["/notes"], "except": ["/notes/private"], "pass": true,
   "until": 1794268800, "data": { "note": "the recipes are in /notes/recipes" }, "sig": "..." }
 ```
 
 | Field | Meaning |
 |---|---|
+| `v` | its version, 1. A badge's grant without it, or with one this computer doesn't know, is refused; a policy grant may leave it out |
 | `to` | `public`, a handle, every one of its computers, a computer like `laptop.alice`, `onsay`, or a route on this computer, every lingo under it, like `/` for all of them |
 | `allow` | addresses: one starting with `/` is on this computer, any other starts with a computer or a handle, like `desk.brandon/notes` or `brandon/notes`. `*` is any one part, and an address covers itself and everything under it |
 | `except` | addresses taken out of this grant's `allow`, never anything more |
@@ -135,13 +136,17 @@ the policy. Everything is closed until one opens it. The account's:
 
 **A badge** is grants that travel, each handing on the one before, sent as the base64 of their JSON list: the
 `Onsay-Badge` header on the port, or `badge` in a request a native lingo hands in. The `badge` verb makes one, signed by
-this computer's key in `keys/device`, by its name, like `laptop.brandon`, or `this computer` before it signs in.
+this computer's key in `keys/device`, by its name, like `laptop.brandon`, or its key itself, `ed25519:<base64>`, before
+it signs in. A signed request's signature covers its `Onsay-Badge`, so a badge can't be lifted onto another request. A
+run that came with a badge sends it on with every call it makes elsewhere, this computer's own grant stapled on, for
+the one receiving, allowing only the address called, for 5 minutes.
 
 **The check.** A request is let in when its caller is the owner, when a grant in the policy names it and covers the
 address, or when it came with a badge where the first grant is signed by the owner, or by someone a policy grant names
 and lets pass it on, each grant's `to` is the next one's signer and lets it pass on, the last `to` is the caller or
-`public`, and every grant covers the address and is in date. Since every grant must, a handoff can only narrow. A badge
-whose signature doesn't check out, or that isn't handed on, is a 401. The control routes open only to the owner or a
+`public`, and every grant covers the address and is in date. Since every grant must, a handoff can only narrow. A
+request that came with a badge is judged by the badge alone, even the owner's, so a run handed on never borrows the
+authority of a computer on the way. A badge whose signature doesn't check out, or that isn't handed on, is a 401. The control routes open only to the owner or a
 badge the owner signed, never to a grant in the policy.
 
 `policy.json`, changed only on this computer, holds its own grants, and only they speak for the lingos here: an account grant whose `to` is a route is passed over, so nothing from Onsay widens them. With none, it is this, so its own lingos reach
