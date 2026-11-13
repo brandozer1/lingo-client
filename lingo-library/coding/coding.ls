@@ -1,6 +1,7 @@
 "Coding Agent: an AI software engineer for a project on this computer. It reads, searches, writes and edits code, runs commands and checks its work, the way the best coding agents do, and finds its AI on the network."
-// 1. ask(task, folder, messages=nothing, mode="build") -> text; with messages, {text, messages, work, todos}: its reply,
-//                                  after at most 40 steps or 8 minutes, then it says how far it got so it can go on.
+// 1. ask(task, folder, messages=nothing, mode="build") -> text; with messages, {text, messages, work, todos, again}: its
+//                                  reply, after at most 40 steps or 8 minutes, then it says how far it got, with
+//                                  again, {address, values}, what to call to go on, so whoever asked carries it on.
 //                                  folder is the project's. messages is the conversation so far as chat messages, OpenAI's
 //                                  way, ending with task, and the messages given back are those it added, tool results cut
 //                                  short. mode plan only looks and plans, changing nothing
@@ -12,7 +13,8 @@
 // Its tools, as its model sees them: read (a file with line numbers, or a folder), edit (exact text replaced, then looser
 // matches when exact fails: ignoring spaces at line ends, spacing, indentation, or by first and last lines, each only
 // when it matches one place), write, _glob(files by name), _grep(a regular expression in files), _shell(a command, its
-// exit code and the end of its output), todowrite (its task list) and webfetch (a web page). It must read a file before
+// exit code and the end of its output), todowrite (its task list), remember (a fact kept in the memory lingo, which it
+// reads before it starts) and webfetch (a web page). It isn't let finish while its task list has items not done. It must read a file before
 // changing it, and three identical calls in a row are refused. When the conversation grows past about 100,000 tokens, the
 // older part is summed up by the same AI, and the newest kept as it is. On Windows, read, edit and grep run in
 // PowerShell; elsewhere, sh and awk, edits matching exactly.
@@ -29,7 +31,9 @@ fn ask(task, folder, messages=nothing, mode="build") "A coding agent: does a sof
   n = std.length(said)
   if n == 0 or said[n - 1].role != "user" or said[n - 1].content != task {said += [{role: "user", content: task}]}
   added = []
-  state = {seen: _read_before(said, place), todos: [], calls: []}
+  state = {seen: _read_before(said, place), todos: _todos_of(said), calls: []}
+  again = {address: "coding/ask", values: {task: "Onsay, not the person: that go ran out of steps. Go on from where you got, following your task list, until the task is done.", folder: place.folder, mode: mode}}
+  pushed = 0
   began = compute.now()
   for step in 1..40 {
     said = _compacted(said)
@@ -37,7 +41,16 @@ fn ask(task, folder, messages=nothing, mode="build") "A coding agent: does a sof
     m = _think(place, said, last ? nothing : _tools(mode), last)
     said += [m]
     added += [m]
-    if m.tool_calls == nothing {return _ended(m.content, messages, added, state)}
+    if m.tool_calls == nothing {
+      // A reply while its task list has items not done is sent back to it, at most 3 times a go, so it finishes.
+      left = _undone(state.todos)
+      if left == "" or pushed == 3 or last {return _ended(m.content, messages, added, state, last and (std.length(state.todos) == 0 or left != "") ? again : nothing)}
+      pushed += 1
+      back = {role: "user", content: "Onsay, not the person: your task list still has items not done:\n{left}Keep going until each is done and checked, or mark it cancelled and say plainly why it can't be."}
+      said += [back]
+      added += [back]
+      continue
+    }
     for c in m.tool_calls {
       r = _acted(place, state, c)
       state = r.state
@@ -46,7 +59,7 @@ fn ask(task, folder, messages=nothing, mode="build") "A coding agent: does a sof
       added += [{role: "tool", tool_call_id: c.id, content: std.slice(got, 0, 4000)}]
     }
   }
-  return _ended("It stopped after 40 steps.", messages, added, state)
+  return _ended("I used every step of this go, so I'm going on from here.", messages, added, state, again)
 }
 
 ////////// 2. ITS AI //////////
@@ -137,6 +150,7 @@ fn _tools(mode) "Its tools as OpenAI writes them, plan mode's without those that
     {name: "grep", does: "Searches the contents of files with a regular expression, like log.*Error or function\\s+\\w+, under a folder, leaving out node_modules, .git and build folders. Gives each file and its matching lines with their numbers, at most 100", takes: {pattern: {type: "string", description: "The regular expression"}, path: {type: "string", description: "The folder or file to search, the project folder when left out"}, include: {type: "string", description: "Only files whose names match, like *.js or *.\{ts,tsx\}"}}, needs: ["pattern"]},
     {name: "shell", does: "Runs a command in this computer's shell, Windows PowerShell on Windows and sh elsewhere, and gives its exit code and the end of its output, at most 50 KB. For git, builds, tests, package managers and running programs. Not for reading, finding, searching or editing files: the other tools do that. Quote paths with spaces. Use workdir instead of changing folder in the command. Commands that need the person, or never end, like a dev server, will be stopped after 10 minutes", takes: {command: s, workdir: {type: "string", description: "The folder to run it in, the project folder when left out"}}, needs: ["command"]},
     {name: "todowrite", does: "Writes your task list, the whole of it each time, to plan and track work of three or more steps. Exactly one item in_progress while work remains. Mark an item completed as soon as it is truly done and checked, never in batches, and add follow ups you find. Skip it for a single simple step", takes: {todos: {type: "array", items: {type: "object", properties: {content: {type: "string", description: "The task, short and specific"}, status: {type: "string", description: "pending, in_progress, completed or cancelled"}, priority: {type: "string", description: "high, medium or low"}}, required: ["content", "status"]}}}, needs: ["todos"]},
+    {name: "remember", does: "Keeps a fact for next time, for every agent on this computer: how this project builds and tests, a preference of the person's, a correction, what worked. In one plain sentence. Not for what only this task needs", takes: {fact: s}, needs: ["fact"]},
     {name: "webfetch", does: "Fetches a web page or file from a full http or https address and gives its text, at most 50 KB. Only addresses the person or the project gave, or documentation you are sure of: never guess an address", takes: {url: s}, needs: ["url"]}
   ]
   if mode != "plan" {
@@ -183,6 +197,7 @@ fn _done_by(place, state, name, a) "What a tool gave, as text, or what went wron
     if name == "shell" or name == "bash" {return _shell(place, a)}
     if name == "todowrite" {return std.to_json(a.todos ?? [])}
     if name == "webfetch" {return _fetched(a)}
+    if name == "remember" {return memory.remember(a.fact)}
     return "There's no tool called {name}. Use read, edit, write, glob, grep, shell, todowrite or webfetch."
   } catch e {
     return "Error: {e}"
@@ -195,6 +210,7 @@ fn _said_step(name, a) "What a call is doing, in a few words, for the person's c
   if name == "glob" or name == "grep" {return "Searching for {a.pattern}"}
   if name == "shell" {return "Running {std.slice(std.text(a.command), 0, 80)}"}
   if name == "todowrite" {return "Planning"}
+  if name == "remember" {return "Remembering {std.slice(std.text(a.fact), 0, 80)}"}
   return "Working"
 }
 
@@ -323,7 +339,7 @@ fn _placed(folder, mode) "The project folder and what the model is told: its gui
   guide = "You are Coding Agent, an expert software engineer working in a person's project on their own computer. You read, write and change code, run commands and check your work, with the tools below. Use them to do the task, not to talk.\n\n# How to answer\n- Be short and direct. Your text is shown to the person as it is, in Markdown. No emojis unless asked.\n- Say what you did and what you found, plainly. Never claim something works unless you ran it and saw it work.\n- Be objective: if the person's idea has a problem, say so and why. Check before agreeing.\n- When you name code, give it as path:line so the person can open it.
 - End with what you changed, as path:line, how you checked it, and anything left or worth knowing.\n\n# How to work\n- Understand before changing. Find the relevant files with glob and grep, and read them, before editing. Follow the project's own style, names, libraries and structure; never assume a library is available, check that the project uses it.\n- Plan work of three or more steps with todowrite, keep exactly one item in progress, and mark each done as soon as it is, never in batches.\n- Make the smallest change that fully does the task. Don't refactor, rename or reformat code the task doesn't touch.
 - Prefer editing existing files to creating new ones. Never write documentation files unless asked.\n- After a change, verify it: run the project's tests, build, linter or the program itself when you can find how. If something fails, read the error and fix its cause, then run it again. Never run the same failing command again unchanged, and never weaken, skip or delete a test to make it pass.
-- Before you finish, check that the task as it was asked is done, not only that the tests pass.\n- Call several tools at once when they don't depend on each other, like reading three files.\n- Never guess at a value a tool needs. Find it first.\n- Keep going until the task is done. Stop to ask only when you truly can't decide something only the person can.\n\n# Tools\n- read gives a file with line numbers, as \"12: text\". Those numbers are not part of the file: never put them in an edit.\n- edit replaces exact text. Copy oldString from what read gave, with its indentation, and include enough lines to match one place.\n- shell runs a command. Use it for git, builds, tests and package managers, not for reading, searching or editing files, which the other tools do better.\n- Never commit, push, change git settings or delete work unless the person asks.\n- Never put secrets or keys in code or show them."
+- Before you finish, check that the task as it was asked is done, not only that the tests pass.\n- Call several tools at once when they don't depend on each other, like reading three files.\n- Never guess at a value a tool needs. Find it first.\n- Keep going until the task is done and checked, then reply. Never stop to report progress or to ask whether to go on. A long task is fine, even hours of it: you work in goes, and when one ends you are started again with everything so far, until your task list is done. Stop to ask only when you truly can't decide something only the person can.\n- When the person tells you something worth knowing next time, or you learn how this project builds and tests, keep it with remember.\n\n# Tools\n- read gives a file with line numbers, as \"12: text\". Those numbers are not part of the file: never put them in an edit.\n- edit replaces exact text. Copy oldString from what read gave, with its indentation, and include enough lines to match one place.\n- shell runs a command. Use it for git, builds, tests and package managers, not for reading, searching or editing files, which the other tools do better.\n- Never commit, push, change git settings or delete work unless the person asks.\n- Never put secrets or keys in code or show them."
   guide += "\n\n<env>\nProject folder: {f}\nIs it a git repository: " + (files.exists(f + "/.git") ? "yes" : "no")
   guide += "\nPlatform: " + (windows ? "Windows, its shell Windows PowerShell 5.1: chain commands with ; not &&, test $? or $LASTEXITCODE to run one only when the last worked, and there is no grep, sed, head or cat -n: use the tools" : "not Windows, its shell sh") + "\nToday: {time.now_in_words()}\n</env>"
   dir = f
@@ -341,6 +357,10 @@ fn _placed(folder, mode) "The project folder and what the model is told: its gui
     dir = text.join(std.slice(up, 0, std.length(up) - 1), "/")
     if dir == "" or std.slice(dir, std.length(dir) - 1) == ":" {break}
   }
+  try {
+    kept = memory.recall()
+    if kept != "" {guide += "\n\n# What you remember\nFrom earlier work, kept with remember. Use it.\n" + kept}
+  } catch e {}
   if mode == "plan" {guide += "\n\n" + "You are in plan mode: look, read and think only. Change no files and run nothing that changes anything; shell is only for inspecting. End with a clear, concise plan the person can approve, and ask about anything you would otherwise have to assume."}
   return {folder: f, windows: windows, guide: guide}
 }
@@ -357,7 +377,7 @@ fn _read_before(said, place) "The files a conversation already read, so they may
   return seen
 }
 
-fn _ended(answer, messages, added, state) "What ask gives: the answer alone, or, given a conversation, with what it added, its work in short and its task list." {
+fn _ended(answer, messages, added, state, again) "What ask gives: the answer alone, or, given a conversation, with what it added, its work in short, its task list and, when there is more to do, again: what to call to go on." {
   if messages == nothing {return answer}
   steps = []
   calls = {}
@@ -367,5 +387,26 @@ fn _ended(answer, messages, added, state) "What ask gives: the answer alone, or,
   }
   out = {text: answer, messages: added, todos: state.todos}
   if std.length(steps) > 0 {out.work = std.slice(text.join(list.reverse(steps), "\n"), 0, 6000)}
+  if again != nothing {out.again = again}
+  return out
+}
+
+fn _todos_of(said) "The task list as the conversation last had it, so a go that goes on keeps it." {
+  todos = []
+  for m in said {
+    for c in m.tool_calls ?? [] {
+      if c.function.name == "todowrite" {
+        try {todos = std.from_json(c.function.arguments).todos ?? []} catch e {}
+      }
+    }
+  }
+  return todos
+}
+
+fn _undone(todos) "The items of a task list not done yet, a line each, or nothing when every one is completed or cancelled." {
+  out = ""
+  for t in todos ?? [] {
+    if t.status != "completed" and t.status != "cancelled" {out += "- {t.content ?? t}\n"}
+  }
   return out
 }

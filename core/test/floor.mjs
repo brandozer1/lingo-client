@@ -381,10 +381,10 @@ const LIBRARY = fileURLToPath(new URL('../../lingo-library', import.meta.url))
 const WINDOWS_CASES = [
   ['the lingos the app ships are kept here, offered with their code, and read by the compiler whole', async () => {
     const offered = []
-    for (const name of ['ai', 'agent', 'coding', 'browser']) {
+    for (const name of ['ai', 'agent', 'coding', 'browser', 'memory']) {
       offered.push(await call('/lingo/offer', { name, code: readFileSync(`${LIBRARY}/${name}/${name}.ls`, 'utf8') }, owner))
     }
-    return offered.every((r) => r.status === 200) && offered[1].json.some((f) => f.name === 'ask')
+    return offered.every((r) => r.status === 200 && Array.isArray(r.json) && r.json.length > 0) && offered[1].json.some((f) => f.name === 'ask') && offered[4].json.some((f) => f.name === 'remember')
   }],
   ['the update lingo puts the newest release Onsay signed beside the one running, each file checked, and applies it', async () => {
     rmSync(ROOT, { recursive: true, force: true })
