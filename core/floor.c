@@ -1224,13 +1224,14 @@ static void respond(pl_conn *c, int status, const char *body, size_t n) {
    Onsay-Badge; where it came from never lets anyone in. GET / says what this is and its key, so an owner can add it to
    their record. Logged. Its status, and its body in out. */
 static int called(arena *a, const char *method, const char *where, val *headers, const char *body, size_t n,
-    const char *from, buf *out) {
+    const char *from, int own, buf *out) {
   double began = pl_now();
   const char *bad = NULL;
   const char *why = NULL;
   int status = 401;
   caller who = { NULL, 0, 0, NULL };
   who.name = from;
+  who.owner = own;
   now_run = text_or(headers, "onsay-run", NULL);
   if (rec_get(headers, "signature-input")) bad = signer(a, headers, method, where, v_text(a, body, n), &who);
   if (!bad && rec_get(headers, "onsay-badge")) who.badge = badge_of(a, text_or(headers, "onsay-badge", ""), &who.begun, &bad);
@@ -1307,7 +1308,7 @@ static void visitor(void *arg) {
     logged(a, "in", ip, "/", 0, NULL, out.s, 0, NULL, v_text(a, out.s, out.n));
   } else {
     const char *where = v_text(a, in.s + method + 1, path)->t.s;
-    status = called(a, v_text(a, in.s, method)->t.s, where, headers, in.s + from, size, ip, &out);
+    status = called(a, v_text(a, in.s, method)->t.s, where, headers, in.s + from, size, ip, 0, &out);
   }
   now_program = NULL;
   respond(v.c, status, out.s ? out.s : "", out.n);
@@ -1318,9 +1319,11 @@ static void visitor(void *arg) {
   arena_free(a);
 }
 
-/* A call that came for this computer through Onsay, {id, method, path, headers, body}, on its own thread: called like one
-   from the port, and its answer sent straight back, a line {way: answer, id, status, body}, kept with what waits to be
-   sent when that doesn't go. */
+/* A call that came for this computer through Onsay, {id, method, path, headers, body, as, at, device, signed}, on its own
+   thread: called like one from the port, and its answer sent straight back, a line {way: answer, id, status, body}, kept
+   with what waits to be sent when that doesn't go. One Onsay sent as: me, the account's own call from another of its
+   computers, signed by Onsay over {as, at, device, id, method, path, sha256}, is the owner's: Onsay vouches for who
+   asked, as it vouches for every computer of the account. Any other is through Onsay, judged by the grants. */
 static void relayed(void *arg) {
   char *text = arg;
   arena *a = arena_new();
@@ -1338,10 +1341,20 @@ static void relayed(void *arg) {
     val *v = given->r.v[i];
     if (v->k == V_TEXT) header_add(a, headers, given->r.key[i], strlen(given->r.key[i]), v->t.s, v->t.len);
   }
+  unsigned char sum[32];
+  buf digest = { 0 };
+  sha256(body, strlen(body), sum);
+  base64(&digest, sum, 32);
+  val *vouched = v_rec(a);
+  const char *fields[] = { "as", "at", "device", "id", "method", "path" };
+  for (size_t i = 0; i < sizeof fields / sizeof *fields; i++) rec_set(a, vouched, fields[i], rec_get(call, fields[i]) ? rec_get(call, fields[i]) : NOTHING);
+  rec_set(a, vouched, "sha256", v_text(a, digest.s ? digest.s : "", digest.n));
+  buf_free(&digest);
+  int own = !strcmp(text_or(call, "as", ""), "me") && signed_by(vouched, rec_get(call, "signed"), NULL);
   if (base64ed && truthy(base64ed))
     buf_str(&out, "{\"error\":\"Its body isn't text: lingo script, or JSON\"}");
   else
-    status = called(a, text_or(call, "method", "POST"), text_or(call, "path", "/"), headers, body, strlen(body), "through Onsay", &out);
+    status = called(a, text_or(call, "method", "POST"), text_or(call, "path", "/"), headers, body, strlen(body), own ? "me" : "through Onsay", own, &out);
   rec_set(a, line, "way", v_cstr(a, "answer"));
   rec_set(a, line, "id", rec_get(call, "id") ? rec_get(call, "id") : NOTHING);
   rec_set(a, line, "status", v_num(a, status));

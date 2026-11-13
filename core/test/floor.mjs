@@ -152,10 +152,16 @@ const lines = () => readFileSync(`${HOME}/requests.log`, 'utf8').trim().split('\
 const posted = () => logs.flatMap((x) => x.text.split('\n')).filter(Boolean).map((l) => JSON.parse(l))
 // A call sent through Onsay, as the stand-in hands it over, and its answer once the floor posts it.
 let relays = 0
-const relayed = async (path, body, key) => {
+// vouch: Onsay's word that it is the account's own call, as: me, signed by the stand-in Onsay, or by key to forge it.
+const relayed = async (path, body, key, vouch) => {
   const id = `req_${++relays}`
   const headers = { host: `127.0.0.1:${FLOOR}`, ...(key ? signed(key, publicOf(key), 'POST', URL_ + path, body) : {}) }
-  relay.push({ id, method: 'POST', path, headers, body })
+  const call = { id, method: 'POST', path, headers, body }
+  if (vouch) {
+    const said = { as: 'me', at: new Date().toISOString(), device: 'laptop', id, method: 'POST', path, sha256: crypto.createHash('sha256').update(body).digest('base64') }
+    Object.assign(call, said, { signed: `onsay:${crypto.sign(null, Buffer.from(canonical(said)), vouch).toString('base64')}` })
+  }
+  relay.push(call)
   for (let i = 0; i < 40; i++) {
     const answer = posted().find((l) => l.way === 'answer' && l.id === id)
     if (answer) return answer
@@ -409,6 +415,12 @@ const CASES = [
     const theirs = await relayed('/', 'return echo.hi()')
     const l = lines()
     return mine?.status === 200 && mine.body === '42' && theirs?.status === 403 && l.some((x) => x.caller === 'through Onsay' && !x.allowed)
+  }],
+  ["a call Onsay vouches is the account's own, from another of its computers, is the owner's, and a forged one isn't", async () => {
+    policy([])
+    const vouched = await relayed('/', 'return echo.hi()', null, ONSAY)
+    const forged = await relayed('/', 'return echo.hi()', null, STRANGER)
+    return vouched?.status === 200 && forged?.status === 403
   }],
 ]
 
