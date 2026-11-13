@@ -120,6 +120,7 @@ const stand = http.createServer((req, res) => {
           { address: `${here}/weather`, inputs: { city: q.values.city } },
         ] })
       }
+      if (q.ask === 'return 2 +') return json(200, { value: [{ address: `${here}/broken`, inputs: {} }] })
       if (q.ask === 'whats the weather in rome') return json(200, { value: [{ address: `${here}/weather`, inputs: { city: 'Rome' } }] })
       if (q.ask === '/forecast/today') return json(200, { value: [{ address: `${here}/weather`, inputs: { city: q.values.city } }] })
       if (q.ask === 'the weather where I am') return json(200, { value: [{ address: `${here}/weather`, inputs: { city: q.values.messages?.[0]?.content } }] })
@@ -356,6 +357,16 @@ const CASES = [
     await call('/', 'return 1')
     for (let i = 0; i < 30 && logs.length === had; i++) await pause(100)
     return logs.length > had && logs.at(-1).when - asked < 1900
+  }],
+  ["code with a mistake whose ways the search found all fail says the compile error too, not the last way's", async () => {
+    const r = await call('/', 'return lingo("return 2 +", {mine: 1})', owner)
+    const sent = asks.findLast((q) => q.ask === 'return 2 +').values
+    return r.status >= 400 && r.json.code === 'compile' && /it broke over there/.test(r.json.error) && r.json.error.includes(sent.error) && /Expected a value/.test(sent.error) && sent.mine === 1
+  }],
+  ['a lingo kept here that searches tells the search it is the one asking, so it is never handed back to itself', async () => {
+    await call('/lingo/offer', { name: 'asker', code: 'fn go() {return lingo("whats the weather in rome", {})}' }, owner)
+    const r = await call('/asker/go', [], owner)
+    return r.json === 'sunny in Rome' && asks.at(-1).asking === 'asker.go'
   }],
   ['a lingo offered with its code and no address runs right here, and one kept lingo uses another', async () => {
     const tally = await call('/lingo/offer', { name: 'tally', code: '"Counts."\nfn twice(x: number "a number") -> number "It doubled." {return x * 2}' }, owner)

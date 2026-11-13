@@ -83,6 +83,7 @@ fn ask(prompt, messages=nothing, model=nothing) "The AI agent answers what the p
         left = _left(plan)
         got = left == "" ? "Plan kept: every step is done" : "Plan kept. Not done yet:\n{left}"
       } else {
+        me.messages = said
         got = _used(me, c.function.name, args)
       }
       if got.picture != nothing {
@@ -249,6 +250,7 @@ fn _guide(me) "What the agent's model is told it is, how it works and what this 
     "- Look before you act and check after, inside the script: read a file before changing it and read it back, open a page then read it, click then read again. A quick check is cheap, a wrong answer isn't.",
     "- When a script fails, read the error and its line, fix the cause and send it again. Never send the same failing script twice. After two tries that fail the same way, try another way.",
     "- For a web page, use the browser lingo: browser.open(url), browser.read() for its words, links and fields, browser.find(selector) for how it is built, each element's tag, words, attributes and place, like browser.find(\".board .piece\") for the pieces of a board, browser.run(js) for any JavaScript, return allowed, browser.click(words) and browser.type(text, into). Read the page's structure with find or run before guessing; never work a web page through screenshots.",
+    "- In Lingo text, \{name\} puts a value in, so a brace meant as itself, as JavaScript, CSS and JSON have, is written \\\{, the closing one as it is: browser.run(\"const t = document.querySelector('h1'); if (t) \\\{ t.click(); return 'clicked' }\"). A list grows with list += [x]; there is no .push, and no ?., so give a default with ??.",
     "- Onsay's own calls, like input for the mouse and keyboard, window for windows, look for the screen, files and commands, are there for everything else on this computer. commands.run(command) runs a shell command, PowerShell on Windows; use it only for what no listed call does.",
     "- Work that repeats, or a long task with a loop in it, like playing every move of a game, belongs in a lingo: a .ls file of functions, saved with lingo.offer(name, code) in a script, then called by name, like chess_site.read_board(). lingo.code(name) gives a lingo's code to read or change. A lingo made once makes the next time fast. Keep each lingo to one thing and each function to one operation, named with a verb, taking values by name and giving back data. Never change ai or agent, and never call agent.",
     "",
@@ -265,7 +267,7 @@ fn _guide(me) "What the agent's model is told it is, how it works and what this 
     "- A long job is fine, even hours of it. You work in goes of about 7 minutes, and when one ends Onsay starts the next by itself, with everything so far, until your plan is done.",
     "- Stop early only when something truly blocks you that you can't get around, like a password only they know: then say plainly what stopped you and what they can do.",
     "- When they say you missed something, find what they asked before, see what you left out, and do it now.",
-    "- Whether the person watches your mouse and keyboard work is theirs to choose, with Show your work in their chat. Never change it yourself.",
+    "- Whether the person watches your mouse and keyboard work is theirs to choose, with Use desktop in their chat. Never change it yourself.",
     "",
     "# Asking the person",
     "Only when you truly need something only they can tell you, call questions with one or two short questions, with choices whenever there are likely answers. Skipped means go on without it. Never ask questions in your reply.",
@@ -378,7 +380,10 @@ fn _used(me, name, a) "What a tool the model asked for gave, as text, or what we
     if name == "lingo" {
       said = std.text(a.text)
       if "agent.ask" in said or "agent/ask" in said {return "That is this agent, which would only ask itself again: do the work in the script instead"}
-      got = lingo(said, a.values ?? {})
+      // Whatever doesn't compile goes to the lingo search with the whole conversation, so it knows what it is for.
+      values = a.values ?? {}
+      if values.messages == nothing {values.messages = me.messages}
+      got = lingo(said, values)
       return _cut(got == nothing ? "It gave nothing back" : std.to_json(got))
     }
     if name == "say" {

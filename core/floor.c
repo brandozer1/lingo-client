@@ -509,6 +509,8 @@ static _Thread_local caller now;       // who the call running on this thread is
 static _Thread_local val *now_policy;  // and the policy it is judged by
 static _Thread_local const char *now_run;   // the Onsay-Run it came with, passed on with every call it makes, so whoever
                                             // started it, like the app, knows which of its runs a call is part of
+static _Thread_local const char *now_asking;   // the function this thread runs for, like agent.ask, which the lingo
+                                               // search its script asks is told, so it is never handed back to it here
 
 // 4. Each call of the computer's a script makes but pure computing, a request to its address, like /files/read, judged
 //    by the policy for whoever sent the script. At the command line, the owner's.
@@ -589,11 +591,14 @@ static val *used(run *r, const char *address, val *values) {
     if (!phrase_find(own)) may(r, arena_fmt(r->a, "%.*s", (int)strcspn(id, "("), id));   // an own call judges itself
     caller who = now;
     val *policy_was = now_policy;
+    const char *asking_was = now_asking;
     const char *code = NULL;
     const char *message = NULL;
+    now_asking = arena_fmt(r->a, "%.*s", (int)strcspn(id, "("), id);
     val *got = run_script(r->a, script, in, &who, &code, &message);
     now = who;
     now_policy = policy_was;
+    now_asking = asking_was;
     if (!got) fail(r, code, "%s", message ? message : "it failed");
     return got;
   }
@@ -607,9 +612,11 @@ static val *used(run *r, const char *address, val *values) {
    run right here, as whoever runs this, and its value given back, or its failure as it is. Anything else, like words, is
    asked of the lingo search, built in: Onsay's index gives the ways that answer it, best first, nothing run there, and
    each is called from here until one answers, at most WAYS_MOST. A way that needs an input nobody gave is passed over.
-   Its answer, or the last way's failure. When it was neither Lingo nor anything the search found, it fails with the
-   compile error and what the search said, so code with a mistake can be fixed. Each way tried is a line of the log, so
-   Onsay learns which work. */
+   Its answer, or the last way's failure. Text that didn't compile goes to the search whole, with every value it came
+   with and the compile error among them as error, what the compiler worked out, so whatever can do something with it,
+   like an agent that fixes code, is found; the search decides nothing from it. When the search found nothing, or each
+   way it tried failed too, it fails with the compile error and what the search said, so code with a mistake can be
+   fixed. Each way tried is a line of the log, so Onsay learns which work. */
 #define WAYS_MOST 3
 static _Thread_local int ways_tried;   // ways the last lingo(...) on this thread called, for a request the search was given
 static _Thread_local const char *way_found;   // the way that answered it, {address, inputs} as JSON, kept as ready code
@@ -638,11 +645,17 @@ static val *lingo_run(run *r, val **a) {
   if (setjmp(t.j)) {
     r->trap = prev;
     r->depth = depth;
-    if (!wrong || ways_tried || !strcmp(r->code, "limit") || !strcmp(r->code, "stopped")) rethrow(r);
+    if (!wrong || !strcmp(r->code, "limit") || !strcmp(r->code, "stopped")) rethrow(r);
     const char *said = arena_fmt(r->a, "%.*s", (int)r->message.n, r->message.s ? r->message.s : "");
     fail(r, "compile", "%s. Read as words instead, the lingo search said: %s", wrong, said);
   }
-  val *out = searched_ways(r, a);
+  val *given = a[1];
+  if (wrong && given->k == V_REC && !rec_get(given, "error")) {
+    given = v_rec(r->a);
+    for (size_t i = 0; i < a[1]->r.n; i++) rec_set(r->a, given, a[1]->r.key[i], a[1]->r.v[i]);
+    rec_set(r->a, given, "error", v_cstr(r->a, wrong));
+  }
+  val *out = searched_ways(r, (val *[]){ a[0], given, a[2] });
   r->trap = prev;
   return out;
 }
@@ -654,6 +667,7 @@ static val *searched_ways(run *r, val **a) {
   rec_set(r->a, q, "values", a[1]);
   rec_set(r->a, q, "gives", a[2]);
   rec_set(r->a, q, "mode", v_cstr(r->a, "list"));
+  if (now_asking) rec_set(r->a, q, "asking", v_cstr(r->a, now_asking));
   ways_tried = 0;
   way_found = NULL;
   val *ways = asked(r, q);
@@ -692,6 +706,7 @@ static val *lingo_ways(run *r, val **a) {
   rec_set(r->a, q, "ask", a[0]);
   rec_set(r->a, q, "values", a[1]);
   rec_set(r->a, q, "mode", v_cstr(r->a, "list"));
+  if (now_asking) rec_set(r->a, q, "asking", v_cstr(r->a, now_asking));
   return asked(r, q);
 }
 
@@ -1124,7 +1139,10 @@ static int answer(arena *a, const char *path, const char *body, size_t n, const 
 
   // 1. A path to something open here.
   if (!root && script) {
+    const char *id = script + strlen("return ");
+    now_asking = arena_fmt(a, "%.*s", (int)strcspn(id, "("), id);
     got = run_script(a, script, values, who, &code, &message);
+    now_asking = NULL;
     if (got || strcmp(code, "compile")) goto said;
   }
   // 1. A way found for this same request before, its inputs given anew where this request gives them.
