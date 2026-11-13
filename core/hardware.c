@@ -453,6 +453,31 @@ int pl_unseal(const char *path, buf *out) {
 
 void pl_random(void *to, size_t n) { BCryptGenRandom(NULL, to, (ULONG)n, BCRYPT_USE_SYSTEM_PREFERRED_RNG); }
 
+// Windows' real version is RtlGetVersion's, since GetVersionEx says 6.2 to a program not marked for newer. The chip is
+// the computer's own, not the one a 32-bit build pretends to run on.
+void pl_facts(buf *out) {
+  typedef LONG(WINAPI * version_fn)(PRTL_OSVERSIONINFOW);
+  version_fn version = (version_fn)(void *)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlGetVersion");
+  RTL_OSVERSIONINFOW v = { 0 };
+  SYSTEM_INFO s;
+  MEMORYSTATUSEX m = { 0 };
+  const char *arch = NULL;
+  v.dwOSVersionInfoSize = sizeof v;
+  m.dwLength = sizeof m;
+  GetNativeSystemInfo(&s);
+  if (s.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_AMD64) arch = "x64";
+  if (s.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_INTEL) arch = "x86";
+  if (s.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_ARM64) arch = "arm64";
+  if (s.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_ARM) arch = "arm";
+  buf_str(out, "{\"os\":\"windows");
+  if (version && version(&v) == 0) buf_fmt(out, " %lu.%lu.%lu", v.dwMajorVersion, v.dwMinorVersion, v.dwBuildNumber);
+  buf_chr(out, '"');
+  if (arch) buf_fmt(out, ",\"arch\":\"%s\"", arch);
+  buf_fmt(out, ",\"cores\":%lu", (unsigned long)GetActiveProcessorCount(ALL_PROCESSOR_GROUPS));
+  if (GlobalMemoryStatusEx(&m)) buf_fmt(out, ",\"memory\":%llu", (unsigned long long)m.ullTotalPhys);
+  buf_chr(out, '}');
+}
+
 // One text field of the context, left out when empty.
 static void context_field(buf *out, const char *name, const wchar_t *w) {
   if (!w[0]) return;
@@ -849,6 +874,7 @@ int pl_program(pl_conn *c, buf *out) {
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <sys/utsname.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -1343,6 +1369,33 @@ void pl_random(void *to, size_t n) {
     ssize_t k = getrandom((char *)to + got, n - got, 0);
     if (k > 0) got += (size_t)k;
   }
+}
+
+// The version is the kernel's, like linux 6.1.0-18-amd64, and the chip uname's, by the names Windows' are.
+void pl_facts(buf *out) {
+  struct utsname u;
+  char os[160] = "linux";
+  long cores = sysconf(_SC_NPROCESSORS_ONLN);
+  long pages = sysconf(_SC_PHYS_PAGES);
+  long size = sysconf(_SC_PAGESIZE);
+  int known = uname(&u) == 0;
+#ifdef __ANDROID__
+  snprintf(os, sizeof os, "android");
+#endif
+  if (known) snprintf(os + strlen(os), sizeof os - strlen(os), " %s", u.release);
+  buf_str(out, "{\"os\":");
+  buf_json_str(out, os, strlen(os));
+  if (known) {
+    const char *arch = u.machine;
+    if (!strcmp(arch, "x86_64") || !strcmp(arch, "amd64")) arch = "x64";
+    if (strlen(arch) == 4 && arch[0] == 'i' && !strcmp(arch + 2, "86")) arch = "x86";
+    if (!strcmp(arch, "aarch64")) arch = "arm64";
+    buf_str(out, ",\"arch\":");
+    buf_json_str(out, arch, strlen(arch));
+  }
+  if (cores > 0) buf_fmt(out, ",\"cores\":%ld", cores);
+  if (pages > 0 && size > 0) buf_fmt(out, ",\"memory\":%llu", (unsigned long long)pages * (unsigned long long)size);
+  buf_chr(out, '}');
 }
 
 void pl_whole(const char *path, buf *out) {

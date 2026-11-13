@@ -359,6 +359,10 @@ void pl_context(buf *out);
 
 void pl_random(void *to, size_t n);   // bytes no one can guess, for keys
 
+// What this computer is, so Onsay can find ones like it, as one JSON record of each it can tell: "os" its name and
+// version, like windows 10.0.26200, "arch" like x64, x86 or arm64, "cores" logical, and "memory" physical, in bytes.
+void pl_facts(buf *out);
+
 // A function of the system or of a library by name, the library loaded and kept, or this program's own when library is
 // "". NULL when it isn't there. What native.call reaches.
 void *pl_symbol(const char *library, const char *function);

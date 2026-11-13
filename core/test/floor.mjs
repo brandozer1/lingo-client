@@ -173,10 +173,10 @@ const CASES = [
     const offer = (key) => call('/lingo/offer', { name: 'echo', code: ECHO, address: `http://127.0.0.1:${ONSAY_PORT}/echo` }, key)
     const [theirs, mine] = [await offer(undefined), await offer(owner)]
     const table = JSON.parse(readFileSync(`${HOME}/offered.json`, 'utf8'))
+    const fn = (name) => table.echo.functions.find((f) => f.name === name)
     return theirs.status === 403 && mine.status === 200 && same(mine.json, [{ name: 'hello', does: 'Says it back.' }, { name: 'again', does: 'Says one back.' }, { name: 'hi', does: '' }]) &&
-      table.echo.address === `http://127.0.0.1:${ONSAY_PORT}/echo` && table.echo.openapi.paths['/echo/hello'].post.summary === 'Says it back.' &&
-      table.echo.openapi.paths['/echo/again'].post.requestBody.content['application/json'].schema.properties.x.type === 'string' &&
-      table.echo.openapi.paths['/echo/_quiet'].post['x-lingo-internal'] === true
+      table.echo.address === `http://127.0.0.1:${ONSAY_PORT}/echo` && table.echo.code === ECHO && fn('hello').does === 'Says it back.' &&
+      fn('again').inputs.properties.x.type === 'string' && fn('_quiet').internal === true && fn('hello').internal === false
   }],
   ['a script is run, pure computing open to anyone, its value as JSON', async () => {
     const r = await call('/', 'x = [1, 2, 3]\nreturn {sum: x[0] + x[1] + x[2], words: text.split("a b", " ")}')
@@ -328,10 +328,28 @@ const CASES = [
     const all = logs.map((x) => x.text).join('')
     return logs.length > 0 && logs.every((x) => x.ok) && /"way":"in"/.test(all) && /"way":"call"/.test(all)
   }],
-  ['what is offered reaches Onsay as its OpenAPI, never where it answers', async () => {
-    const lines = posted().filter((l) => l.way === 'offered')
-    const last = lines.at(-1)
-    return !!last && last.lingos[0].name === 'echo' && !!last.lingos[0].openapi.paths['/echo/hello'] && !JSON.stringify(last).includes('127.0.0.1')
+  ['what is offered reaches Onsay as its code and the compiler\'s listing, with this computer\'s own calls, never where it answers', async () => {
+    const last = posted().filter((l) => l.way === 'offered').at(-1)
+    const echo = last?.lingos.find((l) => l.name === 'echo')
+    const own = last?.lingos.find((l) => l.name === 'onsay')
+    return !!echo && echo.code === ECHO && echo.functions.some((f) => f.name === 'hello' && f.does === 'Says it back.' && f.inputs.type === 'object') &&
+      own?.code === '' && own.functions.every((f) => !/^(std|lingo)\./.test(f.name)) && !JSON.stringify(last).includes('127.0.0.1')
+  }],
+  ['every post starts with the format it is in and what this computer is, and each request carries its input, output and run', async () => {
+    await call('/', 'return 6 * 7', { run: 'run_format' })
+    for (let i = 0; i < 30 && !posted().some((l) => l.run === 'run_format' && l.way === 'in'); i++) await pause(100)
+    const heads = logs.map((x) => JSON.parse(x.text.split('\n')[0]))
+    const line = posted().find((l) => l.run === 'run_format' && l.way === 'in')
+    return heads.every((h) => h.way === 'format' && h.format === '0.2.0' && /^(windows|linux)/.test(h.facts.os) && h.facts.cores > 0 && h.facts.memory > 0) &&
+      line?.input === 'return 6 * 7' && line.output === '42'
+  }],
+  ['a change to what is offered reaches Onsay at once, not at the next post', async () => {
+    const count = () => posted().filter((l) => l.way === 'offered').length
+    const had = count(), asked = Date.now()
+    await call('/lingo/offer', { name: 'quick', code: 'fn now() {return 1}' }, owner)
+    for (let i = 0; i < 30 && count() === had; i++) await pause(50)
+    const last = posted().filter((l) => l.way === 'offered').at(-1)
+    return Date.now() - asked < 1000 && last.lingos.some((l) => l.name === 'quick')
   }],
   ['it sends again when Onsay\'s answer says, sooner than its own wait', async () => {
     const had = logs.length, asked = Date.now()
