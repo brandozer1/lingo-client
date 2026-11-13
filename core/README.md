@@ -31,7 +31,8 @@ the compiler can run; else the request as it came goes to the lingo search. `lin
 index (`POST /search/ask`, in list mode) for the ways that answer it, best first, and calls each from here until one
 answers, at most three, passing over a way that needs an input nobody gave. The way that answered is kept as ready code,
 in memory, by the request as it came, when every value given goes into it by its own name; it is dropped when it fails,
-after a day, and all of them when what is offered changes. Nothing found, or a caller who may not search, it is what it
+after a day, and all of them when what is offered changes. When the search looked and found nothing, its words for the
+person are the answer, code `nothing`, a 404. A caller who may not search, or a search that gave no ways, gets what it
 was: the compile error, or nothing at that path. `use(...)` of a name nothing here answers goes through Onsay.
 
 Its settings (`floor.json`): `home`, `port`, `name`, `owner` (a key or a handle), `keys` (signers known by key),

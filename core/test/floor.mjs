@@ -112,6 +112,7 @@ const stand = http.createServer((req, res) => {
       if (q.address === 'weather.tester/now') return json(200, { value: 'raining' })
       if (q.mode !== 'list') return json(200, { error: 'the floor asks for ways', code: 'type' })
       if (q.ask.includes('refused')) return json(401, { error: 'Sign in to continue' })
+      if (q.ask === 'hello there') return json(404, { error: 'Your computers are all off right now. Open Onsay on one and ask again.', code: 'nothing' })
       if (q.ask === 'the weather in a city') {
         return json(200, { value: [
           { address: `${here}/weather`, inputs: {}, needs: ['city'] },
@@ -257,6 +258,10 @@ const CASES = [
   ['what doesn\'t compile and finds nothing is the compile error it was', async () => {
     const r = await call('/', 'return 1 +', owner)
     return r.status >= 400 && r.json.code === 'compile'
+  }],
+  ["words the search can't place come back as what it said, for the person", async () => {
+    const r = await call('/', 'hello there', owner)
+    return r.status === 404 && r.json.code === 'nothing' && r.json.error === 'Your computers are all off right now. Open Onsay on one and ask again.'
   }],
   ['and so is one the search refuses, like a computer not signed in', async () => {
     const r = await call('/', 'refused = 1 +', owner)

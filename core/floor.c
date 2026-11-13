@@ -582,6 +582,7 @@ static val *sent(run *r, const char *url, val *values, int asked) {
   buf_free(&body);
   buf_free(&error);
   if (why && !got) fail(r, "phrase", "%s", why);
+  if (why && asked) fail(r, text_or(answer, "code", "phrase"), "%s", why);   // the search's own words, for the person
   if (why) fail(r, text_or(answer, "code", "phrase"), "%s: %s", url, why);
   if (asked) return rec_get(answer, "value") ? rec_get(answer, "value") : NOTHING;
   return answer ? answer : v_cstr(a, text);
@@ -810,6 +811,12 @@ static val *posted(arena *a, const char *lines, size_t n, int hold) {
     const char *text = text_or(got, "text", "");
     said = json_parse(a, text, strlen(text), NULL);
     if (!said || said->k != V_REC) said = v_rec(a);
+  } else {
+    // A post that didn't go is a line of the log, so why this computer looks offline to Onsay can be read here.
+    const char *answered = got ? text_or(got, "text", "") : "";
+    const char *why = !got ? (error.s ? error.s : "it couldn't be reached")
+        : arena_fmt(a, "it answered %g: %.200s", status ? status->n : 0, answered);
+    logged(a, "out", set.name, ONSAY "/logs", 0, NULL, why, 0);
   }
   crypto_wipe(eph, 32);
   crypto_wipe(shared, 32);
@@ -1023,7 +1030,7 @@ static const char *called_as(arena *a, const char *path, val *given, val *values
      3. anything else, or anything that failed to compile on the way, goes to the lingo search as it came, which tries
         the next best way when one fails, and the way that answered is kept as ready code
    Each is judged as the caller's, the search too, so a caller who may not search gets what it was: the compile error,
-   or nothing at that path. Its status and body, JSON. */
+   or nothing at that path. When the search finds nothing, its words say so, for the person. Its status and body, JSON. */
 #define SEARCHED "return lingo.run(a0, a1)"
 static int answer(arena *a, const char *path, const char *body, size_t n, const caller *who, buf *out) {
   const char *code = "unknown";
@@ -1081,7 +1088,7 @@ static int answer(arena *a, const char *path, const char *body, size_t n, const 
     got = run_script(a, script, values, who, &code, &message);
     if (got || strcmp(code, "compile")) goto said;
   }
-  // 3. The lingo search, given the request as it came. Nothing found, or a caller who may not search, is what it was.
+  // 3. The lingo search, given the request as it came.
   {
     const char *was = message;
     const char *was_code = code;
@@ -1097,7 +1104,9 @@ static int answer(arena *a, const char *path, const char *body, size_t n, const 
     int same = found && found->k == V_REC;
     for (size_t i = 0; same && i < given->r.n; i++) same = rec_get(found, given->r.key[i]) != NULL;
     if (same) ready_keep(text, way_found);
-    if (!got && !ways_tried) {
+    // What it was stands, unless the search tried a way or looked and said in words why nothing does it.
+    int searched = ways_tried || !strcmp(code, "nothing");
+    if (!got && !searched) {
       code = was_code;
       message = was ? was : arena_fmt(a, "There's nothing at %s", path);
     }
@@ -1114,7 +1123,7 @@ said:
   buf_json_str(out, code, strlen(code));
   buf_chr(out, '}');
   if (!strcmp(code, "denied")) return 403;
-  if (!strcmp(code, "unknown")) return 404;
+  if (!strcmp(code, "unknown") || !strcmp(code, "nothing")) return 404;
   return !strcmp(code, "compile") ? 400 : 500;
 }
 

@@ -3310,7 +3310,7 @@ val *run_program(arena *a, val *program, val *input, limits l, const char **code
   } else {
     const char *line = text_or(rec_get(program, "lines"), r->at_error.s ? r->at_error.s : "", NULL);
     buf m = { 0 };
-    if (line) buf_fmt(&m, "%s: ", line);
+    if (line && strcmp(r->code, "nothing")) buf_fmt(&m, "%s: ", line);   // the search's words for the person carry no place
     buf_add(&m, r->message.s ? r->message.s : "", r->message.n);
     *code = v_cstr(a, r->code)->t.s;
     *message = v_text(a, m.s, m.n)->t.s;
