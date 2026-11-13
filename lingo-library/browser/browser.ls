@@ -1,4 +1,4 @@
-"A web browser for lingos and agents: opens pages, reads them, clicks, types, runs scripts and takes screenshots, in LibreWolf, a fully open source Firefox with no telemetry, always out of sight, its tabs drawn on Onsay's screens."
+"A web browser for lingos and agents: opens pages, reads them, clicks, types, runs scripts and takes screenshots, in LibreWolf, a fully open source Firefox with no telemetry, its window shown while the person watches the work, else out of sight with its tabs drawn on Onsay's screens."
 // 1. open(url, tab=nothing)               -> {tab, title, url}: a page opened, in the open tab, the tab given, or a new
 //                                            one for "new"
 // 2. read(tab=nothing)                    -> {title, url, text, links, fields}: what the page shows, its links and its
@@ -13,6 +13,8 @@
 // 9. render(html, tab=nothing)            -> {tab, title}: a page of HTML and CSS of the lingo's own laid out, in the
 //                                            open tab, the tab given, or a new one for "new"
 // 10. find(selector, tab=nothing)         -> [{tag, text, attributes, box}]: the page's elements matching a CSS selector
+// 11. shown(on)                           -> nothing: what Onsay calls the moment the person turns Show your work on or
+//                                            off, so the browser switches then and there
 // tab is a tab's number, from 1 in the browser's order, as open and tabs give it, and the open one, the last one used,
 // when left out.
 //
@@ -22,10 +24,12 @@
 // into Firefox, through the lingo client's socket calls: each call starts it when it isn't running, opens a socket to it,
 // begins a session, does its work and ends the session, so later calls find the same browser and its tabs. Out of
 // sight, as each call ends, every tab shows on a screen of its own, Browser tab 1 and on, beside the to-do it works for,
-// so the person can watch: the picture LibreWolf itself drew of what is in view, exactly as a browser shows it. It always
-// runs headless; where its screens show, in Onsay's chat or a window of their own, the app sets by Show your work, so
-// toggling it changes only how the tabs are shown, never the tabs. Its setting: folder, where it keeps LibreWolf, else
-// lingo-browser in AppData\Local on Windows and ~/.local/share on Linux. A download that stops partway carries on from there next time.
+// so the person can watch: the picture LibreWolf itself drew of what is in view, exactly as a browser shows it. While the
+// person watches the to-do it works for, Show your work, which the app's chat lingo answers (chat.showing), or its show
+// setting is on, it runs as the real LibreWolf window instead, and its screens are closed. Switching starts it again the
+// other way, each tab opened again at its address, so its pages and sign ins carry on; the app calls shown(on) the moment
+// the person toggles, so it switches then, not on its next call. Its settings: show, on to always see its window, and
+// folder, where it keeps LibreWolf, else lingo-browser in AppData\Local on Windows and ~/.local/share on Linux. A download that stops partway carries on from there next time.
 
 ////////// 1. THE BROWSER //////////
 
@@ -302,11 +306,17 @@ fn _installed() "Where LibreWolf is on this computer, \{version, windows, folder
   return p
 }
 
-fn _begin() "A socket to the running browser with a session begun on it, as \{socket, place}, LibreWolf fetched and started first, headless, when it isn't running. One an older version started with its window shown is started again headless." {
+fn _begin(hidden=nothing) "A socket to the running browser with a session begun on it, as \{socket, place}, LibreWolf fetched and started first when it isn't running, and started again when it runs out of sight and should be seen, or the other way round, each tab it had opened again at its address. hidden, given, is how it should run, else _hidden says." {
   p = _installed()
+  hidden = hidden ?? _hidden()
+  was = _kept("hidden")
   s = _reached(p)
-  if s != nothing and _kept("hidden") != false {return {socket: s, place: p}}
+  if s != nothing and (was == nothing or was == hidden) {return {socket: s, place: p}}
+  pages = []
   if s != nothing {
+    try {
+      for c in _asked(s, "browsingContext.getTree", {maxDepth: 0}).contexts {pages += [c.url]}
+    } catch e {}
     try {_asked(s, "session.end")} catch e {}
     socket.close(s)
     pid = std.number(_kept("pid") ?? "")
@@ -315,8 +325,9 @@ fn _begin() "A socket to the running browser with a session begun on it, as \{so
     }
     compute.wait(1)
   }
-  flags = "--headless --no-remote --remote-debugging-port 0 --profile " + (p.windows ? "\"" + p.profile + "\"" : _quoted(p.profile, false))
-  _keep("hidden", true)
+  flags = "--no-remote --remote-debugging-port 0 --profile " + (p.windows ? "\"" + p.profile + "\"" : _quoted(p.profile, false))
+  if hidden {flags = "--headless " + flags}
+  _keep("hidden", hidden)
   ready = p.profile + "/WebDriverBiDiServer.json"
   if p.windows {
     done = commands.run("Remove-Item -LiteralPath " + _quoted(ready, true) + " -ErrorAction SilentlyContinue\n[Console]::Out.Write((Start-Process -FilePath " + _quoted(p.exe, true) + " -ArgumentList " + _quoted(flags, true) + " -PassThru).Id)")
@@ -328,9 +339,37 @@ fn _begin() "A socket to the running browser with a session begun on it, as \{so
   for turn in 1..60 {
     compute.wait(0.5)
     s = _reached(p)
-    if s != nothing {return {socket: s, place: p}}
+    if s != nothing {
+      b = {socket: s, place: p}
+      _reopened(b, pages)
+      return b
+    }
   }
   fail "LibreWolf didn't start in 30 seconds. Try again, or delete {p.folder} so it's fetched again"
+}
+
+fn _reopened(b, pages) "The tabs it had before it was started again, each opened again at its address, in order, the first in the tab it starts with." {
+  if std.length(pages) == 0 {return nothing}
+  try {
+    first = _asked(b.socket, "browsingContext.getTree", {maxDepth: 0}).contexts[0].context
+    for i, url in pages {
+      if url != "about:blank" {
+        at = i == 0 ? first : _asked(b.socket, "browsingContext.create", {type: "tab"}).context
+        _asked(b.socket, "browsingContext.navigate", {context: at, url: url, wait: "complete"})
+      }
+    }
+  } catch e {}
+  return nothing
+}
+
+fn _hidden(on=nothing) "Whether it works out of sight: unless the person is watching the to-do it works for, on when given, else as chat.showing says, or its show setting is on." {
+  watched = on
+  if watched == nothing {
+    watched = false
+    try {watched = chat.showing() == true} catch e {}
+  }
+  always = setting("show")
+  return not (watched == true or always == true or text.lower(std.text(always ?? "")) in ["true", "on", "yes", "1"])
 }
 
 fn _reached(p) "A socket to the browser with a session begun, or nothing when it isn't running. One with a session left from a call that was stopped can't begin another, so it is ended, to be started again." {
@@ -357,12 +396,28 @@ fn _reached(p) "A socket to the browser with a session begun, or nothing when it
   return s
 }
 
-fn _finish(b) "Every tab shown on a screen of its own, Browser tab 1 and on, as the picture LibreWolf itself drew of it, a JPEG of what is in view, then the session ended, so the next call can begin one, and the socket closed. A computer without screens shows nothing." {
+////////// 11. SHOW YOUR WORK //////////
+
+fn shown(on: bool "whether the person watches the work now") "Onsay calls this the moment the person turns Show your work on or off: on, the browser comes up as its real window and its screens in Onsay close; off, it goes out of sight and each tab is drawn on a screen in Onsay. Its tabs stay at their pages. Nothing happens when it isn't running." {
+  p = _kept("place")
+  if p == nothing or _reached(p) == nothing {return nothing}
+  b = _begin(_hidden(on))
+  _finish(b)
+  return nothing
+}
+
+fn _finish(b) "Out of sight, every tab shown on a screen of its own in Onsay, Browser tab 1 and on, as the picture LibreWolf itself drew of it, a JPEG of what is in view; with its window shown, those screens closed. Then the session ended, so the next call can begin one, and the socket closed. A computer without screens shows nothing." {
   try {
     tabs = _asked(b.socket, "browsingContext.getTree", {maxDepth: 0}).contexts
+    hidden = _kept("hidden") != false
     for n in 1..std.length(tabs) {
-      shot = {context: tabs[n - 1].context, format: {type: "image/jpeg", quality: 0.8}}
-      screen.show(screen.open("Browser tab {n}"), _asked(b.socket, "browsingContext.captureScreenshot", shot).data)
+      at = screen.open("Browser tab {n}")
+      if hidden {
+        shot = {context: tabs[n - 1].context, format: {type: "image/jpeg", quality: 0.8}}
+        screen.show(at, _asked(b.socket, "browsingContext.captureScreenshot", shot).data)
+      } else {
+        screen.close(at)
+      }
     }
   } catch e {}
   try {_asked(b.socket, "session.end")} catch e {}
