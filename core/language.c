@@ -2132,8 +2132,8 @@ static val *program(ps *p) {
 static void prices_in(arena *a, val *body, val *out) {
   for (size_t i = 0; body && i < body->l.n; i++) {
     val *s = body->l.v[i];
-    int seen = 0;
     if (tagged(s, "return") && s->l.n > 2) {
+      int seen = 0;
       for (size_t k = 0; k < out->l.n; k++) seen |= v_same(out->l.v[k], s->l.v[2]);
       if (!seen) list_push(a, out, s->l.v[2]);
     } else if (tagged(s, "if")) {

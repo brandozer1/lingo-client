@@ -346,13 +346,25 @@ static val *natives(arena *a);
 /* The table, home/offered.json: {name: {address, code, about, settings, functions}}, read as each call comes, so a change
    holds at once. code is the lingo as it was offered, run here when it has no address, else only its signatures, its
    calls sent to the address. settings are the names of those its code reads. functions are the compiler's listing of
-   it, each {name, does, inputs, gives, internal}: inputs its values as JSON Schema, gives the type of what it gives,
-   when its code says, and internal a helper's, one whose name starts with _. */
+   it, each {name, does, inputs, gives, prices, internal}: inputs its values as JSON Schema, gives the type of what it
+   gives, when its code says, prices what its returns charge, when any do, and internal a helper's, one whose name
+   starts with _. */
 static val *offers(arena *a) {
   buf text = { 0 };
   val *t = pl_read(arena_fmt(a, "%s/offered.json", set.root), &text) ? json_parse(a, text.s, text.n, NULL) : NULL;
   buf_free(&text);
   return t && t->k == V_REC ? t : v_rec(a);
+}
+
+// Whether name is one of this computer's own groups, like files.
+static int own_group(arena *a, const char *name) {
+  const char *prefix = arena_fmt(a, "%s.", name);
+  for (size_t k = 0; k <= BUILT_IN; k++) {
+    val *ps = native_phrases(a, k);
+    for (size_t i = 0; i < ps->l.n; i++)
+      if (!strncmp(text_or(ps->l.v[i], "id", ""), prefix, strlen(prefix))) return 1;
+  }
+  return 0;
 }
 
 /* 3. lingo.offer(name, code, address): a lingo offering itself here, its code, Lingo or only its functions' signatures,
@@ -366,13 +378,7 @@ static val *lingo_offer(run *r, val **a) {
   const char *code = a[1]->k == V_TEXT ? a[1]->t.s : "";
   val *out = v_list(ra);
   if (!named(name)) fail(r, "type", "A lingo's name is lower case letters, digits, _ and -, like weather");
-  const char *prefix = arena_fmt(ra, "%s.", name);
-  for (size_t k = 0; k <= BUILT_IN; k++) {
-    val *ps = native_phrases(ra, k);
-    for (size_t i = 0; i < ps->l.n; i++)
-      if (!strncmp(text_or(ps->l.v[i], "id", ""), prefix, strlen(prefix)))
-        fail(r, "denied", "%s is one of this computer's own, so it can't be offered", name);
-  }
+  if (own_group(ra, name)) fail(r, "denied", "%s is one of this computer's own, so it can't be offered", name);
   pl_enter(offer_gate);
   val *table = offers(ra);
   val *kept = v_rec(ra);
@@ -514,7 +520,6 @@ static _Thread_local const char *now_run;   // the Onsay-Run it came with, passe
 static _Thread_local const char *now_asking;   // the function this thread runs for, like agent.ask, which the lingo
                                                // search its script asks is told, so it is never handed back to it here
 static _Thread_local val *charged;     // the price the return of the call that came in on this thread said
-static _Thread_local val *paid_now;    // and what it comes to, once answered (bill)
 
 #define REFUSED 422   // the status of a call refused by its code, refuse(reason)
 
@@ -962,7 +967,8 @@ static val *posted(arena *a, const char *lines, size_t n, int hold) {
   buf_str(&plain, "}\n");
   buf_add(&plain, lines, n);
   lines = plain.s;
-  n = plain.n;  crypto_eddsa_to_x25519(theirs, onsay);
+  n = plain.n;
+  crypto_eddsa_to_x25519(theirs, onsay);
   pl_random(eph, 32);
   crypto_x25519_public_key(mine, eph);
   crypto_x25519(shared, eph, theirs);
@@ -1064,7 +1070,7 @@ static double send_log(double last) {
 }
 
 /* 5. The table as Onsay indexes it, {way: offered, lingos: [{name, code, about, settings, functions: [{name, does,
-      inputs, gives, internal}]}]}, never where they answer, this computer's own calls first, as the lingo onsay,
+      inputs, gives, prices, internal}]}]}, never where they answer, this computer's own calls first, as the lingo onsay,
       free, each function <group>.<call>. Posted on a thread of its own, as it starts, each time the table changes and when Onsay
       asks, so it reaches Onsay at once and never waits on a held post. One at a time, each reading the table as it goes,
       so the last to reach Onsay is the newest. Kept with what waits to be sent when it doesn't go. */
@@ -1295,13 +1301,8 @@ static int answer(arena *a, const char *path, const char *body, size_t n, const 
     if (sent->k == V_REC) given = sent;
     else if (sent->l.n) rec_set(a, given, "values", sent);
     size_t len = strcspn(path + 1, "/?");
-    const char *group = arena_fmt(a, "%.*s.", (int)len, path + 1);
-    int open = rec_get(offers(a), arena_fmt(a, "%.*s", (int)len, path + 1)) != NULL;
-    for (size_t k = 0; k <= BUILT_IN && !open; k++) {
-      val *ps = native_phrases(a, k);
-      for (size_t i = 0; i < ps->l.n && !open; i++) open = !strncmp(text_or(ps->l.v[i], "id", ""), group, len + 1);
-    }
-    if (open) script = called_as(a, path, sent, values);
+    const char *group = arena_fmt(a, "%.*s", (int)len, path + 1);
+    if (rec_get(offers(a), group) || own_group(a, group)) script = called_as(a, path, sent, values);
   }
 
   // 1. A path to something open here.
@@ -1361,7 +1362,6 @@ said:
     buf_json(out, got);
     return 200;
   }
-  charged = NULL;
   buf_str(out, "{\"error\":");
   buf_json_str(out, message ? message : "", message ? strlen(message) : 0);
   buf_str(out, ",\"code\":");
@@ -1381,13 +1381,13 @@ typedef struct {
 } visit;
 
 // A web answer, saying the call's outcome in Onsay-Outcome, and what it charged in Onsay-Charge, as JSON, when it did.
-static void respond(pl_conn *c, int status, const char *body, size_t n) {
+static void respond(pl_conn *c, int status, val *charge, const char *body, size_t n) {
   buf out = { 0 };
   buf_fmt(&out, "HTTP/1.1 %d \r\nContent-Type: application/json\r\nContent-Length: %zu\r\nOnsay-Outcome: %s\r\n", status, n,
       outcome(status));
-  if (paid_now) {
+  if (charge) {
     buf_str(&out, "Onsay-Charge: ");
-    buf_json(&out, paid_now);
+    buf_json(&out, charge);
     buf_str(&out, "\r\n");
   }
   buf_str(&out, "Connection: close\r\n\r\n");
@@ -1399,9 +1399,9 @@ static void respond(pl_conn *c, int status, const char *body, size_t n) {
 /* A call, however it came: its method, path, headers by lower case name and body, and where it came from, like
    ip 127.0.0.1. Its caller is whoever signed it (RFC 9421), else anyone from there, with the badge it carries in
    Onsay-Badge; where it came from never lets anyone in. GET / says what this is and its key, so an owner can add it to
-   their record. Logged. Its status, and its body in out. */
+   their record. Logged. Its status, its body in out, and in charge what it charged (bill). */
 static int called(arena *a, const char *method, const char *where, val *headers, const char *body, size_t n,
-    const char *from, int own, buf *out) {
+    const char *from, int own, buf *out, val **charge) {
   double began = pl_now();
   const char *bad = NULL;
   const char *why = NULL;
@@ -1410,7 +1410,6 @@ static int called(arena *a, const char *method, const char *where, val *headers,
   who.name = from;
   who.owner = own;
   charged = NULL;
-  paid_now = NULL;
   now_run = text_or(headers, "onsay-run", NULL);
   if (rec_get(headers, "signature-input")) bad = signer(a, headers, method, where, v_text(a, body, n), &who);
   if (!bad && rec_get(headers, "onsay-badge")) who.badge = badge_of(a, text_or(headers, "onsay-badge", ""), &who.begun, &bad);
@@ -1432,10 +1431,10 @@ static int called(arena *a, const char *method, const char *where, val *headers,
     why = status == 403 ? "no grant lets them in" : NULL;
   }
   val *paid = NULL;
-  paid_now = bill(a, status, n, out->n);
-  if (paid_now) {
+  *charge = bill(a, status, n, out->n);
+  if (*charge) {
     paid = v_rec(a);
-    rec_set(a, paid, "charge", paid_now);
+    rec_set(a, paid, "charge", *charge);
     if (who.base) {
       val *proof = v_rec(a);
       rec_set(a, proof, "base", v_cstr(a, who.base));
@@ -1460,6 +1459,7 @@ static void visitor(void *arg) {
   const char *bad = NULL;
   int status = 400;
   int got = 1;
+  val *charge = NULL;
   size_t size = 0;
   val *headers = v_rec(a);
   while (got && !(end = in.s ? strstr(in.s, "\r\n\r\n") : NULL) && in.n < HEAD) got = pl_get(v.c, &in, QUIET);
@@ -1492,7 +1492,6 @@ static void visitor(void *arg) {
   buf program = { 0 };
   if (pl_program(v.c, &program)) now_program = v_text(a, program.s, program.n)->t.s;
   buf_free(&program);
-  paid_now = NULL;
   if (bad) {
     buf_str(&out, "{\"error\":");
     buf_json_str(&out, bad, strlen(bad));
@@ -1500,10 +1499,10 @@ static void visitor(void *arg) {
     logged(a, "in", ip, "/", 0, NULL, out.s, 0, NULL, v_text(a, out.s, out.n), status, NULL);
   } else {
     const char *where = v_text(a, in.s + method + 1, path)->t.s;
-    status = called(a, v_text(a, in.s, method)->t.s, where, headers, in.s + from, size, ip, 0, &out);
+    status = called(a, v_text(a, in.s, method)->t.s, where, headers, in.s + from, size, ip, 0, &out, &charge);
   }
   now_program = NULL;
-  respond(v.c, status, out.s ? out.s : "", out.n);
+  respond(v.c, status, charge, out.s ? out.s : "", out.n);
   pl_drop(v.c);
   buf_free(&in);
   buf_free(&out);
@@ -1528,6 +1527,7 @@ static void relayed(void *arg) {
   buf out = { 0 };
   buf said = { 0 };
   int status = 400;
+  val *charge = NULL;
   free(text);
   for (size_t i = 0; given && given->k == V_REC && i < given->r.n; i++) {
     val *v = given->r.v[i];
@@ -1546,12 +1546,12 @@ static void relayed(void *arg) {
   if (base64ed && truthy(base64ed))
     buf_str(&out, "{\"error\":\"Its body isn't text: lingo script, or JSON\"}");
   else
-    status = called(a, text_or(call, "method", "POST"), text_or(call, "path", "/"), headers, body, strlen(body), own ? "me" : "through Onsay", own, &out);
+    status = called(a, text_or(call, "method", "POST"), text_or(call, "path", "/"), headers, body, strlen(body), own ? "me" : "through Onsay", own, &out, &charge);
   rec_set(a, line, "way", v_cstr(a, "answer"));
   rec_set(a, line, "id", rec_get(call, "id") ? rec_get(call, "id") : NOTHING);
   rec_set(a, line, "status", v_num(a, status));
   rec_set(a, line, "outcome", v_cstr(a, outcome(status)));
-  if (paid_now) rec_set(a, line, "charge", paid_now);
+  if (charge) rec_set(a, line, "charge", charge);
   rec_set(a, line, "body", v_text(a, out.s ? out.s : "", out.n));
   buf_json(&said, line);
   buf_chr(&said, '\n');
