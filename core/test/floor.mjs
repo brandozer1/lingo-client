@@ -196,12 +196,19 @@ const CASES = [
       table.echo.address === `http://127.0.0.1:${ONSAY_PORT}/echo` && table.echo.code === ECHO && fn('hello').does === 'Says it back.' &&
       fn('again').inputs.properties.x.type === 'string' && fn('_quiet').internal === true && fn('hello').internal === false
   }],
-  ['a script is run, pure computing open to anyone, its value as JSON', async () => {
-    const r = await call('/', 'x = [1, 2, 3]\nreturn {sum: x[0] + x[1] + x[2], words: text.split("a b", " ")}')
+  ['a script is run for the owner, its value as JSON', async () => {
+    const r = await call('/', 'x = [1, 2, 3]\nreturn {sum: x[0] + x[1] + x[2], words: text.split("a b", " ")}', owner)
     return r.status === 200 && same(r.json, { sum: 6, words: ['a', 'b'] })
   }],
-  ['a call of the computer from anyone with no grant is refused, 403, and logged', async () => {
+  ['code or words sent to run by anyone with no grant to lingo/run are refused, 403, and logged, even pure computing', async () => {
+    const [a, b] = [await call('/', 'return 1 + 1'), await call('/', 'the weather in a city')]
+    return a.status === 403 && /can't send code or words to run here/.test(a.json.error) && a.json.code === 'denied' && b.status === 403 &&
+      lines().some((l) => l.way === 'call' && l.route === '/lingo/run' && !l.allowed && l.why === 'no grant lets them in')
+  }],
+  ['a call of the computer from a script of someone let run one, with no grant for it, is refused, 403, and logged', async () => {
+    policy([{ to: 'public', allow: ['/lingo/run'] }])
     const r = await call('/', 'return use("echo/hi", {a: 1})')
+    policy([])
     return r.status === 403 && /can't make lingo.use here/.test(r.json.error) && r.json.code === 'denied' &&
       lines().some((l) => l.way === 'call' && l.route === '/lingo/use' && !l.allowed && l.why === 'no grant lets them in')
   }],
@@ -295,14 +302,14 @@ const CASES = [
     return r.status >= 400 && r.json.code === 'compile'
   }],
   ['a grant lets james, signed and known by key, make what it allows and nothing more', async () => {
-    policy([{ to: 'james', allow: ['/lingo/use'] }])
+    policy([{ to: 'james', allow: ['/lingo/run', '/lingo/use'] }])
     const keyid = 'laptop.james'
     const [a, b] = [await call('/', 'return use("echo/j", {})', { key: JAMES, keyid }), await call('/', 'return use("echo/j", {})', { key: STRANGER })]
     policy([])
     return a.status === 200 && b.status === 403 && lines().some((l) => l.way === 'call' && l.caller === 'laptop.james' && l.why === 'grant: james')
   }],
   ['a badge the owner signed lets anyone carrying it make what it allows', async () => {
-    const badge = staple(null, { by: publicOf(OWNER), to: 'public', allow: ['/lingo/use'], until: Math.floor(Date.now() / 1000) + 600 }, OWNER)
+    const badge = staple(null, { by: publicOf(OWNER), to: 'public', allow: ['/lingo/run', '/lingo/use'], until: Math.floor(Date.now() / 1000) + 600 }, OWNER)
     const [a, b] = [await call('/', 'return use("echo/b", {})', { badge }), await call('/', 'return echo.other(1)', { badge })]
     return a.status === 200 && b.status === 403
   }],
@@ -320,11 +327,11 @@ const CASES = [
     return a.status === 401 && /no version/.test(a.json.error) && b.status === 401 && /doesn't know/.test(b.json.error)
   }],
   ['badge.may says whether a call would be let in for the run, without making it', async () => {
-    const badge = staple(null, { by: publicOf(OWNER), to: 'public', allow: ['/lingo/use'] }, OWNER)
+    const badge = staple(null, { by: publicOf(OWNER), to: 'public', allow: ['/lingo/run', '/lingo/use'] }, OWNER)
     const had = echoed.length
     const held = await call('/', 'return [badge.may("lingo/use"), badge.may("/lingo/offer"), badge.may("lingo.use")]', { badge })
     const [mine, theirs] = [await call('/', 'return badge.may("files/read")', owner), await call('/', 'return badge.may("lingo/use")')]
-    return same(held.json, [true, false, true]) && mine.json === true && theirs.json === false && echoed.length === had
+    return same(held.json, [true, false, true]) && mine.json === true && theirs.status === 403 && echoed.length === had
   }],
   ['badge.give staples on a narrower grant, a wider one gains nothing, and a run with no badge but the owner\'s gives none', async () => {
     const badge = staple(null, { by: publicOf(OWNER), to: 'public', allow: ['/lingo'], pass: true }, OWNER)
@@ -335,7 +342,7 @@ const CASES = [
     return same(r.json, [[true, false], false]) && theirs.status === 403
   }],
   ['badge.as refuses a badge that reaches more than the run holds', async () => {
-    const held = staple(null, { by: publicOf(OWNER), to: 'public', allow: ['/lingo/use'] }, OWNER)
+    const held = staple(null, { by: publicOf(OWNER), to: 'public', allow: ['/lingo/run', '/lingo/use'] }, OWNER)
     const other = staple(null, { by: publicOf(OWNER), to: 'public', allow: ['/'] }, OWNER)
     const r = await call('/', `return badge.as("${other}", "return 1")`, { badge: held })
     const theirs = await call('/', `return badge.as("${other}", "return 1")`)
@@ -343,7 +350,7 @@ const CASES = [
     return r.status === 403 && /reaches more/.test(r.json.error) && theirs.status === 403 && mine.json === true
   }],
   ['a run that holds a badge sends it on, this floor\'s own grant stapled on, narrowed to the address called', async () => {
-    const held = staple(null, { by: publicOf(OWNER), to: 'public', allow: ['/lingo/use', '/echo'], pass: true }, OWNER)
+    const held = staple(null, { by: publicOf(OWNER), to: 'public', allow: ['/lingo/run', '/lingo/use', '/echo'], pass: true }, OWNER)
     const key = (await call('/', undefined, { method: 'GET' })).json.key
     const r = await call('/', 'return use("echo/onward", {})', { badge: held })
     const sent = echoed.at(-1)
@@ -357,7 +364,7 @@ const CASES = [
       last.until <= Date.now() / 1000 + 301 && checksOut
   }],
   ['a request\'s signature covers its badge: one swapped after signing, or not covered, is a 401', async () => {
-    const held = staple(null, { by: publicOf(OWNER), to: 'public', allow: ['/lingo/use'] }, OWNER)
+    const held = staple(null, { by: publicOf(OWNER), to: 'public', allow: ['/lingo/run', '/lingo/use'] }, OWNER)
     const other = staple(null, { by: publicOf(OWNER), to: 'public', allow: ['/'] }, OWNER)
     const body = 'return use("echo/s", {})'
     const send = async (headers) => {
@@ -376,7 +383,7 @@ const CASES = [
     return r.status === 401 && /Content-Digest/.test((await r.json()).error)
   }],
   ['code that can\'t compile is a 400 that says why', async () => {
-    const r = await call('/', 'return 1 +')
+    const r = await call('/', 'return 1 +', owner)
     return r.status === 400 && r.json.code === 'compile' && r.json.error.length > 0
   }],
   ['a call from a program on this computer is logged with that program\'s file, so the person can be asked about it by name', async () => {
@@ -385,7 +392,7 @@ const CASES = [
     return process.platform !== 'win32' || /node(\.exe)?$/i.test(last?.program ?? '')
   }],
   ['a script past its steps is stopped', async () => {
-    const r = await call('/', 'while true {}')
+    const r = await call('/', 'while true {}', owner)
     return r.status === 500 && r.json.code === 'limit'
   }],
   ['the command line: key gives its key, and run runs a script as the owner', async () => {
@@ -412,7 +419,7 @@ const CASES = [
       !JSON.stringify(last).includes('"price"')
   }],
   ['every post starts with the format it is in and what this computer is, and each request carries its input, output and run', async () => {
-    await call('/', 'return 6 * 7', { run: 'run_format' })
+    await call('/', 'return 6 * 7', { ...owner, run: 'run_format' })
     for (let i = 0; i < 30 && !posted().some((l) => l.run === 'run_format' && l.way === 'in'); i++) await pause(100)
     const heads = logs.map((x) => JSON.parse(x.text.split('\n')[0]))
     const line = posted().find((l) => l.run === 'run_format' && l.way === 'in')

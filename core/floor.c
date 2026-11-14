@@ -1287,6 +1287,18 @@ static int answer(arena *a, const char *path, const char *body, size_t n, const 
   val *got = NULL;
   int root = !strcmp(path, "/");
   val *sent = n ? json_parse(a, body, n, NULL) : NULL;
+  // Code or words sent here to run are lingo.run's, so only a caller let reach it may send them: the owner, or whoever a
+  // grant or a badge opens /lingo/run to. Nobody else, so a function's charge can't be skipped by calling it in a script.
+  if (root) {
+    const char *why = NULL;
+    int in = let_in(a, policy(a), who, "/lingo/run", 0, &why);
+    logged(a, "call", who->name, "/lingo/run", in, why, NULL, 0, NULL, NULL, 0, NULL);
+    if (!in) {
+      code = "denied";
+      message = arena_fmt(a, "%s can't send code or words to run here: no grant opens lingo/run to them", who->name);
+      goto said;
+    }
+  }
   if (root && sent && sent->k == V_REC && rec_get(sent, "script") && rec_get(sent, "script")->k == V_TEXT) {
     text = script = rec_get(sent, "script")->t.s;
     if (rec_get(sent, "values") && rec_get(sent, "values")->k == V_REC) given = rec_get(sent, "values");
