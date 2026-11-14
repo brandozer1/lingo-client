@@ -1459,13 +1459,50 @@ static val *expr(ps *p);
 static val *statement(ps *p);
 
 /* Whether the next words are a return's charge, like return move charge 5 or return charge 2: the word charge on the
-   return's own line with credits after it, so a value named charge, return charge, is still a value. */
-static int charging(ps *p, int line) {
+   return's own line, and right after return, a price after it, so a value named charge, return charge, is still a
+   value. after is set once the return's value is read, where only a charge can follow on its line. */
+static int charging(ps *p, int line, int after) {
   token *t = peek(p, 0);
   token *next = peek(p, 1);
   if (!t || t->k != ID || strcmp(t->v, "charge") || t->line != line) return 0;
+  if (after) return 1;
   if (!next || next->line != line) return 0;
-  return next->k != SYM || !strcmp(next->v, "(") || !strcmp(next->v, "-");
+  return next->k == NUM || (next->k == ID && (!strcmp(next->v, "size") || !strcmp(next->v, "auction")));
+}
+
+/* A charge, written out so its price is known before any call: a number, credits, {amount}; size(rate, ratio), rate
+   credits a KB of the request and the same for the answer, counted up to ratio times the request's size, {rate,
+   ratio}; or auction(least), the going rate of its code, never less than least, {least}. */
+static val *price(ps *p) {
+  arena *a = p->c->a;
+  const char *how = "A charge is written out: a number, like charge 5, size(rate, ratio), like charge size(0.5, 4), "
+                    "or auction(least), like charge auction(5)";
+  token *t = peek(p, 0);
+  val *out = v_rec(a);
+  if (t && t->k == NUM) {
+    p->i++;
+    rec_set(a, out, "amount", v_num(a, t->num));
+    return out;
+  }
+  if (!t || t->k != ID || (strcmp(t->v, "size") && strcmp(t->v, "auction"))) return expected(p, how);
+  int sized = !strcmp(t->v, "size");
+  p->i++;
+  if (!expect(p, "(", how)) return NULL;
+  token *first = peek(p, 0);
+  if (!first || first->k != NUM) return expected(p, how);
+  p->i++;
+  if (sized) {
+    if (!expect(p, ",", how)) return NULL;
+    token *second = peek(p, 0);
+    if (!second || second->k != NUM) return expected(p, how);
+    p->i++;
+    rec_set(a, out, "rate", v_num(a, first->num));
+    rec_set(a, out, "ratio", v_num(a, second->num));
+  } else {
+    rec_set(a, out, "least", v_num(a, first->num));
+  }
+  if (!expect(p, ")", how)) return NULL;
+  return out;
 }
 
 // (a, b=10). A default is any expression, worked out when the value is missing.
@@ -1621,12 +1658,13 @@ static val *bare(ps *p) {
   if (parse_accept(p, "return")) {
     int line = p->t[p->i - 1].line;
     val *e = NOTHING;
-    if (!charging(p, line) && !end(p) && !is(p, "}", 0) && !is(p, ";", 0)) e = expr(p);
+    int bare = charging(p, line, 0);
+    if (!bare && !end(p) && !is(p, "}", 0) && !is(p, ";", 0)) e = expr(p);
     if (!e) return NULL;
-    if (!charging(p, line)) return mk(a, "return", 1, e);
+    if (!bare && !charging(p, line, 1)) return mk(a, "return", 1, e);
     p->i++;
-    GET(credits, expr(p));
-    return mk(a, "return", 2, e, credits);
+    GET(terms, price(p));
+    return mk(a, "return", 2, e, terms);
   }
   if (parse_accept(p, "fail")) {
     GET(e, expr(p));
@@ -2090,6 +2128,29 @@ static val *program(ps *p) {
   return out;
 }
 
+// Each price a function's returns charge, once each, from every block inside it.
+static void prices_in(arena *a, val *body, val *out) {
+  for (size_t i = 0; body && i < body->l.n; i++) {
+    val *s = body->l.v[i];
+    int seen = 0;
+    if (tagged(s, "return") && s->l.n > 2) {
+      for (size_t k = 0; k < out->l.n; k++) seen |= v_same(out->l.v[k], s->l.v[2]);
+      if (!seen) list_push(a, out, s->l.v[2]);
+    } else if (tagged(s, "if")) {
+      val *branches = s->l.v[1];
+      for (size_t j = 0; j < branches->l.n; j++) prices_in(a, branches->l.v[j]->l.v[1], out);
+      prices_in(a, s->l.v[2], out);
+    } else if (tagged(s, "while")) {
+      prices_in(a, s->l.v[2], out);
+    } else if (tagged(s, "each")) {
+      prices_in(a, s->l.v[3], out);
+    } else if (tagged(s, "try")) {
+      prices_in(a, s->l.v[1], out);
+      prices_in(a, s->l.v[3], out);
+    }
+  }
+}
+
 // Each statement's place in the tree, like tool/3/0/1, mapped to its line, for errors at run time.
 static void walk(cx *c, val *map, val *body, buf *path) {
   size_t base = path->n;
@@ -2272,6 +2333,9 @@ static val *listing(arena *a, const char *file, val *code, const char **why) {
     rec_set(a, ph, "does", rec_get(fn, "does") ? rec_get(fn, "does") : T(a, ""));
     if (rec_get(fn, "gives")) rec_set(a, ph, "gives", rec_get(fn, "gives"));
     if (fname[0] == '_') rec_set(a, ph, "internal", VBOOL(1));
+    val *prices = v_list(a);
+    prices_in(a, rec_get(fn, "body"), prices);
+    if (prices->l.n) rec_set(a, ph, "prices", prices);
     list_push(a, phrases, ph);
   }
   rec_set(a, out, "phrases", phrases);
@@ -2350,7 +2414,7 @@ static val *rw_body(rw *r, val *b) {
     } else if (tagged(s, "try"))
       x = mk(a, "try", 3, rw_body(r, s->l.v[1]), s->l.v[2], rw_body(r, s->l.v[3]));
     else if (tagged(s, "return") && s->l.n > 2)
-      x = mk(a, "return", 2, rw_ex(r, s->l.v[1]), rw_ex(r, s->l.v[2]));
+      x = mk(a, "return", 2, rw_ex(r, s->l.v[1]), s->l.v[2]);
     else if (tagged(s, "return") || tagged(s, "fail") || tagged(s, "do"))
       x = mk(a, s->l.v[0]->t.s, 1, rw_ex(r, s->l.v[1]));
     else
@@ -3116,10 +3180,8 @@ static int exec(run *r, val *body, val *frame, val **back) {
       case T_NEXT: return NEXT;
       case T_RETURN: {
         *back = eval(r, item(s, 1), frame);
-        // Only a return of the function the call came in for charges it, each one saying its charge, none being free.
-        double credits = s->l.n > 2 ? num_of(r, eval(r, item(s, 2), frame), "charge") : 0;
-        if (!(credits >= 0) || isinf(credits)) fail(r, "type", "A charge is credits, 0 or more, not %g", credits);
-        if (r->charge && r->fn && r->charging && !strcmp(r->fn, r->charging)) *r->charge = credits;
+        // Only a return of the function the call came in for charges it, each one saying its price, none being free.
+        if (r->charge && r->fn && r->charging && !strcmp(r->fn, r->charging)) *r->charge = s->l.n > 2 ? item(s, 2) : NULL;
         return BACK;
       }
       case T_FAIL: fail(r, "fail", "%s", text_of(r, eval(r, item(s, 1), frame))->t.s); break;

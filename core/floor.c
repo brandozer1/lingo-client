@@ -33,7 +33,7 @@
 #include "monocypher.h"
 #include "monocypher-ed25519.h"
 
-#define FLOOR_VERSION "0.4.0"   // and the format of its log, said first in every post
+#define FLOOR_VERSION "0.5.0"   // and the format of its log, said first in every post
 
 /* Onsay, built in: where its resolve endpoint and its log box are, and its public key, which what it signs is checked
    against and the log is sealed to. The test build asks test/floor.mjs, which signs with the test key. */
@@ -406,6 +406,7 @@ static val *lingo_offer(run *r, val **a) {
       rec_set(ra, f, "does", v_cstr(ra, text_or(p, "does", "")));
       rec_set(ra, f, "inputs", rec_get(p, "inputSchema") ? rec_get(p, "inputSchema") : v_rec(ra));
       if (rec_get(p, "gives")) rec_set(ra, f, "gives", rec_get(p, "gives"));
+      if (rec_get(p, "prices")) rec_set(ra, f, "prices", rec_get(p, "prices"));
       rec_set(ra, f, "internal", VBOOL(internal));
       list_push(ra, functions, f);
       if (internal) continue;
@@ -512,7 +513,8 @@ static _Thread_local const char *now_run;   // the Onsay-Run it came with, passe
                                             // started it, like the app, knows which of its runs a call is part of
 static _Thread_local const char *now_asking;   // the function this thread runs for, like agent.ask, which the lingo
                                                // search its script asks is told, so it is never handed back to it here
-static _Thread_local double charged;   // credits the call that came in on this thread charged, by its return
+static _Thread_local val *charged;     // the price the return of the call that came in on this thread said
+static _Thread_local val *paid_now;    // and what it comes to, once answered (bill)
 
 #define REFUSED 422   // the status of a call refused by its code, refuse(reason)
 
@@ -523,10 +525,23 @@ static const char *outcome(int status) {
   return "failed";
 }
 
-// What a call that came in charged, billed only when it worked, else 0.
-static double charge_of(int status) {
-  if (status >= 400) return 0;
-  return charged;
+/* What a call that came in charged, as Onsay settles it: its return's price, the bytes it took in and gave back, and
+   amount, the credits, when the floor can work it out: a flat charge, or by size, rate a KB of the request and the same
+   for the answer, counted up to ratio times the request's size. An auction's is priced by Onsay. NULL when it didn't
+   work or was free. */
+static val *bill(arena *a, int status, size_t in, size_t out) {
+  if (status >= 400 || !charged) return NULL;
+  val *b = v_rec(a);
+  for (size_t i = 0; i < charged->r.n; i++) rec_set(a, b, charged->r.key[i], charged->r.v[i]);
+  rec_set(a, b, "in", v_num(a, (double)in));
+  rec_set(a, b, "out", v_num(a, (double)out));
+  val *rate = rec_get(charged, "rate");
+  if (rate) {
+    double most = rec_get(charged, "ratio")->n * (double)in;
+    double counted = (double)out < most ? (double)out : most;
+    rec_set(a, b, "amount", v_num(a, rate->n * ((double)in + counted) / 1000));
+  }
+  return b;
 }
 
 // 4. Each call of the computer's a script makes but pure computing, a request to its address, like /files/read, judged
@@ -600,12 +615,13 @@ static val *sent(run *r, const char *url, val *values, int asked) {
   const char *why = !got ? arena_fmt(a, "%s", error.s ? error.s : "it couldn't be reached")
       : rec_get(answer, "error") ? text_or(answer, "error", "")
       : status && status->n >= 400 ? arena_fmt(a, "it answered %g", status->n) : NULL;
-  double charge = why ? 0 : atof(text_or(rec_get(got, "headers"), "onsay-charge", "0"));
+  const char *told = why ? "" : text_or(rec_get(got, "headers"), "onsay-charge", "");
+  val *charge = *told ? json_parse(a, told, strlen(told), NULL) : NULL;
   val *paid = NULL;
-  if (charge > 0) {
+  if (charge && charge->k == V_REC) {
     const char *nonce = strstr(text_or(headers, "Signature-Input", ""), "nonce=\"");
     paid = v_rec(a);
-    rec_set(a, paid, "charge", v_num(a, charge));
+    rec_set(a, paid, "charge", charge);
     if (nonce) rec_set(a, paid, "nonce", v_text(a, nonce + 7, strcspn(nonce + 7, "\"")));
   }
   logged(a, "out", set.name, url, !why, NULL, why, (pl_now() - began) * 1000, v_text(a, body.s ? body.s : "", body.n),
@@ -659,7 +675,7 @@ static val *used(run *r, const char *address, val *values) {
     caller who = now;
     val *policy_was = now_policy;
     const char *asking_was = now_asking;
-    double charged_was = charged;   // a lingo here another called charges the call only when it was the way found
+    val *charged_was = charged;   // a lingo here another called charges the call only when it was the way found
     const char *code = NULL;
     const char *message = NULL;
     now_asking = arena_fmt(r->a, "%.*s", (int)strcspn(id, "("), id);
@@ -1345,7 +1361,7 @@ said:
     buf_json(out, got);
     return 200;
   }
-  charged = 0;
+  charged = NULL;
   buf_str(out, "{\"error\":");
   buf_json_str(out, message ? message : "", message ? strlen(message) : 0);
   buf_str(out, ",\"code\":");
@@ -1364,12 +1380,16 @@ typedef struct {
   buf from;
 } visit;
 
-// A web answer, saying the call's outcome in Onsay-Outcome, and what it charged in Onsay-Charge when it worked and did.
+// A web answer, saying the call's outcome in Onsay-Outcome, and what it charged in Onsay-Charge, as JSON, when it did.
 static void respond(pl_conn *c, int status, const char *body, size_t n) {
   buf out = { 0 };
   buf_fmt(&out, "HTTP/1.1 %d \r\nContent-Type: application/json\r\nContent-Length: %zu\r\nOnsay-Outcome: %s\r\n", status, n,
       outcome(status));
-  if (charge_of(status) > 0) buf_fmt(&out, "Onsay-Charge: %.15g\r\n", charge_of(status));
+  if (paid_now) {
+    buf_str(&out, "Onsay-Charge: ");
+    buf_json(&out, paid_now);
+    buf_str(&out, "\r\n");
+  }
   buf_str(&out, "Connection: close\r\n\r\n");
   buf_add(&out, body, n);
   pl_put(c, out.s, out.n);
@@ -1389,7 +1409,8 @@ static int called(arena *a, const char *method, const char *where, val *headers,
   caller who = { NULL, 0, 0, NULL, NULL, NULL };
   who.name = from;
   who.owner = own;
-  charged = 0;
+  charged = NULL;
+  paid_now = NULL;
   now_run = text_or(headers, "onsay-run", NULL);
   if (rec_get(headers, "signature-input")) bad = signer(a, headers, method, where, v_text(a, body, n), &who);
   if (!bad && rec_get(headers, "onsay-badge")) who.badge = badge_of(a, text_or(headers, "onsay-badge", ""), &who.begun, &bad);
@@ -1411,9 +1432,10 @@ static int called(arena *a, const char *method, const char *where, val *headers,
     why = status == 403 ? "no grant lets them in" : NULL;
   }
   val *paid = NULL;
-  if (charge_of(status) > 0) {
+  paid_now = bill(a, status, n, out->n);
+  if (paid_now) {
     paid = v_rec(a);
-    rec_set(a, paid, "charge", v_num(a, charge_of(status)));
+    rec_set(a, paid, "charge", paid_now);
     if (who.base) {
       val *proof = v_rec(a);
       rec_set(a, proof, "base", v_cstr(a, who.base));
@@ -1470,6 +1492,7 @@ static void visitor(void *arg) {
   buf program = { 0 };
   if (pl_program(v.c, &program)) now_program = v_text(a, program.s, program.n)->t.s;
   buf_free(&program);
+  paid_now = NULL;
   if (bad) {
     buf_str(&out, "{\"error\":");
     buf_json_str(&out, bad, strlen(bad));
@@ -1528,7 +1551,7 @@ static void relayed(void *arg) {
   rec_set(a, line, "id", rec_get(call, "id") ? rec_get(call, "id") : NOTHING);
   rec_set(a, line, "status", v_num(a, status));
   rec_set(a, line, "outcome", v_cstr(a, outcome(status)));
-  if (charge_of(status) > 0) rec_set(a, line, "charge", v_num(a, charge_of(status)));
+  if (paid_now) rec_set(a, line, "charge", paid_now);
   rec_set(a, line, "body", v_text(a, out.s ? out.s : "", out.n));
   buf_json(&said, line);
   buf_chr(&said, '\n');

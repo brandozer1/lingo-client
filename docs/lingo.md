@@ -159,7 +159,7 @@ every program fully known before it runs.
 | `break`                                    | Leaves the innermost loop                                |
 | `continue`                                 | Skips to the next turn of the innermost loop             |
 | `return e`, `return`                       | Ends the function or script with a value, or with nothing |
-| `return e charge n`, `return charge n`     | The same, charging n credits for the call that came in, when this is its function (section 9) |
+| `return e charge price`                    | The same, charging the call that came in, when this is its function: `5`, `size(0.5, 4)` or `auction(5)` (section 9) |
 | `fail e`                                   | Stops with an error whose message is `e` as text         |
 | `try{...}catch e{...}`                     | Runs the first block, and the second if it fails, with the error's message in `e` |
 | `f(...)`, `group.phrase(...)`              | A call, run for what it does                             |
@@ -172,8 +172,8 @@ every program fully known before it runs.
   `for(x in list){` still read the same.
 - Blocks are always in braces, even for one step.
 - A step on its own must be a call. `x` alone, or `x+1`, is an error, because it would work something out and throw it away.
-- `return` takes a value unless the next thing is `}`, `;` or the end. `charge` after it, on the same line with credits
-  after it, is its charge, so a value named charge is still a value: `return charge`.
+- `return` takes a value unless the next thing is `}`, `;` or the end. `charge` after it on the same line is its
+  price, written out, never worked out. A value named charge is still a value: `return charge`.
 - `break` and `continue` belong inside loops.
 
 **What `for` goes through:**
@@ -421,11 +421,21 @@ that fails is answered with its message, and a status by its code (`core/README.
 | `crash`   | The C code under a phrase crashed, like a bad pointer in a native library. Only this call ends, and it can be tried again | no | 500 |
 | `refused` | The code said `refuse(reason)`: the call isn't for it. Its message is the reason alone, with no file or line | no | 422 |
 
-**Charges and refusals.** A function is free. A call is charged only as its result is sent, so the charge is part of
-the return: `return move charge 5`, or `return charge 2` for a result of nothing, credits 0 or more. Each return says
-its own, and one without a charge is free. Only a return of the function the call came in for charges it: a function
-it calls has its own returns, which charge nothing here. Nothing says ahead what a call will come to. `refuse(reason)`
-stops the run at once when a call isn't for it, answered 422 with `{error: reason, code: "refused"}`. Every call that
+**Charges and refusals.** A function is free. A call is charged only as its result is sent, so the price is part of
+the return, and it is written out, so it is known before any call:
+
+| Price | Written | The caller pays |
+|-------|---------|-----------------|
+| Flat | `return move charge 5` | 5 tokens |
+| By size | `return answer charge size(0.5, 4)` | 0.5 tokens a KB of the request, and the same for the answer, counted up to 4 times the request's size, so a padded answer earns nothing more |
+| Auction | `return move charge auction(5)` | the going rate of its code, what its calls have come to lately, never less than 5 |
+
+A price worked out as it runs, like `charge n * 2`, is a problem when the lingo loads. Each return says its own, and
+one without a charge is free; the prices of a function's returns are listed with it in what is offered, so Onsay's
+search knows them before calling. Only a return of the function the call came in for charges it: a function it calls
+has its own returns, which charge nothing here. The floor counts the bytes in and out and works out a flat or sized
+price; Onsay prices an auction. `refuse(reason)` stops the run at once when a call isn't for it, answered 422 with
+`{error: reason, code: "refused"}`. Every call that
 came in from outside ends one of three ways, and the floor says which, its log line, its answer through Onsay and its
 web answer alike (`core/README.md`, The floor):
 

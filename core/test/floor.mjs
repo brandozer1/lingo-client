@@ -113,7 +113,7 @@ const stand = http.createServer((req, res) => {
     if (req.url.startsWith('/echo')) { echoed.push({ path: req.url, body: JSON.parse(body || 'null'), signed: checks(req, body), run: req.headers['onsay-run'], badge: req.headers['onsay-badge'] }); return json(200, { path: req.url, got: JSON.parse(body || 'null') }) }
     if (req.url === '/broken') return json(500, { error: 'it broke over there' })
     if (req.url === '/refuses') return json(422, { error: 'not for me', code: 'refused' })
-    if (req.url === '/charges') { res.writeHead(200, { 'content-type': 'application/json', 'onsay-charge': '4' }); return res.end('"done"') }
+    if (req.url === '/charges') { res.writeHead(200, { 'content-type': 'application/json', 'onsay-charge': '{"amount":4,"in":2,"out":6}' }); return res.end('"done"') }
     if (req.url === '/weather') return json(200, `sunny in ${JSON.parse(body).city}`)
     // The lingo search: the ways it finds, best first, in list mode, or a call relayed to its address.
     if (req.url === '/search/ask') {
@@ -416,25 +416,46 @@ const CASES = [
     for (let i = 0; i < 30 && !posted().some((l) => l.run === 'run_format' && l.way === 'in'); i++) await pause(100)
     const heads = logs.map((x) => JSON.parse(x.text.split('\n')[0]))
     const line = posted().find((l) => l.run === 'run_format' && l.way === 'in')
-    return heads.every((h) => h.way === 'format' && h.format === '0.4.0' && /^(windows|linux)/.test(h.facts.os) && h.facts.cores > 0 && h.facts.memory > 0) &&
+    return heads.every((h) => h.way === 'format' && h.format === '0.5.0' && /^(windows|linux)/.test(h.facts.os) && h.facts.cores > 0 && h.facts.memory > 0) &&
       line?.input === 'return 6 * 7' && line.output === '42'
   }],
-  ['a return says its charge, only the function the call came in for charges, and the line keeps the caller\'s signature over it', async () => {
+  ['a return says its price, only the function the call came in for charges, and the line keeps the caller\'s signature over it', async () => {
     await call('/lingo/offer', { name: 'meter', code: 'fn add(n) {return n charge 100}' }, owner)
     await call('/lingo/offer', { name: 'billed', code: 'fn go() {return meter.add(3) charge 5.5}\nfn plain() {return meter.add(1)}\nfn bare() {return charge 2}' }, owner)
     const r = await call('/billed/go', [], { ...owner, run: 'run_charge' })
     const plain = await call('/billed/plain', [], owner)
     const bare = await call('/billed/bare', [], owner)
     const line = lines().find((l) => l.way === 'in' && l.run === 'run_charge')
-    return r.status === 200 && r.json === 3 && r.headers.get('onsay-outcome') === 'worked' && r.headers.get('onsay-charge') === '5.5' &&
-      line?.outcome === 'worked' && line.charge === 5.5 && /"@signature-params": .*nonce=/.test(line.signed?.base) && line.signed.signature &&
-      plain.json === 1 && plain.headers.get('onsay-charge') === null && bare.json === null && bare.headers.get('onsay-charge') === '2'
+    const told = JSON.parse(r.headers.get('onsay-charge') ?? 'null')
+    return r.status === 200 && r.json === 3 && r.headers.get('onsay-outcome') === 'worked' && told?.amount === 5.5 && told.in === 2 && told.out === 1 &&
+      line?.outcome === 'worked' && line.charge.amount === 5.5 && /"@signature-params": .*nonce=/.test(line.signed?.base) && line.signed.signature &&
+      plain.json === 1 && plain.headers.get('onsay-charge') === null && bare.json === null && JSON.parse(bare.headers.get('onsay-charge')).amount === 2
   }],
-  ['a value named charge is still a value, and a charge below 0 is a failure in plain words', async () => {
-    await call('/lingo/offer', { name: 'named', code: 'fn get() {charge = 7\nreturn charge}\nfn below() {return 1 charge -1}' }, owner)
+  ['by size: rate a KB of the request and the same for the answer, counted up to ratio times the request\'s size; an auction says its least for Onsay to price', async () => {
+    await call('/lingo/offer', { name: 'sized', code: 'fn echo(text) {return text charge size(1000, 2)}\nfn bid() {return "ok" charge auction(5)}' }, owner)
+    const small = await call('/sized/echo', ['hi'], owner)
+    const big = await call('/sized/echo', ['x'.repeat(50)], owner)
+    const bid = await call('/sized/bid', [], owner)
+    const [s_, b_, a_] = [small, big, bid].map((x) => JSON.parse(x.headers.get('onsay-charge')))
+    // ["hi"] is 6 bytes in and "hi" 4 out: 1000 x 10 / 1000. 54 in, 52 out, all counted: 106.
+    return s_.amount === 10 && s_.rate === 1000 && s_.ratio === 2 && b_.amount === 106 && a_.least === 5 && a_.amount === undefined && a_.in === 2
+  }],
+  ['a charge is written out, so a computed one is a problem when the lingo loads, and a value named charge is still a value', async () => {
+    const computed = await call('/lingo/offer', { name: 'computed', code: 'fn f(n) {return 1 charge n * 2}' }, owner)
+    await call('/lingo/offer', { name: 'named', code: 'fn get() {charge = 7\nreturn charge}' }, owner)
     const got = await call('/named/get', [], owner)
-    const below = await call('/named/below', [], owner)
-    return got.json === 7 && got.headers.get('onsay-charge') === null && below.status === 500 && /0 or more/.test(below.json.error)
+    return computed.status >= 400 && /A charge is written out/.test(computed.json.error) && got.json === 7 && got.headers.get('onsay-charge') === null
+  }],
+  ['what is offered carries each function\'s prices, read from its returns', async () => {
+    await call('/lingo/offer', { name: 'priced', code: 'fn two(x) {if x {return 1 charge 3}\nreturn 2 charge size(0.5, 4)}\nfn free() {return 1}' }, owner)
+    let fns = null
+    for (let i = 0; i < 40 && !fns; i++) {
+      const offered = posted().filter((l) => l.way === 'offered').at(-1)
+      fns = offered?.lingos.find((l) => l.name === 'priced')?.functions
+      if (!fns) await new Promise((done) => setTimeout(done, 100))
+    }
+    const two = fns?.find((x) => x.name === 'two'), free = fns?.find((x) => x.name === 'free')
+    return same(two?.prices, [{ amount: 3 }, { rate: 0.5, ratio: 4 }]) && free && !('prices' in free)
   }],
   ['refuse answers refused with its reason, try can\'t catch it, and nothing is charged', async () => {
     await call('/lingo/offer', { name: 'picky', code: 'fn take(x) {if x > 1 {refuse("only small ones")}\nreturn x charge 3}' }, owner)
@@ -444,12 +465,12 @@ const CASES = [
     const line = lines().find((l) => l.way === 'in' && l.run === 'run_refused')
     return r.status === 422 && same(r.json, { error: 'only small ones', code: 'refused' }) && r.headers.get('onsay-outcome') === 'refused' &&
       r.headers.get('onsay-charge') === null && line?.outcome === 'refused' && !('charge' in line) &&
-      small.status === 200 && small.headers.get('onsay-charge') === '3' && caught.status === 422 && caught.json.error === 'only small ones'
+      small.status === 200 && JSON.parse(small.headers.get('onsay-charge')).amount === 3 && caught.status === 422 && caught.json.error === 'only small ones'
   }],
   ['a call out that was charged is logged with the charge and the nonce it was signed with', async () => {
     const r = await call('/', `return use("http://127.0.0.1:${ONSAY_PORT}/charges", {})`, { ...owner, run: 'run_paid' })
     const out = lines().find((l) => l.way === 'out' && l.run === 'run_paid' && l.route.endsWith('/charges'))
-    return r.json === 'done' && out?.charge === 4 && typeof out.nonce === 'string' && out.nonce.length > 10
+    return r.json === 'done' && out?.charge?.amount === 4 && out.charge.out === 6 && typeof out.nonce === 'string' && out.nonce.length > 10
   }],
   ['a refusal from somewhere else is a failure here, never this call\'s own refusal', async () => {
     const r = await call('/', `return use("http://127.0.0.1:${ONSAY_PORT}/refuses", {})`, owner)
@@ -520,7 +541,7 @@ const CASES = [
     const theirs = await relayed('/', 'return echo.hi()')
     const refused = await relayed('/picky/take', '[5]', OWNER)
     const l = lines()
-    return mine?.status === 200 && mine.body === 'null' && mine.outcome === 'worked' && mine.charge === 2 &&
+    return mine?.status === 200 && mine.body === 'null' && mine.outcome === 'worked' && mine.charge?.amount === 2 &&
       theirs?.status === 403 && theirs.outcome === 'failed' && !('charge' in theirs) && l.some((x) => x.caller === 'through Onsay' && !x.allowed) &&
       refused?.status === 422 && refused.outcome === 'refused' && !('charge' in refused) && JSON.parse(refused.body).error === 'only small ones'
   }],
