@@ -10,7 +10,7 @@
 // 3. Offers     the table of lingos offered here: what each does and where it answers, made from its own code
 // 4. Calls      each call a script makes: checked, then answered here or sent where it goes, signed, with the badge
 //               its run holds handed on; the lingo search, lingo(...), which calls from here the ways Onsay's index
-//               finds; and the badge calls, read, give, as and may
+//               finds; the badge calls, read, give, as and may; and refuse, a call that came in declined
 // 5. Log        every request, a line of home/requests.log, sent to Onsay sealed whenever a connection works, its
 //               answer bringing the calls that came for this computer through Onsay
 // 6. Running    a call's script compiled and run, one at a time, within its limits
@@ -33,7 +33,7 @@
 #include "monocypher.h"
 #include "monocypher-ed25519.h"
 
-#define FLOOR_VERSION "0.3.0"   // and the format of its log, said first in every post
+#define FLOOR_VERSION "0.4.0"   // and the format of its log, said first in every post
 
 /* Onsay, built in: where its resolve endpoint and its log box are, and its public key, which what it signs is checked
    against and the log is sealed to. The test build asks test/floor.mjs, which signs with the test key. */
@@ -147,7 +147,7 @@ static struct {
 #endif
 
 static void logged(arena *a, const char *way, const char *who, const char *route, int allowed, const char *why,
-    const char *error, double ms, val *input, val *output);
+    const char *error, double ms, val *input, val *output, int status, val *paid);
 
 const char *lingo_home(void) { return set.root; }
 
@@ -213,7 +213,7 @@ void lingo_called(const char *kind, const char *address, const char *ask, const 
   arena *a = arena_new();
   val *answered = rec_get(got, "text");
   (void)kind, (void)address, (void)ask, (void)method, (void)headers, (void)stopped;
-  logged(a, "out", set.name, url, !error, NULL, error, ms, body && n ? v_text(a, body, n) : NULL, answered);
+  logged(a, "out", set.name, url, !error, NULL, error, ms, body && n ? v_text(a, body, n) : NULL, answered, 0, NULL);
   arena_free(a);
 }
 
@@ -346,9 +346,8 @@ static val *natives(arena *a);
 /* The table, home/offered.json: {name: {address, code, about, settings, functions}}, read as each call comes, so a change
    holds at once. code is the lingo as it was offered, run here when it has no address, else only its signatures, its
    calls sent to the address. settings are the names of those its code reads. functions are the compiler's listing of
-   it, each {name, does, inputs, gives, internal, price}: inputs its values as JSON Schema, gives the type of what it
-   gives, when its code says, internal a helper's, one whose name starts with _, and price what its code says it costs,
-   {amount} or {minimum} in credits, left out when it is free. */
+   it, each {name, does, inputs, gives, internal}: inputs its values as JSON Schema, gives the type of what it gives,
+   when its code says, and internal a helper's, one whose name starts with _. */
 static val *offers(arena *a) {
   buf text = { 0 };
   val *t = pl_read(arena_fmt(a, "%s/offered.json", set.root), &text) ? json_parse(a, text.s, text.n, NULL) : NULL;
@@ -408,7 +407,6 @@ static val *lingo_offer(run *r, val **a) {
       rec_set(ra, f, "inputs", rec_get(p, "inputSchema") ? rec_get(p, "inputSchema") : v_rec(ra));
       if (rec_get(p, "gives")) rec_set(ra, f, "gives", rec_get(p, "gives"));
       rec_set(ra, f, "internal", VBOOL(internal));
-      if (rec_get(p, "price")) rec_set(ra, f, "price", rec_get(p, "price"));
       list_push(ra, functions, f);
       if (internal) continue;
       val *one = v_rec(ra);
@@ -430,10 +428,9 @@ static val *lingo_offer(run *r, val **a) {
   return out;
 }
 
-/* 3. lingo.list(): every lingo here, {name, about, functions: [{name, does, price}]}: this computer's own groups first,
-      like input and window, each call's does its values and what it does, then every lingo offered, from its functions
-      in the table, its helpers left out, each with its price when it has one. std and lingo, part of the language,
-      aren't listed. */
+/* 3. lingo.list(): every lingo here, {name, about, functions: [{name, does}]}: this computer's own groups first, like
+      input and window, each call's does its values and what it does, then every lingo offered, from its functions in
+      the table, its helpers left out. std and lingo, part of the language, aren't listed. */
 static val *lingo_list(run *r, val **a) {
   val *table = offers(r->a);
   val *out = v_list(r->a);
@@ -483,7 +480,6 @@ static val *lingo_list(run *r, val **a) {
       val *f = v_rec(r->a);
       rec_set(r->a, f, "name", v_cstr(r->a, text_or(one_kept, "name", "")));
       rec_set(r->a, f, "does", v_text(r->a, line.s, line.n));
-      if (rec_get(one_kept, "price")) rec_set(r->a, f, "price", rec_get(one_kept, "price"));
       buf_free(&line);
       list_push(r->a, functions, f);
     }
@@ -516,6 +512,22 @@ static _Thread_local const char *now_run;   // the Onsay-Run it came with, passe
                                             // started it, like the app, knows which of its runs a call is part of
 static _Thread_local const char *now_asking;   // the function this thread runs for, like agent.ask, which the lingo
                                                // search its script asks is told, so it is never handed back to it here
+static _Thread_local double charged;   // credits the call that came in on this thread charged, by its return
+
+#define REFUSED 422   // the status of a call refused by its code, refuse(reason)
+
+// What became of a call that came in, by its status: worked, refused, or failed.
+static const char *outcome(int status) {
+  if (status < 400) return "worked";
+  if (status == REFUSED) return "refused";
+  return "failed";
+}
+
+// What a call that came in charged, billed only when it worked, else 0.
+static double charge_of(int status) {
+  if (status >= 400) return 0;
+  return charged;
+}
 
 // 4. Each call of the computer's a script makes but pure computing, a request to its address, like /files/read, judged
 //    by the policy for whoever sent the script. At the command line, the owner's.
@@ -526,7 +538,7 @@ void may(run *r, const char *id) {
   for (char *x = (char *)route; *x; x++)
     if (*x == '.') *x = '/';
   int in = let_in(r->a, now_policy, &now, route, 0, &why);
-  logged(r->a, "call", now.name, route, in, why, NULL, 0, NULL, NULL);
+  logged(r->a, "call", now.name, route, in, why, NULL, 0, NULL, NULL, 0, NULL);
   if (!in) fail(r, "denied", "%s can't make %s here: no grant lets them", now.name, id);
 }
 
@@ -588,13 +600,24 @@ static val *sent(run *r, const char *url, val *values, int asked) {
   const char *why = !got ? arena_fmt(a, "%s", error.s ? error.s : "it couldn't be reached")
       : rec_get(answer, "error") ? text_or(answer, "error", "")
       : status && status->n >= 400 ? arena_fmt(a, "it answered %g", status->n) : NULL;
+  double charge = why ? 0 : atof(text_or(rec_get(got, "headers"), "onsay-charge", "0"));
+  val *paid = NULL;
+  if (charge > 0) {
+    const char *nonce = strstr(text_or(headers, "Signature-Input", ""), "nonce=\"");
+    paid = v_rec(a);
+    rec_set(a, paid, "charge", v_num(a, charge));
+    if (nonce) rec_set(a, paid, "nonce", v_text(a, nonce + 7, strcspn(nonce + 7, "\"")));
+  }
   logged(a, "out", set.name, url, !why, NULL, why, (pl_now() - began) * 1000, v_text(a, body.s ? body.s : "", body.n),
-      got ? v_cstr(a, text) : NULL);
+      got ? v_cstr(a, text) : NULL, 0, paid);
   buf_free(&body);
   buf_free(&error);
+  // Another's refusal is a failure here: only this run's own refuse() refuses the call that came in.
+  const char *code = text_or(answer, "code", "phrase");
+  if (!strcmp(code, "refused")) code = "phrase";
   if (why && !got) fail(r, "phrase", "%s", why);
-  if (why && asked) fail(r, text_or(answer, "code", "phrase"), "%s", why);   // the search's own words, for the person
-  if (why) fail(r, text_or(answer, "code", "phrase"), "%s: %s", url, why);
+  if (why && asked) fail(r, code, "%s", why);   // the search's own words, for the person
+  if (why) fail(r, code, "%s: %s", url, why);
   if (asked) return rec_get(answer, "value") ? rec_get(answer, "value") : NOTHING;
   return answer ? answer : v_cstr(a, text);
 }
@@ -636,6 +659,7 @@ static val *used(run *r, const char *address, val *values) {
     caller who = now;
     val *policy_was = now_policy;
     const char *asking_was = now_asking;
+    double charged_was = charged;   // a lingo here another called charges the call only when it was the way found
     const char *code = NULL;
     const char *message = NULL;
     now_asking = arena_fmt(r->a, "%.*s", (int)strcspn(id, "("), id);
@@ -643,7 +667,10 @@ static val *used(run *r, const char *address, val *values) {
     now = who;
     now_policy = policy_was;
     now_asking = asking_was;
-    if (!got) fail(r, code, "%s", message ? message : "it failed");
+    if (!got) {
+      charged = charged_was;   // what it charged goes with it, so a next way tried is billed alone
+      fail(r, code, "%s", message ? message : "it failed");
+    }
     return got;
   }
   val *q = v_rec(r->a);
@@ -689,7 +716,7 @@ static val *lingo_run(run *r, val **a) {
   if (setjmp(t.j)) {
     r->trap = prev;
     r->depth = depth;
-    if (!wrong || !strcmp(r->code, "limit") || !strcmp(r->code, "stopped")) rethrow(r);
+    if (!wrong || !strcmp(r->code, "limit") || !strcmp(r->code, "stopped") || !strcmp(r->code, "refused")) rethrow(r);
     const char *said = arena_fmt(r->a, "%.*s", (int)r->message.n, r->message.s ? r->message.s : "");
     fail(r, "compile", "%s. Read as words instead, the lingo search said: %s", wrong, said);
   }
@@ -738,7 +765,7 @@ static val *searched_ways(run *r, val **a) {
     }
     r->trap = prev;
     r->depth = depth;
-    if (!strcmp(r->code, "limit") || !strcmp(r->code, "stopped")) rethrow(r);
+    if (!strcmp(r->code, "limit") || !strcmp(r->code, "stopped") || !strcmp(r->code, "refused")) rethrow(r);
   }
   if (tried) rethrow(r);
   fail(r, "unknown", "Nothing found that does that yet");
@@ -781,9 +808,9 @@ static val *badge_read(run *r, val **a) {
   return out;
 }
 
-/* badge.give(to, allow, until, data): the badge the run holds with a grant by this computer stapled on, as base64. A
-   run with no badge gets a new one only when it is the owner's. A wider grant gains nothing, since every grant in a
-   badge must allow an address for it to be let in. */
+/* badge.give(to, allow, until, data): the badge the run holds with a grant by this computer stapled on, as base64. A run
+   with no badge gets a new one only when it is the owner's. A wider grant gains nothing, since every grant in a badge
+   must allow an address for it to be let in. */
 static val *badge_give(run *r, val **a) {
   val *g = v_rec(r->a);
   const char *why = NULL;
@@ -811,7 +838,7 @@ static val *badge_as(run *r, val **a) {
   for (size_t i = 0; now.badge && narrower && i < now.badge->l.n; i++)
     narrower = !strcmp(text_or(b->l.v[i], "sig", ""), text_or(now.badge->l.v[i], "sig", ""));
   if (!narrower) fail(r, "denied", "That badge reaches more than this run holds, so code can't run under it");
-  caller who = { now.name, 0, begun, b };
+  caller who = { now.name, 0, begun, b, NULL, NULL };
   caller was = now;
   val *policy_was = now_policy;
   const char *code = NULL;
@@ -836,6 +863,11 @@ static val *badge_may(run *r, val **a) {
   return VBOOL(let_in(r->a, now_policy, &now, route, 0, &why));
 }
 
+// refuse(reason): the run stopped at once, and the call that came in answered refused, with reason, its charges dropped.
+static val *refuse(run *r, val **a) {
+  fail(r, "refused", "%s", a[0]->t.s);
+}
+
 ////////// 5. LOG //////////
 
 static pl_gate *log_gate;
@@ -844,13 +876,16 @@ static pl_gate *offered_gate;   // the table posted one at a time
 static long log_size = -1;
 static _Thread_local const char *now_program;   // the program on this computer the call on this thread came from
 
-/* A line of home/requests.log, and kept to send: {at, way, ms, caller, program, route, allowed, why, error, input, output,
-   run}. way is in, a call that came in; call, a call a script made; out, one sent from here. program is the file of the
-   program on this computer that made a call coming in, and on each call its script made, when the port can tell, so the
-   person can be asked about that program by name. input and output are the request's body and its answer, raw, whole,
-   each left out when there is none, and run its Onsay-Run, which ties the lines of one request together. */
+/* A line of home/requests.log, and kept to send: {at, way, ms, caller, program, route, allowed, outcome, why, error,
+   input, output, run} and paid's parts. way is in, a call that came in; call, a call a script made; out, one sent from
+   here. A call in says its outcome by its status, worked, refused or failed. program is the file of the program on this
+   computer that made a call coming in, and on each call its script made, when the port can tell, so the person can be
+   asked about that program by name. input and output are the request's body and its answer, raw, whole, each left out
+   when there is none, and run its Onsay-Run, which ties the lines of one request together. paid is what a call that
+   charged says for Onsay to settle it: charge, and on a call in, signed, the caller's signature over it, or on a call
+   out, nonce, the one it was signed with, which ties it to the line the other computer sends. */
 static void logged(arena *a, const char *way, const char *who, const char *route, int allowed, const char *why,
-    const char *error, double ms, val *input, val *output) {
+    const char *error, double ms, val *input, val *output, int status, val *paid) {
   val *line = v_rec(a);
   buf text = { 0 };
   buf all = { 0 };
@@ -864,6 +899,8 @@ static void logged(arena *a, const char *way, const char *who, const char *route
   if (now_program && strcmp(way, "out")) rec_set(a, line, "program", v_cstr(a, now_program));
   rec_set(a, line, "route", v_cstr(a, route));
   rec_set(a, line, "allowed", VBOOL(allowed));
+  if (!strcmp(way, "in")) rec_set(a, line, "outcome", v_cstr(a, outcome(status)));
+  for (size_t i = 0; paid && i < paid->r.n; i++) rec_set(a, line, paid->r.key[i], paid->r.v[i]);
   if (why) rec_set(a, line, "why", v_cstr(a, why));
   if (error) rec_set(a, line, "error", v_cstr(a, error));
   if (input) rec_set(a, line, "input", input);
@@ -960,7 +997,7 @@ static val *posted(arena *a, const char *lines, size_t n, int hold) {
     const char *answered = got ? text_or(got, "text", "") : "";
     const char *why = !got ? (error.s ? error.s : "it couldn't be reached")
         : arena_fmt(a, "it answered %g: %.200s", status ? status->n : 0, answered);
-    logged(a, "out", set.name, ONSAY "/logs", 0, NULL, why, 0, NULL, got ? v_cstr(a, answered) : NULL);
+    logged(a, "out", set.name, ONSAY "/logs", 0, NULL, why, 0, NULL, got ? v_cstr(a, answered) : NULL, 0, NULL);
   }
   crypto_wipe(eph, 32);
   crypto_wipe(shared, 32);
@@ -1011,7 +1048,7 @@ static double send_log(double last) {
 }
 
 /* 5. The table as Onsay indexes it, {way: offered, lingos: [{name, code, about, settings, functions: [{name, does,
-      inputs, gives, internal, price}]}]}, never where they answer, this computer's own calls first, as the lingo onsay,
+      inputs, gives, internal}]}]}, never where they answer, this computer's own calls first, as the lingo onsay,
       free, each function <group>.<call>. Posted on a thread of its own, as it starts, each time the table changes and when Onsay
       asks, so it reaches Onsay at once and never waits on a held post. One at a time, each reading the table as it goes,
       so the last to reach Onsay is the newest. Kept with what waits to be sent when it doesn't go. */
@@ -1168,7 +1205,7 @@ static val *run_script(arena *a, const char *script, val *values, const caller *
   }
   now = *who;
   now_policy = policy(a);
-  val *got = run_program(a, program, input, (limits){ set.steps, set.ms, &stop }, code, message);
+  val *got = run_program(a, program, input, (limits){ set.steps, set.ms, &stop, now_asking, &charged }, code, message);
   now.name = NULL;
   return got;
 }
@@ -1215,7 +1252,8 @@ static const char *called_as(arena *a, const char *path, val *given, val *values
      3. anything else, or anything that failed to compile on the way, goes to the lingo search as it came, which tries
         the next best way when one fails, and the way that answered is kept as ready code
    Each is judged as the caller's, the search too, so a caller who may not search gets what it was: the compile error,
-   or nothing at that path. When the search finds nothing, its words say so, for the person. Its status and body, JSON. */
+   or nothing at that path. When the search finds nothing, its words say so, for the person. Its status and body, JSON:
+   refused by its code, REFUSED with {error: reason, code: refused}. Its charges stand only when it worked. */
 #define SEARCHED "return lingo.run(a0, a1)"
 static int answer(arena *a, const char *path, const char *body, size_t n, const caller *who, buf *out) {
   const char *code = "unknown";
@@ -1307,12 +1345,14 @@ said:
     buf_json(out, got);
     return 200;
   }
+  charged = 0;
   buf_str(out, "{\"error\":");
   buf_json_str(out, message ? message : "", message ? strlen(message) : 0);
   buf_str(out, ",\"code\":");
   buf_json_str(out, code, strlen(code));
   buf_chr(out, '}');
   if (!strcmp(code, "denied")) return 403;
+  if (!strcmp(code, "refused")) return REFUSED;
   if (!strcmp(code, "unknown") || !strcmp(code, "nothing")) return 404;
   return !strcmp(code, "compile") ? 400 : 500;
 }
@@ -1324,9 +1364,13 @@ typedef struct {
   buf from;
 } visit;
 
+// A web answer, saying the call's outcome in Onsay-Outcome, and what it charged in Onsay-Charge when it worked and did.
 static void respond(pl_conn *c, int status, const char *body, size_t n) {
   buf out = { 0 };
-  buf_fmt(&out, "HTTP/1.1 %d \r\nContent-Type: application/json\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n", status, n);
+  buf_fmt(&out, "HTTP/1.1 %d \r\nContent-Type: application/json\r\nContent-Length: %zu\r\nOnsay-Outcome: %s\r\n", status, n,
+      outcome(status));
+  if (charge_of(status) > 0) buf_fmt(&out, "Onsay-Charge: %.15g\r\n", charge_of(status));
+  buf_str(&out, "Connection: close\r\n\r\n");
   buf_add(&out, body, n);
   pl_put(c, out.s, out.n);
   buf_free(&out);
@@ -1342,9 +1386,10 @@ static int called(arena *a, const char *method, const char *where, val *headers,
   const char *bad = NULL;
   const char *why = NULL;
   int status = 401;
-  caller who = { NULL, 0, 0, NULL };
+  caller who = { NULL, 0, 0, NULL, NULL, NULL };
   who.name = from;
   who.owner = own;
+  charged = 0;
   now_run = text_or(headers, "onsay-run", NULL);
   if (rec_get(headers, "signature-input")) bad = signer(a, headers, method, where, v_text(a, body, n), &who);
   if (!bad && rec_get(headers, "onsay-badge")) who.badge = badge_of(a, text_or(headers, "onsay-badge", ""), &who.begun, &bad);
@@ -1365,8 +1410,19 @@ static int called(arena *a, const char *method, const char *where, val *headers,
     status = answer(a, where, body, n, &who, out);
     why = status == 403 ? "no grant lets them in" : NULL;
   }
+  val *paid = NULL;
+  if (charge_of(status) > 0) {
+    paid = v_rec(a);
+    rec_set(a, paid, "charge", v_num(a, charge_of(status)));
+    if (who.base) {
+      val *proof = v_rec(a);
+      rec_set(a, proof, "base", v_cstr(a, who.base));
+      rec_set(a, proof, "signature", v_cstr(a, who.signature));
+      rec_set(a, paid, "signed", proof);
+    }
+  }
   logged(a, "in", who.name, where, status < 400, why, status >= 400 ? out->s : NULL, (pl_now() - began) * 1000,
-      n ? v_text(a, body, n) : NULL, v_text(a, out->s ? out->s : "", out->n));
+      n ? v_text(a, body, n) : NULL, v_text(a, out->s ? out->s : "", out->n), status, paid);
   now_run = NULL;
   return status;
 }
@@ -1418,7 +1474,7 @@ static void visitor(void *arg) {
     buf_str(&out, "{\"error\":");
     buf_json_str(&out, bad, strlen(bad));
     buf_chr(&out, '}');
-    logged(a, "in", ip, "/", 0, NULL, out.s, 0, NULL, v_text(a, out.s, out.n));
+    logged(a, "in", ip, "/", 0, NULL, out.s, 0, NULL, v_text(a, out.s, out.n), status, NULL);
   } else {
     const char *where = v_text(a, in.s + method + 1, path)->t.s;
     status = called(a, v_text(a, in.s, method)->t.s, where, headers, in.s + from, size, ip, 0, &out);
@@ -1433,8 +1489,8 @@ static void visitor(void *arg) {
 }
 
 /* A call that came for this computer through Onsay, {id, method, path, headers, body, as, at, device, signed}, on its own
-   thread: called like one from the port, and its answer sent straight back, a line {way: answer, id, status, body}, kept
-   with what waits to be sent when that doesn't go. One Onsay sent as: me, the account's own call from another of its
+   thread: called like one from the port, and its answer sent straight back, a line {way: answer, id, status, outcome,
+   charge, body}, as a call in is logged, kept with what waits to be sent when that doesn't go. One Onsay sent as: me, the account's own call from another of its
    computers, signed by Onsay over {as, at, device, id, method, path, sha256}, is the owner's: Onsay vouches for who
    asked, as it vouches for every computer of the account. Any other is through Onsay, judged by the grants. */
 static void relayed(void *arg) {
@@ -1471,6 +1527,8 @@ static void relayed(void *arg) {
   rec_set(a, line, "way", v_cstr(a, "answer"));
   rec_set(a, line, "id", rec_get(call, "id") ? rec_get(call, "id") : NOTHING);
   rec_set(a, line, "status", v_num(a, status));
+  rec_set(a, line, "outcome", v_cstr(a, outcome(status)));
+  if (charge_of(status) > 0) rec_set(a, line, "charge", v_num(a, charge_of(status)));
   rec_set(a, line, "body", v_text(a, out.s ? out.s : "", out.n));
   buf_json(&said, line);
   buf_chr(&said, '\n');
@@ -1525,8 +1583,7 @@ int main(int argc, char **argv) {
       "code or its functions' signatures, and where its calls are sent, or with no address its code kept to run here, "
       "giving back its functions; with no code, taken away",
       lingo_offer);
-  phrase_add("lingo", "none", "list() -> [{name: text, about: text, functions: [{name: text, does: text, price?: record}]}]: every lingo offered "
-      "here, a function's price {amount} or {minimum} in credits when it isn't free", lingo_list);
+  phrase_add("lingo", "none", "list() -> [{name: text, about: text, functions: [{name: text, does: text}]}]: every lingo offered here", lingo_list);
   phrase_add("lingo", "none", "code(name: text) -> text?: the code of a lingo kept here, nothing for one that answers elsewhere", lingo_code);
   phrase_add("badge", "none",
       "read() -> {caller: text, data: record}: who called the run, and the data of the badge it holds, a later grant's "
@@ -1543,6 +1600,8 @@ int main(int argc, char **argv) {
       "may(address: text) -> bool: whether a call to that address on this computer, like files/read, would be let in now, "
       "without making it",
       badge_may);
+  phrase_add("lingo", "none", "refuse(reason: text): the run stopped, and the call that came in answered refused, nothing billed",
+      refuse);
   for (size_t i = 0; i < BUILT_IN; i++) {
     native_begin(i + 1);
     built_in[i].add();
@@ -1563,7 +1622,7 @@ int main(int argc, char **argv) {
   if (verb && !strcmp(verb, "run")) {
     arena *a = arena_new();
     buf out = { 0 };
-    caller me = { "this computer", 1, 1, NULL };
+    caller me = { "this computer", 1, 1, NULL, NULL, NULL };
     int status = answer(a, "/", argc > 3 ? argv[3] : "", argc > 3 ? strlen(argv[3]) : 0, &me, &out);
     printf("%.*s\n", (int)out.n, out.s ? out.s : "null");
     return status == 200 ? 0 : 1;

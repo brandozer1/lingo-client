@@ -37,6 +37,23 @@ after a day, and all of them when what is offered changes. When the search looke
 person are the answer, code `nothing`, a 404. A caller who may not search, or a search that gave no ways, gets what it
 was: the compile error, or nothing at that path. `use(...)` of a name nothing here answers goes through Onsay.
 
+**Worked, refused or failed.** A function is free; it charges in its return, `return move charge 5`, and says a call
+isn't for it with `refuse(reason)` (`../docs/lingo.md`, section 9). Every call that came in ends `worked` (it
+returned, charged what its return said), `refused` (a 422, `{"error": reason, "code": "refused"}`, nothing charged) or
+`failed` (any error, crash or limit, nothing charged), and the floor says which, with the charge only when it worked and
+is more than 0. The floor never moves money: each side of a call posts what it saw in its log, and Onsay settles each
+call once, from whichever says it first, the other checking it.
+
+| Where | What it carries |
+|-------|-----------------|
+| the log line of a call in | `"outcome": "worked"`, and when it charged, `"charge": 5` and `"signed": {base, signature}`, the exact bytes its caller signed and the signature, so Onsay bills only those who really called |
+| the log line of a call out that was charged | `"charge": 5`, as its answer said, and `"nonce"`, the one it was signed with, which ties it to the other computer's line |
+| the answer to a call through Onsay | `{"way": "answer", "id", "status", "outcome", "charge", "body"}` |
+| a web answer on the port | the headers `Onsay-Outcome: worked` and `Onsay-Charge: 5` |
+
+The log is in format `0.4.0`, said first in every post: what is offered carries no price, and calls carry their
+outcome and charge.
+
 Its settings (`floor.json`): `home`, `port`, `name`, `owner` (a key or a handle), `keys` (signers known by key),
 `steps` and `ms`. On the command line, `floor <settings> key` gives its key and `floor <settings> run <script>` runs a
 script as the owner.

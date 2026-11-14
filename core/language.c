@@ -1039,7 +1039,7 @@ static int fits(arena *a, val *x, const char *words) {
 // 1. lex(c, s, n, out)                  -> text to tokens
 // 2. parse_with(c, code, n)             -> tokens to a tree, checked against the phrases it may use
 // 3. listing(a, file, code, why)        -> a lingo written in Lingo, its listing made from its code: every fn, the
-//                                          comments above each, its price, its about, and the settings it reads
+//                                          comments above each, its about, and the settings it reads
 // 4. lingo_call(a, inst, fn)            -> a program that calls one function, every Lingo function it reaches pulled in
 // 5. lingo_load(a, natives, stacked)    -> every lingo a computer has, each compiled against all of them, with what each
 //                                          function needs and how many lingo(...) calls it makes
@@ -1458,6 +1458,16 @@ static val *word(ps *p, const char *what) {
 static val *expr(ps *p);
 static val *statement(ps *p);
 
+/* Whether the next words are a return's charge, like return move charge 5 or return charge 2: the word charge on the
+   return's own line with credits after it, so a value named charge, return charge, is still a value. */
+static int charging(ps *p, int line) {
+  token *t = peek(p, 0);
+  token *next = peek(p, 1);
+  if (!t || t->k != ID || strcmp(t->v, "charge") || t->line != line) return 0;
+  if (!next || next->line != line) return 0;
+  return next->k != SYM || !strcmp(next->v, "(") || !strcmp(next->v, "-");
+}
+
 // (a, b=10). A default is any expression, worked out when the value is missing.
 /* Plain text, with no {} in it, saying what something is: its words, or NULL when the next token isn't one. */
 static const char *says(ps *p) {
@@ -1609,9 +1619,14 @@ static val *bare(ps *p) {
   if (parse_accept(p, "break")) return mk(a, "break", 0);
   if (parse_accept(p, "continue")) return mk(a, "next", 0);
   if (parse_accept(p, "return")) {
-    if (end(p) || is(p, "}", 0) || is(p, ";", 0)) return mk(a, "return", 1, NOTHING);
-    GET(e, expr(p));
-    return mk(a, "return", 1, e);
+    int line = p->t[p->i - 1].line;
+    val *e = NOTHING;
+    if (!charging(p, line) && !end(p) && !is(p, "}", 0) && !is(p, ";", 0)) e = expr(p);
+    if (!e) return NULL;
+    if (!charging(p, line)) return mk(a, "return", 1, e);
+    p->i++;
+    GET(credits, expr(p));
+    return mk(a, "return", 2, e, credits);
   }
   if (parse_accept(p, "fail")) {
     GET(e, expr(p));
@@ -2055,24 +2070,6 @@ static val *program(ps *p) {
         if (!ok) return NULL;
       }
       const char *does = says(p);
-      // Its price, costs 5 or costs at least 2, in credits; with none it is free. These words mean it only here.
-      token *t = peek(p, 0);
-      if (t && t->k == ID && !strcmp(t->v, "costs")) {
-        const char *kind = "amount";
-        token *least = peek(p, 2);
-        p->i++;
-        t = peek(p, 0);
-        if (t && t->k == ID && !strcmp(t->v, "at") && least && least->k == ID && !strcmp(least->v, "least")) {
-          kind = "minimum";
-          p->i += 2;
-          t = peek(p, 0);
-        }
-        if (!t || t->k != NUM) return expected(p, "a price in credits after costs, 0 or more, like costs 5 or costs at least 2");
-        p->i++;
-        val *price = v_rec(a);
-        rec_set(a, price, kind, v_num(a, t->num));
-        rec_set(a, f, "price", price);
-      }
       GET(body, block(p));
       rec_set(a, f, "params", ps_);
       rec_set(a, f, "body", body);
@@ -2274,7 +2271,6 @@ static val *listing(arena *a, const char *file, val *code, const char **why) {
     rec_set(a, ph, "params", params);
     rec_set(a, ph, "does", rec_get(fn, "does") ? rec_get(fn, "does") : T(a, ""));
     if (rec_get(fn, "gives")) rec_set(a, ph, "gives", rec_get(fn, "gives"));
-    if (rec_get(fn, "price")) rec_set(a, ph, "price", rec_get(fn, "price"));
     if (fname[0] == '_') rec_set(a, ph, "internal", VBOOL(1));
     list_push(a, phrases, ph);
   }
@@ -2353,6 +2349,8 @@ static val *rw_body(rw *r, val *b) {
       for (size_t k = 4; k < s->l.n; k++) list_push(a, x, s->l.v[k]);
     } else if (tagged(s, "try"))
       x = mk(a, "try", 3, rw_body(r, s->l.v[1]), s->l.v[2], rw_body(r, s->l.v[3]));
+    else if (tagged(s, "return") && s->l.n > 2)
+      x = mk(a, "return", 2, rw_ex(r, s->l.v[1]), rw_ex(r, s->l.v[2]));
     else if (tagged(s, "return") || tagged(s, "fail") || tagged(s, "do"))
       x = mk(a, s->l.v[0]->t.s, 1, rw_ex(r, s->l.v[1]));
     else
@@ -3116,13 +3114,21 @@ static int exec(run *r, val *body, val *frame, val **back) {
       }
       case T_BREAK: return BREAK;
       case T_NEXT: return NEXT;
-      case T_RETURN: *back = eval(r, item(s, 1), frame); return BACK;
+      case T_RETURN: {
+        *back = eval(r, item(s, 1), frame);
+        // Only a return of the function the call came in for charges it, each one saying its charge, none being free.
+        double credits = s->l.n > 2 ? num_of(r, eval(r, item(s, 2), frame), "charge") : 0;
+        if (!(credits >= 0) || isinf(credits)) fail(r, "type", "A charge is credits, 0 or more, not %g", credits);
+        if (r->charge && r->fn && r->charging && !strcmp(r->fn, r->charging)) *r->charge = credits;
+        return BACK;
+      }
       case T_FAIL: fail(r, "fail", "%s", text_of(r, eval(r, item(s, 1), frame))->t.s); break;
       case T_TRY: {
         trap_t t;
         void *volatile prev = r->trap;
         volatile int depth = r->depth;
         const char *volatile lingo = r->lingo;
+        const char *volatile fn = r->fn;
         volatile int catching = r->catching;
         size_t mark = r->at.n;
         r->trap = &t;
@@ -3139,8 +3145,9 @@ static int exec(run *r, val *body, val *frame, val **back) {
         r->catching = catching;
         r->depth = depth;
         r->lingo = lingo;   // an error caught from another lingo's function never leaves this code running as it
+        r->fn = fn;
         if (!strcmp(r->code, "limit") || !strcmp(r->code, "denied") || !strcmp(r->code, "stopped") ||
-            !strcmp(r->code, "crash"))
+            !strcmp(r->code, "crash") || !strcmp(r->code, "refused"))
           rethrow(r);
         rec_set(r->a, frame, name_of(item(s, 2)), v_text(r->a, r->message.s ? r->message.s : "", r->message.n));
         at_cut(r, mark);
@@ -3169,8 +3176,10 @@ static val *call_fn(run *r, const char *name, val *args) {
   val *frame = v_rec(r->a);
   val *back = NOTHING;
   const char *was = r->lingo;
+  const char *was_fn = r->fn;
   bind_args(r, rec_get(fn, "params"), args, 0, frame);
   r->lingo = v_text(r->a, name, strcspn(name, "."))->t.s;   // memo.recall is memo's
+  r->fn = name;
   at_cut(r, 0);
   buf_fmt(&r->at, "fn:%s", name);
   int out = exec(r, rec_get(fn, "body"), frame, &back);
@@ -3178,6 +3187,7 @@ static val *call_fn(run *r, const char *name, val *args) {
   buf_add(&r->at, saved.s ? saved.s : "", saved.n);   // only on success, so an error inside still points inside
   buf_free(&saved);
   r->lingo = was;
+  r->fn = was_fn;
   r->depth--;
   return out == BACK ? back : NOTHING;
 }
@@ -3302,7 +3312,8 @@ static val *eval(run *r, val *e, val *frame) {
 // 5. The run is kept in the arena, never on the stack, so what an error left in it is read whole after the jump back.
 val *run_program(arena *a, val *program, val *input, limits l, const char **code, const char **message) {
   run *r = arena_get(a, sizeof *r);
-  *r = (run){ .a = a, .program = program, .left = l.steps, .until = pl_now() * 1000 + l.ms, .stop = l.stop };
+  *r = (run){ .a = a, .program = program, .left = l.steps, .until = pl_now() * 1000 + l.ms, .stop = l.stop,
+    .charging = l.charging, .charge = l.charge };
   trap_t t;
   r->trap = &t;
   val *back = NOTHING;
@@ -3329,7 +3340,8 @@ val *run_program(arena *a, val *program, val *input, limits l, const char **code
   } else {
     const char *line = text_or(rec_get(program, "lines"), r->at_error.s ? r->at_error.s : "", NULL);
     buf m = { 0 };
-    if (line && strcmp(r->code, "nothing")) buf_fmt(&m, "%s: ", line);   // the search's words for the person carry no place
+    // The search's words for the person, and a refusal's reason, carry no place.
+    if (line && strcmp(r->code, "nothing") && strcmp(r->code, "refused")) buf_fmt(&m, "%s: ", line);
     buf_add(&m, r->message.s ? r->message.s : "", r->message.n);
     *code = v_cstr(a, r->code)->t.s;
     *message = v_text(a, m.s, m.n)->t.s;

@@ -110,9 +110,6 @@ fn name(value: type "what it is" = default, ...) -> type "what it does" { ...ste
   `k is text, but this is number`.
 - **Text after the values,** or after `-> type`, is what the function does, and text after a value's name and type is
   what that value is: plain text, with no `{}` in it. They are what people and the lingo search read (section 11).
-- **A price,** last before the body: `costs 5`, credits a call, or `costs at least 2`, the least it takes, like an
-  auction's reserve. With none it is free. It is sent with what is offered, as `price`, `{amount: 5}` or
-  `{minimum: 2}`. `costs`, `at` and `least` mean this only there, so they stay free as names everywhere else.
 - **A function whose name starts with `_`** is the lingo's own: its other functions call it, but it is never shared,
   and Onsay lists it nowhere.
 
@@ -162,6 +159,7 @@ every program fully known before it runs.
 | `break`                                    | Leaves the innermost loop                                |
 | `continue`                                 | Skips to the next turn of the innermost loop             |
 | `return e`, `return`                       | Ends the function or script with a value, or with nothing |
+| `return e charge n`, `return charge n`     | The same, charging n credits for the call that came in, when this is its function (section 9) |
 | `fail e`                                   | Stops with an error whose message is `e` as text         |
 | `try{...}catch e{...}`                     | Runs the first block, and the second if it fails, with the error's message in `e` |
 | `f(...)`, `group.phrase(...)`              | A call, run for what it does                             |
@@ -174,7 +172,8 @@ every program fully known before it runs.
   `for(x in list){` still read the same.
 - Blocks are always in braces, even for one step.
 - A step on its own must be a call. `x` alone, or `x+1`, is an error, because it would work something out and throw it away.
-- `return` takes a value unless the next thing is `}`, `;` or the end.
+- `return` takes a value unless the next thing is `}`, `;` or the end. `charge` after it, on the same line with credits
+  after it, is its charge, so a value named charge is still a value: `return charge`.
 - `break` and `continue` belong inside loops.
 
 **What `for` goes through:**
@@ -420,6 +419,24 @@ that fails is answered with its message, and a status by its code (`core/README.
 | `limit`   | Too many steps, too long, or calls 1000 deep             | no               | 500    |
 | `stopped` | Stopped from outside                                     | no               | 500    |
 | `crash`   | The C code under a phrase crashed, like a bad pointer in a native library. Only this call ends, and it can be tried again | no | 500 |
+| `refused` | The code said `refuse(reason)`: the call isn't for it. Its message is the reason alone, with no file or line | no | 422 |
+
+**Charges and refusals.** A function is free. A call is charged only as its result is sent, so the charge is part of
+the return: `return move charge 5`, or `return charge 2` for a result of nothing, credits 0 or more. Each return says
+its own, and one without a charge is free. Only a return of the function the call came in for charges it: a function
+it calls has its own returns, which charge nothing here. Nothing says ahead what a call will come to. `refuse(reason)`
+stops the run at once when a call isn't for it, answered 422 with `{error: reason, code: "refused"}`. Every call that
+came in from outside ends one of three ways, and the floor says which, its log line, its answer through Onsay and its
+web answer alike (`core/README.md`, The floor):
+
+| Outcome   | When                                                     | Its charge |
+|-----------|----------------------------------------------------------|------------|
+| `worked`  | It returned                                              | what its return said, settled by Onsay |
+| `refused` | Its code said `refuse(reason)`                           | none. A refusal is the free way to say no, never a failure |
+| `failed`  | Any error, a crash, or out of steps, memory or time      | none |
+
+A call that came in as words, answered by a lingo here the search found, is charged what that lingo's return said. A
+refusal from another computer is a failure where it was called, never that call's own refusal.
 
 Errors in reading a lingo, like a missing `}` or the wrong number of values, are found when it loads, before anything runs, and
 give its file, the line and what was expected. The lingo is set aside with them until it is fixed.
@@ -739,11 +756,12 @@ can write in a few lines is a standard function instead, written in Lingo on thi
 | `http.send(method, url, headers=nothing, body=nothing, timeout=30)` | The computer's own web request, needing `net`. `request` and `use(...)` stand on it |
 | `socket.open(url, headers=nothing)`, `send(socket, text)`, `receive(socket, seconds=30)`, `close(socket)` | A WebSocket, needing `net`, for a service that talks both ways, like a browser driven over WebDriver BiDi. A request can't wait for a message the way a socket does |
 | `connection.open(address)`, `send(connection, data)`, `receive(connection, seconds=30)`, `close(connection)`, `listen(address)`, `accept(listener, seconds=30)` | Bytes over a connection, needing `net`: the floor every protocol is written on. Its address says its kind, `tcp://example.com:80` or `udp://10.0.0.5:53` |
-| `badge.read()` | Who called the request running, `{caller, data}`, and the data of the badge it came with, a later grant's written over an earlier's: what a session would keep, carried by the request instead (`core/README.md`, Who may do what) |
+| `badge.read()` | Who called the request running, `{caller, data}`, the data of the badge it came with, a later grant's written over an earlier's: what a session would keep, carried by the request instead (`core/README.md`, Who may do what) |
 | `badge.give(to, allow, until=nothing, data=nothing)` | The run's badge with a narrower grant by this computer stapled on, as base64 to send. A run with no badge gets a new one only when it is the owner's. A wider grant gains nothing |
 | `badge.as(badge, code)` | Code run under a badge instead of the run's own, refused unless it is the run's own badge with grants stapled on (any, for the owner's run with none) |
 | `badge.may(address)` | Whether a call to that address on this computer, like `files/read`, would be let in for the run now, without making it |
-| `lingo.list()` | Everything on the computer an agent can call by name, `{name, about, functions: [{name, does, price}]}`, `price` only when it isn't free: its own groups first, like `input` and `window`, each call's `does` its values and what it does, then every lingo offered. `std` and `lingo` aren't listed |
+| `refuse(reason)` | The run stopped at once, the call that came in answered refused with the reason, nothing billed (section 9). Written bare, like `refuse("only small files")` |
+| `lingo.list()` | Everything on the computer an agent can call by name, `{name, about, functions: [{name, does}]}`: its own groups first, like `input` and `window`, each call's `does` its values and what it does, then every lingo offered. `std` and `lingo` aren't listed |
 | `lingo.code(name)` | A lingo's code, `{code, openapi}`, its openapi.json as its maker writes it, to change it or learn from it |
 | `lingo.save(name, code, openapi=nothing)` | A lingo written or changed as a folder in the lingos folder, started and read again at once, needing `lingos`: its functions, or why it can't run, like its code's first mistake. How agents keep what they work out |
 

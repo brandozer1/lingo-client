@@ -147,13 +147,17 @@ struct run {
   int depth;
   int catching;             // how many try blocks it is inside, where a failing call is the catch's, never searched
   const char *lingo;        // the lingo whose code runs now, like memo, which store and settings answer to; NULL at the command line
+  const char *fn;           // the function whose code runs now, like memo.recall
+  const char *charging;     // the function the call came in for, whose return's charge goes in charge
+  double *charge;
   void *trap;               // where an error jumps to
   char code[16];
   buf message, at, at_error;
 };
 
-// What a run may take, and what stops it.
-typedef struct { long long steps; double ms; volatile int *stop; } limits;
+/* What a run may take, and what stops it. charging is the function a call that came in is for, like chess.move, and
+   charge where what its return charged goes, return move charge 5, or nothing to charge. */
+typedef struct { long long steps; double ms; volatile int *stop; const char *charging; double *charge; } limits;
 
 // The program's value, or NULL with the error's code and message, its file and line first when it is in a lingo.
 val *run_program(arena *a, val *program, val *input, limits l, const char **code, const char **message);

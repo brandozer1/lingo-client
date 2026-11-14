@@ -2112,7 +2112,7 @@ void may(run *r, const char *id) {
   val *p = job.policy ? job.policy : policy(r->a);
   const char *route = arena_fmt(r->a, "/onsay/%s", id);
   const char *why = NULL;
-  caller c = { route_of(r->a, entry_of(job.lingo)), 0, 0, NULL };
+  caller c = { route_of(r->a, entry_of(job.lingo)), 0, 0, NULL, NULL, NULL };
   for (char *x = (char *)route + 7; *x; x++)
     if (*x == '.') *x = '/';
   int in = let_in(r->a, p, &c, route, 0, &why);
@@ -2190,7 +2190,7 @@ static val *core_call(
   }
   long before = socks_made;
   long opened = cns_made;
-  val *got = run_program(a, program, input, (limits){ set.steps, set.ms, stop }, code, message);
+  val *got = run_program(a, program, input, (limits){ set.steps, set.ms, stop, NULL, NULL }, code, message);
   while (socks && socks->id > before) let_go(socks, "as the run ended", 0);
   while (cns && cns->id > opened) cn_let_go(cns);
   return got;
@@ -2682,7 +2682,7 @@ void core_serve(const char *text, size_t n, const char *given, buf *out) {
   const char *method = text_or(m, "method", "GET");
   const char *ip = given ? NULL : text_or(m, "ip", "");
   const char *refused = NULL;
-  caller c = { NULL, 0, 0, NULL };
+  caller c = { NULL, 0, 0, NULL, NULL, NULL };
   int full;   // whether the caller reaches the control routes, and so everything here: the owner, or its badge
   int allowed = 1;   // allowed and let, for its line in requests.log: whether it was let in, and what let it
   const char *let = NULL;

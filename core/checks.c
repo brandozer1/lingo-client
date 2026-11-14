@@ -7,7 +7,7 @@
 // 1. named(s)                                 -> whether s is a lingo's name
 // 2. canonical(b, x), key_bytes, signed_by    -> a value as Onsay signs it, a key's bytes, and a signature checked
 // 3. names, covers, opens, let_in             -> whether a grant names a caller and opens an address, and the one check
-// 4. badge_of(a, text), badge_make(a, g)      -> a badge checked, and one made by this computer's key
+// 4. badge_of(a, text), badge_make            -> a badge checked, and one made by this computer's key
 // 5. signer(a, headers, ...), sign_request   -> who signed a request, and one this computer sends signed
 // 6. key_of(name), key_sign(name), key_forget -> this computer's own keys, kept sealed in home/keys
 // 7. header_names(a, h)                       -> headers as a record by lower case name
@@ -88,11 +88,13 @@ static int signed_by(val *value, val *signed_, const char *key) {
 /* A request's caller, by whatever proof it came with. name is how the log names them: this computer, me, onsay, a
    signer's keyid like laptop.brandon, or ip 203.0.113.7 for anyone unproven. owner when it is this computer's own: the
    command line, the account's own call, or a computer of its handle. badge is the badge it came with, checked, its
-   grants in order, and begun when the owner signed its first. */
+   grants in order, and begun when the owner signed its first. base and signature are what its signer signed and the
+   signature, kept so Onsay can check a charge was for a call they made. */
 typedef struct {
   const char *name;
   int owner, begun;
   val *badge;
+  const char *base, *signature;
 } caller;
 
 
@@ -206,8 +208,8 @@ static int let_in(arena *a, val *p, const caller *c, const char *path, int listi
 /* 4. A badge checked: the base64 of a JSON list of grants, each handing on the one before. Every grant is version 1,
       v, the one this computer knows, so a newer one fails closed. Every signature checks out against its signer's key,
       this computer's own, by its name or its key, or the one on its record, over the sig before it and the grant as
-      Onsay signs, and each grant but the last lets pass on to the next's signer. Its grants, begun set when the owner
-      signed the first, or NULL with why. */
+      Onsay signs, and each grant but the last lets pass on to the next's signer.
+      Its grants, begun set when the owner signed the first, or NULL with why. */
 static val *badge_of(arena *a, const char *text, int *begun, const char **why) {
   buf raw = { 0 };
   buf name = { 0 };
@@ -314,6 +316,7 @@ static val *badge_make(arena *a, val *g, const char **why) {
   }
   buf_str(&message, list->l.n ? text_or(list->l.v[list->l.n - 1], "sig", "") : "");
   canonical(&message, grant);
+  list_push(a, list, grant);
   int made = key_sign("device", message.s, message.n, sig);
   buf_free(&message);
   if (!made) {
@@ -322,7 +325,6 @@ static val *badge_make(arena *a, val *g, const char **why) {
   }
   base64(&out, sig, 64);
   rec_set(a, grant, "sig", v_text(a, out.s, out.n));
-  list_push(a, list, grant);
   out.n = 0;
   buf_json(&message, list);
   base64(&out, (unsigned char *)message.s, message.n);
@@ -450,6 +452,8 @@ static const char *signer(arena *a, val *h, const char *method, const char *path
       nonces[nonce_count++].at = now;
       c->name = keyid;
       c->owner = truthy(rec_get(who, "mine") ? rec_get(who, "mine") : NOTHING);
+      c->base = v_text(a, base.s, base.n)->t.s;
+      c->signature = v_text(a, sig + strlen(label), strcspn(sig + strlen(label), ":"))->t.s;
     }
     pl_leave(nonce_gate);
   }
