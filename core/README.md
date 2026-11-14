@@ -20,7 +20,7 @@ this one, `bin/floor.exe` and `bin/linux-*/floor`, and tested by `test/floor.mjs
 
 | Call | What it does |
 |------|--------------|
-| `POST /`, any text as its body, or `{script, values}` | the one input (below): Lingo is run, anything else goes to the lingo search with its values by name. Each of the computer's own calls it makes but pure computing is a request to `/group/name`, like `/lingo/use`, judged by the policy for whoever sent it |
+| `POST /`, any text as its body, or `{script, values}` | the one input (below): Lingo is run, anything else goes to the lingo search with its values by name. Only for a caller let reach `/lingo/run`: the owner, or whoever a grant or badge opens it to, never anyone by default, so a function's charge can't be skipped inside a script. Each of the computer's own calls it makes but pure computing is a request to `/group/name`, like `/lingo/use`, judged by the policy for whoever sent it |
 | `POST /any/path`, values as JSON or text | the one input too: a path to a lingo or group open here is the script `return group.name(...)`, a list in order or a record by name; a path with nothing open at it goes to the lingo search as it came |
 | `POST /lingo/offer`, `{name, code, address}` | a lingo offering itself here: its code, or only its functions' signatures, read by the compiler into what it does, and the address its calls are sent to. Kept in `home/offered.json`, its table, and sent to Onsay as each lingo's OpenAPI, never its address. A call of an offered lingo, `echo.hello(...)`, goes there, signed by this floor. With no code, it is taken away; one of this computer's own groups can't be offered |
 | `GET /` | what it is, `{floor, name, key}`, its own key for an owner to add to their record |
