@@ -85,11 +85,33 @@ const opened = (m) => {
 
 ////////// 2. THE STAND-IN //////////
 
-const logs = [], echoed = [], asks = []   // asks: what the lingo search was asked
+const logs = [], echoed = [], asks = [], linkAsks = []   // asks: what the lingo search was asked; linkAsks: each over the raw link
 const relay = []   // calls for the floor, handed over in the answer to its next held post
 // The newest release, signed as Onsay signs it unless forged, and its files by name.
 const release = { version: '9.9.9', files: [] }, shipped = {}
 let forged = false
+// The lingo search: the ways it finds, best first, in list mode, or a call relayed to its address, answered by json.
+const searchAsk = (q, json) => {
+  asks.push(q)
+  const here = `http://127.0.0.1:${ONSAY_PORT}`
+  if (q.address === 'weather.tester/now') return json(200, { value: 'raining' })
+  if (q.mode !== 'list') return json(200, { error: 'the floor asks for ways', code: 'type' })
+  if (q.ask.includes('refused')) return json(401, { error: 'Sign in to continue' })
+  if (q.ask === 'hello there') return json(404, { error: 'Your computers are all off right now. Open Onsay on one and ask again.', code: 'nothing' })
+  if (q.ask === 'the weather in a city') {
+    return json(200, { value: [
+      { address: `${here}/weather`, inputs: {}, needs: ['city'] },
+      { address: `${here}/broken`, inputs: {} },
+      { address: `${here}/weather`, inputs: { city: q.values.city } },
+    ] })
+  }
+  if (q.ask === 'return 2 +') return json(200, { value: [{ address: `${here}/broken`, inputs: {} }] })
+  if (q.ask === 'whats the weather in rome') return json(200, { value: [{ address: `${here}/weather`, inputs: { city: 'Rome' } }] })
+  if (q.ask === '/forecast/today') return json(200, { value: [{ address: `${here}/weather`, inputs: { city: q.values.city } }] })
+  if (q.ask === 'the weather where I am') return json(200, { value: [{ address: `${here}/weather`, inputs: { city: q.values.messages?.[0]?.content } }] })
+  return json(200, { value: [] })
+}
+
 const stand = http.createServer((req, res) => {
   let body = ''
   req.on('data', (d) => { body += d })
@@ -116,28 +138,7 @@ const stand = http.createServer((req, res) => {
     if (req.url === '/refuses') return json(422, { error: 'not for me', code: 'refused' })
     if (req.url === '/charges') { res.writeHead(200, { 'content-type': 'application/json', 'onsay-charge': '{"amount":4,"in":2,"out":6}' }); return res.end('"done"') }
     if (req.url === '/weather') return json(200, `sunny in ${JSON.parse(body).city}`)
-    // The lingo search: the ways it finds, best first, in list mode, or a call relayed to its address.
-    if (req.url === '/search/ask') {
-      const q = JSON.parse(body)
-      asks.push(q)
-      const here = `http://127.0.0.1:${ONSAY_PORT}`
-      if (q.address === 'weather.tester/now') return json(200, { value: 'raining' })
-      if (q.mode !== 'list') return json(200, { error: 'the floor asks for ways', code: 'type' })
-      if (q.ask.includes('refused')) return json(401, { error: 'Sign in to continue' })
-      if (q.ask === 'hello there') return json(404, { error: 'Your computers are all off right now. Open Onsay on one and ask again.', code: 'nothing' })
-      if (q.ask === 'the weather in a city') {
-        return json(200, { value: [
-          { address: `${here}/weather`, inputs: {}, needs: ['city'] },
-          { address: `${here}/broken`, inputs: {} },
-          { address: `${here}/weather`, inputs: { city: q.values.city } },
-        ] })
-      }
-      if (q.ask === 'return 2 +') return json(200, { value: [{ address: `${here}/broken`, inputs: {} }] })
-      if (q.ask === 'whats the weather in rome') return json(200, { value: [{ address: `${here}/weather`, inputs: { city: 'Rome' } }] })
-      if (q.ask === '/forecast/today') return json(200, { value: [{ address: `${here}/weather`, inputs: { city: q.values.city } }] })
-      if (q.ask === 'the weather where I am') return json(200, { value: [{ address: `${here}/weather`, inputs: { city: q.values.messages?.[0]?.content } }] })
-      return json(200, { value: [] })
-    }
+    if (req.url === '/search/ask') return searchAsk(JSON.parse(body), json)
     json(404, { error: 'nothing here' })
   })
 })
@@ -262,9 +263,9 @@ const CASES = [
     const r = await call('/', { script: 'the weather where I am', values: { messages: [{ role: 'user', content: 'Oslo' }] } }, owner)
     return r.status === 200 && r.json === 'sunny in Oslo'
   }],
-  ['a path with nothing open at it goes to the lingo search as it came, its values by name', async () => {
+  ['a path with nothing open at it goes to the lingo search as it came, its values by name, asked over the raw link', async () => {
     const r = await call('/forecast/today', { city: 'Quito' }, owner)
-    return r.status === 200 && r.json === 'sunny in Quito' && asks.at(-1).ask === '/forecast/today'
+    return r.status === 200 && r.json === 'sunny in Quito' && asks.at(-1).ask === '/forecast/today' && linkAsks.includes('/search/ask')
   }],
   ['the same request again goes straight to the way found for it, ready code, with no search, its values given anew', async () => {
     const had = asks.length
@@ -693,9 +694,17 @@ const link = net.createServer((s) => {
     got = Buffer.concat([got, chunk])
     if (got.length < 4 || got.length < 4 + got.readUInt32BE(0)) return
     const m = JSON.parse(got.subarray(4, 4 + got.readUInt32BE(0)).toString())
+    const answer = (status, body) => s.end(framed(sealedTo(JSON.stringify({ status, body }), m.key)))
+    // A call sealed in it, {path, body}: the search over the link, counted as asked over it.
+    if (m.call === true) {
+      const { text, ok } = opened(m)
+      const call = JSON.parse(text)
+      linkAsks.push(call.path)
+      if (!ok || call.path !== '/search/ask') return answer(404, { error: 'nothing here' })
+      return searchAsk(call.body, (status, v) => answer(200, v))
+    }
     logs.push({ ...opened(m), when: Date.now(), link: true })
-    const answer = { status: 200, body: { kept: 1, next: 1, calls: m.hold ? relay.splice(0) : [] } }
-    s.end(framed(sealedTo(JSON.stringify(answer), m.key)))
+    answer(200, { kept: 1, next: 1, calls: m.hold ? relay.splice(0) : [] })
   })
 })
 await new Promise((r) => link.listen(LINK_PORT, '127.0.0.1', r))

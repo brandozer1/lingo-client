@@ -16,7 +16,8 @@ out. It takes a call, checks who signed it and whether the policy lets them, run
 sends its log to Onsay blind, sealed so only Onsay can read it, as often as Onsay's answer says, waiting twice as long
 after each try that doesn't go, up to an hour. It sends over the raw link, a plain byte pipe to Onsay on 6969 (the
 test build 8789): one connection a post, each way its length in 4 bytes then its JSON, Onsay's answer sealed to this
-computer's key and signed by Onsay. When Onsay can't be reached there it leaves the link for 5 minutes and posts over
+computer's key and signed by Onsay. Looking up who a key belongs to, and asking the lingo search, go the same
+way, {path, body} sealed in a post with call true. When Onsay can't be reached there it leaves the link for 5 minutes and posts over
 the web, as it did before. Everything else becomes a lingo. It is built beside
 this one, `bin/floor.exe` and `bin/linux-*/floor`, and tested by `test/floor.mjs`, until the releases switch to it
 (`../../onsay/docs/lingo-function.md`, The floor).
