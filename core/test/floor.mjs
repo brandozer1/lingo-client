@@ -423,7 +423,7 @@ const CASES = [
     for (let i = 0; i < 30 && !posted().some((l) => l.run === 'run_format' && l.way === 'in'); i++) await pause(100)
     const heads = logs.map((x) => JSON.parse(x.text.split('\n')[0]))
     const line = posted().find((l) => l.run === 'run_format' && l.way === 'in')
-    return heads.every((h) => h.way === 'format' && h.format === '0.5.0' && /^(windows|linux)/.test(h.facts.os) && h.facts.cores > 0 && h.facts.memory > 0) &&
+    return heads.every((h) => h.way === 'format' && h.format === '0.6.0' && /^(windows|linux)/.test(h.facts.os) && h.facts.cores > 0 && h.facts.memory > 0) &&
       line?.input === 'return 6 * 7' && line.output === '42'
   }],
   ['a return says its price, only the function the call came in for charges, and the line keeps the caller\'s signature over it', async () => {
@@ -438,23 +438,28 @@ const CASES = [
       line?.outcome === 'worked' && line.charge.amount === 5.5 && /"@signature-params": .*nonce=/.test(line.signed?.base) && line.signed.signature &&
       plain.json === 1 && plain.headers.get('onsay-charge') === null && bare.json === null && JSON.parse(bare.headers.get('onsay-charge')).amount === 2
   }],
-  ['by size: rate a KB of the request and the same for the answer, counted up to ratio times the request\'s size; an auction says its least for Onsay to price', async () => {
-    await call('/lingo/offer', { name: 'sized', code: 'fn echo(text) {return text charge size(1000, 2)}\nfn bid() {return "ok" charge auction(5)}' }, owner)
+  ['by size: a formula of the request\'s size in b, kb, mb or gb, never the answer\'s; one that comes to nothing charges nothing', async () => {
+    await call('/lingo/offer', { name: 'sized', code: 'fn echo(text) {return text charge 1 + 500 * kb}\nfn half(text) {return text charge (b - 10) / 2}\nfn odd() {return 1 charge 5 / (b - 2)}' }, owner)
     const small = await call('/sized/echo', ['hi'], owner)
     const big = await call('/sized/echo', ['x'.repeat(50)], owner)
-    const bid = await call('/sized/bid', [], owner)
-    const [s_, b_, a_] = [small, big, bid].map((x) => JSON.parse(x.headers.get('onsay-charge')))
-    // ["hi"] is 6 bytes in and "hi" 4 out: 1000 x 10 / 1000. 54 in, 52 out, all counted: 106.
-    return s_.amount === 10 && s_.rate === 1000 && s_.ratio === 2 && b_.amount === 106 && a_.least === 5 && a_.amount === undefined && a_.in === 2
+    const tiny = await call('/sized/half', ['hi'], owner)
+    const many = await call('/sized/half', ['x'.repeat(50)], owner)
+    const odd = await call('/sized/odd', [], owner)
+    const [s_, b_, m_] = [small, big, many].map((x) => JSON.parse(x.headers.get('onsay-charge')))
+    // ["hi"] is 6 bytes in: 1 + 500 x 0.006. 54 in: 1 + 27. (54 - 10) / 2 is 22; (6 - 10) / 2 is below nothing, and 5 / ([] is 2 bytes - 2) no number.
+    return s_.amount === 4 && s_.formula === '1 + 500 * kb' && s_.out === 4 && b_.amount === 28 && m_.amount === 22 &&
+      tiny.headers.get('onsay-charge') === null && odd.headers.get('onsay-charge') === null && odd.json === 1
   }],
   ['a charge is written out, so a computed one is a problem when the lingo loads, and a value named charge is still a value', async () => {
     const computed = await call('/lingo/offer', { name: 'computed', code: 'fn f(n) {return 1 charge n * 2}' }, owner)
+    const after = await call('/lingo/offer', { name: 'after', code: 'fn f() {return 1 charge 2 kb}' }, owner)
+    const gone = await call('/lingo/offer', { name: 'gone', code: 'fn f() {return 1 charge auction(5)}' }, owner)
     await call('/lingo/offer', { name: 'named', code: 'fn get() {charge = 7\nreturn charge}' }, owner)
     const got = await call('/named/get', [], owner)
-    return computed.status >= 400 && /A charge is written out/.test(computed.json.error) && got.json === 7 && got.headers.get('onsay-charge') === null
+    return [computed, after, gone].every((x) => x.status >= 400 && /A charge is written out/.test(x.json.error)) && got.json === 7 && got.headers.get('onsay-charge') === null
   }],
   ['what is offered carries each function\'s prices, read from its returns', async () => {
-    await call('/lingo/offer', { name: 'priced', code: 'fn two(x) {if x {return 1 charge 3}\nreturn 2 charge size(0.5, 4)}\nfn free() {return 1}' }, owner)
+    await call('/lingo/offer', { name: 'priced', code: 'fn two(x) {if x {return 1 charge 3}\nreturn 2 charge 0.5*mb+1}\nfn free() {return 1}' }, owner)
     let fns = null
     for (let i = 0; i < 40 && !fns; i++) {
       const offered = posted().filter((l) => l.way === 'offered').at(-1)
@@ -462,7 +467,7 @@ const CASES = [
       if (!fns) await new Promise((done) => setTimeout(done, 100))
     }
     const two = fns?.find((x) => x.name === 'two'), free = fns?.find((x) => x.name === 'free')
-    return same(two?.prices, [{ amount: 3 }, { rate: 0.5, ratio: 4 }]) && free && !('prices' in free)
+    return same(two?.prices, [{ formula: '3' }, { formula: '0.5 * mb + 1' }]) && free && !('prices' in free)
   }],
   ['refuse answers refused with its reason, try can\'t catch it, and nothing is charged', async () => {
     await call('/lingo/offer', { name: 'picky', code: 'fn take(x) {if x > 1 {refuse("only small ones")}\nreturn x charge 3}' }, owner)

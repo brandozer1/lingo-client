@@ -33,7 +33,7 @@
 #include "monocypher.h"
 #include "monocypher-ed25519.h"
 
-#define FLOOR_VERSION "0.5.0"   // and the format of its log, said first in every post
+#define FLOOR_VERSION "0.6.0"   // and the format of its log, said first in every post
 
 /* Onsay, built in: where its resolve endpoint and its log box are, and its public key, which what it signs is checked
    against and the log is sealed to. The test build asks test/floor.mjs, which signs with the test key. */
@@ -530,22 +530,72 @@ static const char *outcome(int status) {
   return "failed";
 }
 
-/* What a call that came in charged, as Onsay settles it: its return's price, the bytes it took in and gave back, and
-   amount, the credits, when the floor can work it out: a flat charge, or by size, rate a KB of the request and the same
-   for the answer, counted up to ratio times the request's size. An auction's is priced by Onsay. NULL when it didn't
-   work or was free. */
+/* A charge's formula, as price wrote it, worked out for a request of bytes. NAN when it isn't one. */
+static double at_size(const char **s, double bytes, int level) {
+  while (**s == ' ') (*s)++;
+  if (level == 2) {
+    if (**s == '-') {
+      (*s)++;
+      return -at_size(s, bytes, 2);
+    }
+    if (**s == '(') {
+      (*s)++;
+      double inside = at_size(s, bytes, 0);
+      while (**s == ' ') (*s)++;
+      if (**s != ')') return NAN;
+      (*s)++;
+      return inside;
+    }
+    if (isdigit((unsigned char)**s) || **s == '.') {
+      char *after;
+      double n = strtod(*s, &after);
+      *s = after;
+      return n;
+    }
+    size_t len = 0;
+    while (isalpha((unsigned char)(*s)[len]) && len < 3) len++;
+    char name[4] = { 0 };
+    memcpy(name, *s, len);
+    double scale = size_unit(name);
+    if (!scale || isalnum((unsigned char)(*s)[len])) return NAN;
+    *s += len;
+    return bytes / scale;
+  }
+  double v = at_size(s, bytes, level + 1);
+  for (;;) {
+    while (**s == ' ') (*s)++;
+    char op = **s;
+    if (level == 0 && op != '+' && op != '-') return v;
+    if (level == 1 && op != '*' && op != '/') return v;
+    (*s)++;
+    double next = at_size(s, bytes, level + 1);
+    if (op == '+') v += next;
+    if (op == '-') v -= next;
+    if (op == '*') v *= next;
+    if (op == '/') v /= next;
+  }
+}
+
+// What a charge's formula comes to for a request of bytes: 0 when it is below nothing or not a number.
+static double charge_at(const char *formula_text, double bytes) {
+  const char *s = formula_text;
+  double v = at_size(&s, bytes, 0);
+  while (*s == ' ') s++;
+  if (*s || !isfinite(v) || v < 0) return 0;
+  return v;
+}
+
+/* What a call that came in charged, as Onsay settles it: its return's formula, the bytes it took in and gave back, and
+   amount, what the formula comes to at the request's size. NULL when it didn't work, was free, or came to nothing. */
 static val *bill(arena *a, int status, size_t in, size_t out) {
   if (status >= 400 || !charged) return NULL;
+  double amount = charge_at(text_or(charged, "formula", ""), (double)in);
+  if (amount <= 0) return NULL;
   val *b = v_rec(a);
   for (size_t i = 0; i < charged->r.n; i++) rec_set(a, b, charged->r.key[i], charged->r.v[i]);
   rec_set(a, b, "in", v_num(a, (double)in));
   rec_set(a, b, "out", v_num(a, (double)out));
-  val *rate = rec_get(charged, "rate");
-  if (rate) {
-    double most = rec_get(charged, "ratio")->n * (double)in;
-    double counted = (double)out < most ? (double)out : most;
-    rec_set(a, b, "amount", v_num(a, rate->n * ((double)in + counted) / 1000));
-  }
+  rec_set(a, b, "amount", v_num(a, amount));
   return b;
 }
 

@@ -38,7 +38,7 @@ person are the answer, code `nothing`, a 404. A caller who may not search, or a 
 was: the compile error, or nothing at that path. `use(...)` of a name nothing here answers goes through Onsay.
 
 **Worked, refused or failed.** A function is free; it charges in its return, `return move charge 5`,
-`charge size(0.5, 4)` or `charge auction(5)`, and says a call isn't for it with `refuse(reason)` (`../docs/lingo.md`,
+or by the request's size, `charge 5 + 0.5 * kb`, and says a call isn't for it with `refuse(reason)` (`../docs/lingo.md`,
 section 9). Every call that came in ends `worked` (it returned, charged what its return said), `refused` (a 422,
 `{"error": reason, "code": "refused"}`, nothing charged) or `failed` (any error, crash or limit, nothing charged), and
 the floor says which, with the charge only when it worked. A charge is the price as written, `{amount}`,
@@ -48,13 +48,13 @@ call once, from whichever says it first, the other checking it.
 
 | Where | What it carries |
 |-------|-----------------|
-| the log line of a call in | `"outcome": "worked"`, and when it charged, `"charge": {"amount": 5, "in": 120, "out": 40}` and `"signed": {base, signature}`, the exact bytes its caller signed and the signature, so Onsay bills only those who really called |
+| the log line of a call in | `"outcome": "worked"`, and when it charged, `"charge": {"formula": "5", "in": 120, "out": 40, "amount": 5}` and `"signed": {base, signature}`, the exact bytes its caller signed and the signature, so Onsay bills only those who really called |
 | the log line of a call out that was charged | `"charge"`, as its answer said, and `"nonce"`, the one it was signed with, which ties it to the other computer's line |
 | the answer to a call through Onsay | `{"way": "answer", "id", "status", "outcome", "charge", "body"}` |
-| a web answer on the port | the headers `Onsay-Outcome: worked` and `Onsay-Charge: {"amount":5,"in":120,"out":40}` |
+| a web answer on the port | the headers `Onsay-Outcome: worked` and `Onsay-Charge: {"formula":"5","in":120,"out":40,"amount":5}` |
 
-The log is in format `0.5.0`, said first in every post: each function offered carries `prices`, what its returns
-charge, and calls carry their outcome and charge.
+The log is in format `0.6.0`, said first in every post: each function offered carries `prices`, what its returns
+charge, each `{formula}` of the request's size, and calls carry their outcome and charge.
 
 Its settings (`floor.json`): `home`, `port`, `name`, `owner` (a key or a handle), `keys` (signers known by key),
 `steps` and `ms`. On the command line, `floor <settings> key` gives its key and `floor <settings> run <script>` runs a

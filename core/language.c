@@ -1461,47 +1461,73 @@ static val *statement(ps *p);
 /* Whether the next words are a return's charge, like return move charge 5 or return charge 2: the word charge on the
    return's own line, and right after return, a price after it, so a value named charge, return charge, is still a
    value. after is set once the return's value is read, where only a charge can follow on its line. */
+// b, kb, mb and gb, a request's size in each, in steps of 1000: its scale, or 0 for any other name.
+static double size_unit(const char *name) {
+  if (!strcmp(name, "b")) return 1;
+  if (!strcmp(name, "kb")) return 1e3;
+  if (!strcmp(name, "mb")) return 1e6;
+  if (!strcmp(name, "gb")) return 1e9;
+  return 0;
+}
+
 static int charging(ps *p, int line, int after) {
   token *t = peek(p, 0);
   token *next = peek(p, 1);
   if (!t || t->k != ID || strcmp(t->v, "charge") || t->line != line) return 0;
   if (after) return 1;
   if (!next || next->line != line) return 0;
-  return next->k == NUM || (next->k == ID && (!strcmp(next->v, "size") || !strcmp(next->v, "auction")));
+  return next->k == NUM || (next->k == ID && size_unit(next->v));
 }
 
-/* A charge, written out so its price is known before any call: a number, credits, {amount}; size(rate, ratio), rate
-   credits a KB of the request and the same for the answer, counted up to ratio times the request's size, {rate,
-   ratio}; or auction(least), the going rate of its code, never less than least, {least}. */
-static val *price(ps *p) {
-  arena *a = p->c->a;
-  const char *how = "A charge is written out: a number, like charge 5, size(rate, ratio), like charge size(0.5, 4), "
-                    "or auction(least), like charge auction(5)";
+/* A charge's formula, written out on the return's line: numbers, the request's size as b, kb, mb or gb, + - * / and
+   brackets, like charge 5 + 0.5 * kb. Written into out the way Onsay reads it; 0 when it isn't one. level is where it is:
+   0 a sum, 1 a product, 2 one number, size or bracket. */
+static int formula(ps *p, int line, buf *out, int level) {
+  if (level == 2) {
+    token *t = peek(p, 0);
+    if (!t || t->line != line) return 0;
+    p->i++;
+    if (t->k == NUM) {
+      buf_num(out, t->num);
+      return 1;
+    }
+    if (t->k == ID && size_unit(t->v)) {
+      buf_str(out, t->v);
+      return 1;
+    }
+    if (t->k == SYM && !strcmp(t->v, "-")) {
+      buf_chr(out, '-');
+      return formula(p, line, out, 2);
+    }
+    if (t->k != SYM || strcmp(t->v, "(")) return 0;
+    buf_chr(out, '(');
+    if (!formula(p, line, out, 0) || !is(p, ")", 0)) return 0;
+    p->i++;
+    buf_chr(out, ')');
+    return 1;
+  }
+  const char *ops = level ? "*/" : "+-";
+  if (!formula(p, line, out, level + 1)) return 0;
+  for (;;) {
+    token *t = peek(p, 0);
+    if (!t || t->line != line || t->k != SYM || strlen(t->v) != 1 || !strchr(ops, t->v[0])) return 1;
+    p->i++;
+    buf_fmt(out, " %s ", t->v);
+    if (!formula(p, line, out, level + 1)) return 0;
+  }
+}
+
+// A return's price, {formula}, written out so it is known before any call, and nothing else after it on its line.
+static val *price(ps *p, int line) {
+  const char *how = "A charge is written out, of numbers and the request's size, b, kb, mb or gb, like charge 5 or charge 5 + 0.5 * kb";
+  buf b = { 0 };
+  int ok = formula(p, line, &b, 0);
   token *t = peek(p, 0);
-  val *out = v_rec(a);
-  if (t && t->k == NUM) {
-    p->i++;
-    rec_set(a, out, "amount", v_num(a, t->num));
-    return out;
-  }
-  if (!t || t->k != ID || (strcmp(t->v, "size") && strcmp(t->v, "auction"))) return expected(p, how);
-  int sized = !strcmp(t->v, "size");
-  p->i++;
-  if (!expect(p, "(", how)) return NULL;
-  token *first = peek(p, 0);
-  if (!first || first->k != NUM) return expected(p, how);
-  p->i++;
-  if (sized) {
-    if (!expect(p, ",", how)) return NULL;
-    token *second = peek(p, 0);
-    if (!second || second->k != NUM) return expected(p, how);
-    p->i++;
-    rec_set(a, out, "rate", v_num(a, first->num));
-    rec_set(a, out, "ratio", v_num(a, second->num));
-  } else {
-    rec_set(a, out, "least", v_num(a, first->num));
-  }
-  if (!expect(p, ")", how)) return NULL;
+  if (ok && t && t->line == line && !is(p, ";", 0) && !is(p, "}", 0)) ok = 0;
+  val *out = ok ? v_rec(p->c->a) : NULL;
+  if (out) rec_set(p->c->a, out, "formula", v_text(p->c->a, b.s, b.n));
+  buf_free(&b);
+  if (!out) return expected(p, how);
   return out;
 }
 
@@ -1663,7 +1689,7 @@ static val *bare(ps *p) {
     if (!e) return NULL;
     if (!bare && !charging(p, line, 1)) return mk(a, "return", 1, e);
     p->i++;
-    GET(terms, price(p));
+    GET(terms, price(p, line));
     return mk(a, "return", 2, e, terms);
   }
   if (parse_accept(p, "fail")) {

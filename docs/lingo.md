@@ -159,7 +159,7 @@ every program fully known before it runs.
 | `break`                                    | Leaves the innermost loop                                |
 | `continue`                                 | Skips to the next turn of the innermost loop             |
 | `return e`, `return`                       | Ends the function or script with a value, or with nothing |
-| `return e charge price`                    | The same, charging the call that came in, when this is its function: `5`, `size(0.5, 4)` or `auction(5)` (section 9) |
+| `return e charge price`                    | The same, charging the call that came in, when this is its function: `5` or `5 + 0.5 * kb` (section 9) |
 | `fail e`                                   | Stops with an error whose message is `e` as text         |
 | `try{...}catch e{...}`                     | Runs the first block, and the second if it fails, with the error's message in `e` |
 | `f(...)`, `group.phrase(...)`              | A call, run for what it does                             |
@@ -427,17 +427,22 @@ that fails is answered with its message, and a status by its code (`core/README.
 **Charges and refusals.** A function is free. A call is charged only as its result is sent, so the price is part of
 the return, and it is written out, so it is known before any call:
 
-| Price | Written | The caller pays |
-|-------|---------|-----------------|
-| Flat | `return move charge 5` | 5 tokens |
-| By size | `return answer charge size(0.5, 4)` | 0.5 tokens a KB of the request, and the same for the answer, counted up to 4 times the request's size, so a padded answer earns nothing more |
-| Auction | `return move charge auction(5)` | the going rate of its code, what its calls have come to lately, never less than 5 |
+| Written | The caller pays |
+|---------|-----------------|
+| `return move charge 5` | 5 tokens |
+| `return answer charge 0.5 * kb` | half a token a KB of the request |
+| `return answer charge 5 + 0.5 * kb` | 5 tokens, and half a token a KB |
+| `return file charge 2 * mb` | 2 tokens a MB |
 
-A price worked out as it runs, like `charge n * 2`, is a problem when the lingo loads. Each return says its own, and
+A price is a formula of numbers and the request's size: `b`, `kb`, `mb` and `gb` are its size in each, in steps
+of 1000, fractions kept, with `+ - * /` and brackets. Only the request's size counts, never the answer's, so the
+price is exact before the call and a padded answer earns nothing more. One that comes to below nothing, or to no
+number, like `5 / kb` for an empty request, charges nothing. Any other name, like `charge n * 2`, or anything
+after it on its line, is a problem when the lingo loads. Each return says its own, and
 one without a charge is free; the prices of a function's returns are listed with it in what is offered, so Onsay's
 search knows them before calling. Only a return of the function the call came in for charges it: a function it calls
-has its own returns, which charge nothing here. The floor counts the bytes in and out and works out a flat or sized
-price; Onsay prices an auction. `refuse(reason)` stops the run at once when a call isn't for it, answered 422 with
+has its own returns, which charge nothing here. The floor counts the bytes in and out and works out what the formula
+comes to; Onsay works it out again from the same bytes. `refuse(reason)` stops the run at once when a call isn't for it, answered 422 with
 `{error: reason, code: "refused"}`. Every call that
 came in from outside ends one of three ways, and the floor says which, its log line, its answer through Onsay and its
 web answer alike (`core/README.md`, The floor):
