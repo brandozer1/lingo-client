@@ -363,6 +363,23 @@ const CASES = [
       last.v === 1 && last.by === key && last.to === 'public' && same(last.allow, ['/echo/onward']) && last.pass === true &&
       last.until <= Date.now() / 1000 + 301 && checksOut
   }],
+  ['a run that came with no badge begins one, its task, opening nothing, sent on still opening nothing, and each line of the call carries the task', async () => {
+    const key = (await call('/', undefined, { method: 'GET' })).json.key
+    const r = await call('/', 'return use("echo/task", {})', { ...owner, run: 'run_task' })
+    const list = JSON.parse(Buffer.from(echoed.at(-1).badge ?? '', 'base64').toString() || '[]')
+    const mine = lines().filter((l) => l.run === 'run_task')
+    const into = mine.find((l) => l.way === 'in'), out = mine.find((l) => l.way === 'out')
+    return r.status === 200 && list.length === 2 && list[0].by === key && list[0].to === key && same(list[0].allow, []) && list[0].pass === true &&
+      same(list[1].allow, []) && into?.task === list[0].sig && into.hops === 0 && out?.task === list[0].sig
+  }],
+  ['a badge that opens nothing is only a task: its caller is judged as with none, and the call keeps it, one hop from who began it', async () => {
+    const task = staple(null, { by: publicOf(OWNER), to: 'public', allow: [] }, OWNER)
+    const r = await call('/', 'return 6 * 7', { ...owner, badge: task, run: 'run_prompt' })
+    const theirs = await call('/', 'return 6 * 7', { badge: task })
+    const line = lines().find((l) => l.run === 'run_prompt' && l.way === 'in')
+    const first = JSON.parse(Buffer.from(task, 'base64').toString())[0]
+    return r.status === 200 && r.json === 42 && theirs.status === 403 && line?.task === first.sig && line.hops === 1
+  }],
   ['a request\'s signature covers its badge: one swapped after signing, or not covered, is a 401', async () => {
     const held = staple(null, { by: publicOf(OWNER), to: 'public', allow: ['/lingo/run', '/lingo/use'] }, OWNER)
     const other = staple(null, { by: publicOf(OWNER), to: 'public', allow: ['/'] }, OWNER)
@@ -423,7 +440,7 @@ const CASES = [
     for (let i = 0; i < 30 && !posted().some((l) => l.run === 'run_format' && l.way === 'in'); i++) await pause(100)
     const heads = logs.map((x) => JSON.parse(x.text.split('\n')[0]))
     const line = posted().find((l) => l.run === 'run_format' && l.way === 'in')
-    return heads.every((h) => h.way === 'format' && h.format === '0.6.0' && /^(windows|linux)/.test(h.facts.os) && h.facts.cores > 0 && h.facts.memory > 0) &&
+    return heads.every((h) => h.way === 'format' && h.format === '0.7.0' && /^(windows|linux)/.test(h.facts.os) && h.facts.cores > 0 && h.facts.memory > 0) &&
       line?.input === 'return 6 * 7' && line.output === '42'
   }],
   ['a return says its price, only the function the call came in for charges, and the line keeps the caller\'s signature over it', async () => {

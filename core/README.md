@@ -53,8 +53,12 @@ call once, from whichever says it first, the other checking it.
 | the answer to a call through Onsay | `{"way": "answer", "id", "status", "outcome", "charge", "body"}` |
 | a web answer on the port | the headers `Onsay-Outcome: worked` and `Onsay-Charge: {"formula":"5","in":120,"out":40,"amount":5}` |
 
-The log is in format `0.6.0`, said first in every post: each function offered carries `prices`, what its returns
-charge, each `{formula}` of the request's size, and calls carry their outcome and charge.
+The log is in format `0.7.0`, said first in every post: each function offered carries `prices`, what its returns
+charge, each `{formula}` of the request's size, and calls carry their outcome and charge. Every line carries its
+`task`, the signature of the first grant of its badge, and a call in its `hops`, how many grants it came with: 0 or 1
+is a call straight from whoever began the task, a prompt. A run that came with no badge begins one as it first calls
+out, a grant to this computer opening nothing, so every call it leads to carries the same task. A badge none of whose
+grants opens anything is only a task: its caller is judged as with none, and it is sent on still opening nothing.
 
 Its settings (`floor.json`): `home`, `port`, `name`, `owner` (a key or a handle), `keys` (signers known by key),
 `steps` and `ms`. On the command line, `floor <settings> key` gives its key and `floor <settings> run <script>` runs a

@@ -154,14 +154,25 @@ static int opens(val *g, const char *here, const char *path, int listing) {
 }
 
 
+// Whether a badge is only a task: none of its grants opens anything, the first of them being what the task is.
+static int task_only(val *badge) {
+  for (size_t i = 0; badge && badge->k == V_LIST && i < badge->l.n; i++) {
+    val *allow = rec_get(badge->l.v[i], "allow");
+    if (allow && allow->k == V_LIST && allow->l.n) return 0;
+  }
+  return badge != NULL;
+}
+
 /* Whether the caller may reach path, or any of a lingo's route when listing, by the policy p: the owner always; anyone
    else by a grant in the policy naming them, or by the badge they came with, when its first grant is the owner's own or
    handed on by someone a policy grant names and lets pass it on, every grant opens path, and its last is for the
    caller. A caller with a badge is judged by the badge alone, the owner too, so a run handed on from one computer to
-   the next never borrows the authority of a computer on the way. The control routes, /.lingo/, take only the owner or
-   a badge it began. why says what decided. */
+   the next never borrows the authority of a computer on the way. A badge none of whose grants opens anything is only a
+   task, carried for the log, and its caller is judged as with none. The control routes, /.lingo/, take only the owner
+   or a badge it began. why says what decided. */
 static int let_in(arena *a, val *p, const caller *c, const char *path, int listing, const char **why) {
   val *grants = v_list(a);
+  val *badge = task_only(c->badge) ? NULL : c->badge;
   int control = !strncmp(path, "/.lingo/", 8);
   buf name = { 0 };
   onsay_name(&name);
@@ -173,20 +184,20 @@ static int let_in(arena *a, val *p, const caller *c, const char *path, int listi
     for (size_t i = 0; some && some->k == V_LIST && i < some->l.n; i++)
       if (!k || *text_or(some->l.v[i], "to", "") != '/') list_push(a, grants, some->l.v[i]);
   }
-  if (c->owner && !c->badge) {
+  if (c->owner && !badge) {
     *why = "the owner";
     return 1;
   }
-  for (size_t i = 0; !control && !c->badge && grants && grants->k == V_LIST && i < grants->l.n; i++) {
+  for (size_t i = 0; !control && !badge && grants && grants->k == V_LIST && i < grants->l.n; i++) {
     val *g = grants->l.v[i];
     if (names(text_or(g, "to", ""), c->name) && opens(g, here, path, listing)) {
       *why = arena_fmt(a, "grant: %s", text_or(g, "to", ""));
       return 1;
     }
   }
-  if (c->badge) {
-    val *first = c->badge->l.v[0];
-    val *last = c->badge->l.v[c->badge->l.n - 1];
+  if (badge) {
+    val *first = badge->l.v[0];
+    val *last = badge->l.v[badge->l.n - 1];
     int in = c->begun;
     for (size_t i = 0; !in && !control && grants && grants->k == V_LIST && i < grants->l.n; i++) {
       val *g = grants->l.v[i];
@@ -194,7 +205,7 @@ static int let_in(arena *a, val *p, const caller *c, const char *path, int listi
           opens(g, here, path, listing);
     }
     in = in && names(text_or(last, "to", ""), c->name);
-    for (size_t i = 0; in && i < c->badge->l.n; i++) in = opens(c->badge->l.v[i], here, path, listing);
+    for (size_t i = 0; in && i < badge->l.n; i++) in = opens(badge->l.v[i], here, path, listing);
     if (in) {
       *why = arena_fmt(a, "badge: %s", text_or(first, "by", ""));
       return 1;

@@ -33,7 +33,7 @@
 #include "monocypher.h"
 #include "monocypher-ed25519.h"
 
-#define FLOOR_VERSION "0.6.0"   // and the format of its log, said first in every post
+#define FLOOR_VERSION "0.7.0"   // and the format of its log, said first in every post
 
 /* Onsay, built in: where its resolve endpoint and its log box are, and its public key, which what it signs is checked
    against and the log is sealed to. The test build asks test/floor.mjs, which signs with the test key. */
@@ -520,6 +520,8 @@ static _Thread_local const char *now_run;   // the Onsay-Run it came with, passe
 static _Thread_local const char *now_asking;   // the function this thread runs for, like agent.ask, which the lingo
                                                // search its script asks is told, so it is never handed back to it here
 static _Thread_local val *charged;     // the price the return of the call that came in on this thread said
+static _Thread_local val *came_with;   // the badge the call that came in on this thread carried, for its log line
+static _Thread_local val *began_here;  // the task badge its run began, when it came with none
 
 #define REFUSED 422   // the status of a call refused by its code, refuse(reason)
 
@@ -628,8 +630,9 @@ static const char *badge_text(arena *a) {
    A record with error, or a status of 400 or more, is the call's failure. A run that holds a badge sends it on, with
    this computer's own grant stapled on, so the one receiving lets in only what the run could reach: for a web address,
    to public, allowing its path; for a call through Onsay to another computer, to that computer, allowing the address;
-   pass, so it can go on further inside that, and for 5 minutes. Asking the search for ways sends none. The request's
-   signature covers it. */
+   pass, so it can go on further inside that, and for 5 minutes. A run with none begins one first, its task, opening
+   nothing, and a badge that is only a task is sent on still opening nothing, so it never lends anyone authority.
+   Asking the search for ways sends none. The request's signature covers it. */
 static val *sent(run *r, const char *url, val *values, int asked) {
   arena *a = r->a;
   val *headers = v_rec(a);
@@ -639,6 +642,27 @@ static val *sent(run *r, const char *url, val *values, int asked) {
   rec_set(a, headers, "Content-Type", v_cstr(a, "application/json"));
   if (now_run) rec_set(a, headers, "Onsay-Run", v_cstr(a, now_run));
   const char *address = asked ? text_or(values, "address", NULL) : NULL;
+  if (!now.badge && !asked) {
+    // A run that came with no badge begins one as it first calls out: its task, a grant to itself opening nothing.
+    val *g = v_rec(a);
+    buf self = { 0 };
+    unsigned char key[32];
+    const char *why = NULL;
+    int begun = 0;
+    onsay_name(&self);
+    if (!self.n && key_of("device", 1, key)) {
+      buf_str(&self, "ed25519:");
+      base64(&self, key, 32);
+    }
+    rec_set(a, g, "to", v_text(a, self.s ? self.s : "", self.n));
+    rec_set(a, g, "allow", v_list(a));
+    rec_set(a, g, "pass", VBOOL(1));
+    buf_free(&self);
+    val *task = badge_make(a, g, &why);
+    now.badge = task ? badge_of(a, task->t.s, &begun, &why) : NULL;
+    if (!now.badge) fail(r, "phrase", "%s", why);
+    began_here = now.badge;
+  }
   if (now.badge && (!asked || address)) {
     val *g = v_rec(a);
     val *allow = v_list(a);
@@ -651,7 +675,7 @@ static val *sent(run *r, const char *url, val *values, int asked) {
       const char *path = host ? strchr(host + 3, '/') : NULL;
       address = path ? arena_fmt(a, "%.*s", (int)strcspn(path, "?"), path) : "/";
     }
-    list_push(a, allow, v_cstr(a, address));
+    if (!task_only(now.badge)) list_push(a, allow, v_cstr(a, address));
     rec_set(a, g, "badge", v_cstr(a, badge_text(a)));
     rec_set(a, g, "to", v_cstr(a, to));
     rec_set(a, g, "allow", allow);
@@ -981,6 +1005,11 @@ static void logged(arena *a, const char *way, const char *who, const char *route
   if (input) rec_set(a, line, "input", input);
   if (output) rec_set(a, line, "output", output);
   if (now_run) rec_set(a, line, "run", v_cstr(a, now_run));
+  // The task: the first grant of the badge a call in came with, or its run began, or a call out carries. hops, on a
+  // call in, how many grants it came with: 0 or 1 is a call straight from whoever began the task, a prompt.
+  val *badge = strcmp(way, "in") ? now.badge : came_with ? came_with : began_here;
+  if (badge && badge->k == V_LIST && badge->l.n) rec_set(a, line, "task", v_cstr(a, text_or(badge->l.v[0], "sig", "")));
+  if (!strcmp(way, "in")) rec_set(a, line, "hops", v_num(a, came_with && came_with->k == V_LIST ? (double)came_with->l.n : 0));
   buf_json(&text, line);
   buf_chr(&text, '\n');
   const char *path = arena_fmt(a, "%s/requests.log", set.root);
@@ -1476,9 +1505,12 @@ static int called(arena *a, const char *method, const char *where, val *headers,
   who.name = from;
   who.owner = own;
   charged = NULL;
+  came_with = NULL;
+  began_here = NULL;
   now_run = text_or(headers, "onsay-run", NULL);
   if (rec_get(headers, "signature-input")) bad = signer(a, headers, method, where, v_text(a, body, n), &who);
   if (!bad && rec_get(headers, "onsay-badge")) who.badge = badge_of(a, text_or(headers, "onsay-badge", ""), &who.begun, &bad);
+  came_with = who.badge;
   if (bad) {
     buf_str(out, "{\"error\":");
     buf_json_str(out, bad, strlen(bad));
@@ -1511,6 +1543,8 @@ static int called(arena *a, const char *method, const char *where, val *headers,
   logged(a, "in", who.name, where, status < 400, why, status >= 400 ? out->s : NULL, (pl_now() - began) * 1000,
       n ? v_text(a, body, n) : NULL, v_text(a, out->s ? out->s : "", out->n), status, paid);
   now_run = NULL;
+  came_with = NULL;
+  began_here = NULL;
   return status;
 }
 
