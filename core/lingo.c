@@ -1353,26 +1353,29 @@ static val *native_call(run *r, val **a) {
 }
 #endif
 
-// badge.read(): who called the request running, and the data of every grant of the badge it came with, a later grant's
-// written over an earlier's.
+// badge.read(): who called the request running, and each grant of the badge it came with in order, who signed it and
+// its data, so what a grant says is known to be its signer's.
 static val *badge_read(run *r, val **v) {
   val *out = v_rec(r->a);
-  val *data = v_rec(r->a);
+  val *grants = v_list(r->a);
   (void)v;
   for (size_t i = 0; job.badge && i < job.badge->l.n; i++) {
+    val *g = v_rec(r->a);
     val *d = rec_get(job.badge->l.v[i], "data");
-    for (size_t k = 0; d && d->k == V_REC && k < d->r.n; k++) rec_set(r->a, data, d->r.key[k], d->r.v[k]);
+    rec_set(r->a, g, "by", v_cstr(r->a, text_or(job.badge->l.v[i], "by", "")));
+    rec_set(r->a, g, "data", d ? d : NOTHING);
+    list_push(r->a, grants, g);
   }
   rec_set(r->a, out, "caller", v_cstr(r->a, job.caller ? job.caller : "this computer"));
-  rec_set(r->a, out, "data", data);
+  rec_set(r->a, out, "grants", grants);
   return out;
 }
 
 // lingo.run, lingo.use and lingo.setting are lingo(...), use(...) and setting(...), the language's own, in no listing.
 static void floor_phrases(void) {
   phrase_add("badge", "none",
-      "read() -> {caller: text, data: record}: who called the request running, and the data of the badge it came with, "
-      "a later grant's written over an earlier's",
+      "read() -> {caller: text, grants: [{by: text, data: any}]}: who called the request running, and each grant of the "
+      "badge it came with in order, who signed it and its data",
       badge_read);
   phrase_add("store", "store", "get(key: text) -> text?: Onsay's own storage on this computer", get);
   phrase_add("store", "store", "put(key: text, value: any): kept as text", core_put);

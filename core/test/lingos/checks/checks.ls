@@ -324,4 +324,4 @@ fn list_basics() "The array and number basics, and a web address with an Onsay n
   return [list.sum([1, 2, 3]), list.sum([]), list.unique([1, 2, 1, 3]), list.flatten([1, [2, 3], [4]]), list.index_of(["a", "b"], "b"), list.index_of([], "b"), math.abs(-3), [place.host, place.path]]
 }
 
-fn who() "Who called, and the data of the badge it came with." {return badge.read()}
+fn who() "Who called, and each grant of the badge it came with." {return badge.read()}

@@ -865,17 +865,21 @@ static val *setting_(run *r, val **a) {
   return searched(r, "settings.get", values, "unknown", "Nothing keeps settings here: no lingo called settings is offered");
 }
 
-// badge.read(): who called the run, and the data of every grant of the badge it holds, a later grant's over an earlier's.
+// badge.read(): who called the run, and each grant of the badge it holds in order, who signed it and its data, so what
+// a grant says is known to be its signer's.
 static val *badge_read(run *r, val **a) {
   val *out = v_rec(r->a);
-  val *data = v_rec(r->a);
+  val *grants = v_list(r->a);
   (void)a;
   for (size_t i = 0; now.badge && i < now.badge->l.n; i++) {
+    val *g = v_rec(r->a);
     val *d = rec_get(now.badge->l.v[i], "data");
-    for (size_t k = 0; d && d->k == V_REC && k < d->r.n; k++) rec_set(r->a, data, d->r.key[k], d->r.v[k]);
+    rec_set(r->a, g, "by", v_cstr(r->a, text_or(now.badge->l.v[i], "by", "")));
+    rec_set(r->a, g, "data", d ? d : NOTHING);
+    list_push(r->a, grants, g);
   }
   rec_set(r->a, out, "caller", v_cstr(r->a, now.name ? now.name : "this computer"));
-  rec_set(r->a, out, "data", data);
+  rec_set(r->a, out, "grants", grants);
   return out;
 }
 
@@ -1671,8 +1675,8 @@ int main(int argc, char **argv) {
   phrase_add("lingo", "none", "list() -> [{name: text, about: text, functions: [{name: text, does: text}]}]: every lingo offered here", lingo_list);
   phrase_add("lingo", "none", "code(name: text) -> text?: the code of a lingo kept here, nothing for one that answers elsewhere", lingo_code);
   phrase_add("badge", "none",
-      "read() -> {caller: text, data: record}: who called the run, and the data of the badge it holds, a later grant's "
-      "written over an earlier's",
+      "read() -> {caller: text, grants: [{by: text, data: any}]}: who called the run, and each grant of the badge it "
+      "holds in order, who signed it and its data",
       badge_read);
   phrase_add("badge", "none",
       "give(to: text, allow: [text], until: number=nothing, data: record=nothing) -> text: the run's badge with a "

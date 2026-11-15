@@ -703,9 +703,11 @@ const WEB_CASES = [
     const d = await send('/memo/recall?k=milk', undefined, { as: undefined, headers: signedBy('phone', 'phone.james', 'GET', '/memo/recall?k=milk', '', { 'onsay-badge': kept }) })
     return a.status === 401 && /isn't handed on/.test(a.json?.error) && b.status === 404 && c.status === 404 && d.status === 200 && d.json === '2 litres'
   }],
-  ['badge: a lingo reads who called and the badge\'s data, by badge.read()', async () => {
+  ['badge: a lingo reads who called and each grant of the badge, its signer with its data, by badge.read()', async () => {
     const b = (await control('badge', { allow: ['/checks'], data: { note: 'hi' } })).json
-    return gives({ caller: 'ip 127.0.0.1', data: { note: 'hi' } })(await web('/checks/who', { headers: { 'onsay-badge': b } }))
+    const r = await web('/checks/who', { headers: { 'onsay-badge': b } })
+    const [g] = r.json?.grants ?? []
+    return r.status === 200 && r.json.caller === 'ip 127.0.0.1' && r.json.grants.length === 1 && g.by && JSON.stringify(g.data) === '{"note":"hi"}'
   }],
   ['control: settings and set', async () => {
     const set = await control('set', { lingo: 'prefs', key: 'name', value: 'Cy' }), got = await web('/.lingo/settings?lingo=prefs')
