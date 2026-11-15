@@ -518,6 +518,20 @@ int key_sign(const char *name, const void *msg, size_t n, unsigned char sig[64])
 }
 
 
+/* The secret this device's key called name shares with an X25519 key, theirs: its X25519 scalar is the first half of its
+   seed's SHA-512, as Ed25519 makes it, so what is sealed to its public key opens only here. */
+static int key_shared(const char *name, const unsigned char theirs[32], unsigned char shared[32]) {
+  unsigned char seed[32];
+  unsigned char hash[64];
+  if (!seed_of(name, 0, seed)) return 0;
+  crypto_sha512(hash, seed, 32);
+  crypto_x25519(shared, hash, theirs);
+  crypto_wipe(seed, sizeof seed);
+  crypto_wipe(hash, sizeof hash);
+  return 1;
+}
+
+
 void key_forget(const char *name) {
   buf path = { 0 };
   buf_fmt(&path, "%s/keys/%s", lingo_home(), name);

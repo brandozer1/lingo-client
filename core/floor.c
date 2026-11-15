@@ -39,9 +39,13 @@
    against and the log is sealed to. The test build asks test/floor.mjs, which signs with the test key. */
 #ifdef TEST
 #define ONSAY "http://127.0.0.1:8788"
+#define LINK_HOST "127.0.0.1"
+#define LINK_PORT 8789
 #define ONSAY_KEY "ed25519:6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw="
 #else
 #define ONSAY "https://api.onsay.dev"
+#define LINK_HOST "api.onsay.dev"   // and its raw link, a plain byte pipe, on the bare lingo client's own port
+#define LINK_PORT 6969
 #define ONSAY_KEY "ed25519:4DnM32U1FzXfVh3ahkdILlt7yNwfM84Ofj7Aohoe1QE="
 #endif
 #define FRESH 300   // seconds a signer's key looked up holds
@@ -1032,14 +1036,102 @@ static void logged(arena *a, const char *way, const char *who, const char *route
   buf_free(&all);
 }
 
-/* 5. Lines of the log, sealed so only Onsay can read them and signed by this computer, POSTed to Onsay's log box:
-      {key, name, hold, eph, nonce, box, sig}. The seal is X25519 with Onsay's key turned to it and a fresh key of this
-      one's, the shared secret hashed with both into a ChaCha20-Poly1305 key (RFC 8439); sig is this computer's Ed25519
-      signature over eph, nonce and box. With hold, Onsay may keep it until a call for this computer comes, up to
-      HOLD_MOST seconds, so calls reach a computer nothing can reach directly, over plain web requests every system has.
-      The lines always start with {way: format, format, facts}: the format they are in, FLOOR_VERSION, and what this
-      computer is (pl_facts), so Onsay reads each post as it was written and finds computers like this one. Onsay's
-      answer, a record, or NULL when it didn't go. */
+static double link_down;   // until when the raw link is left untried, after Onsay couldn't be reached on it
+
+/* 5. A post over the raw link, Onsay's LINK_PORT, a plain byte pipe (Onsay's lib/link.js): one connection, the post
+      framed as its length in 4 bytes, big end first, then its JSON, and Onsay's answer the same way, {eph, nonce, box,
+      sig}, sealed to this computer's key as it seals to Onsay's and signed by Onsay, opened here to {status, body}.
+      *reached is set when Onsay answered on it; one that couldn't be reached is left alone for 5 minutes, and the post
+      goes over the web instead. The answer's body, with *status its status, or NULL. */
+static val *linked(arena *a, const char *post, size_t n, double seconds, int *reached, int *status) {
+  unsigned char onsay[32], me[32], mine[32], shared[32], key[32];
+  unsigned char length[4] = { (unsigned char)(n >> 24), (unsigned char)(n >> 16), (unsigned char)(n >> 8), (unsigned char)n };
+  buf error = { 0 };
+  buf got = { 0 };
+  *reached = 0;
+  *status = 0;
+  if (pl_now() < link_down) return NULL;
+  pl_conn *c = pl_dial("tcp", LINK_HOST, LINK_PORT, &error);
+  buf_free(&error);
+  if (!c) {
+    link_down = pl_now() + 300;
+    return NULL;
+  }
+  int ok = pl_put(c, (const char *)length, 4) && pl_put(c, post, n);
+  double until = pl_now() + seconds;
+  size_t want = 0;
+  while (ok && (got.n < 4 || got.n < 4 + want)) {
+    double left = until - pl_now();
+    ok = left > 0 && pl_get(c, &got, left);
+    if (got.n >= 4) {
+      const unsigned char *g = (const unsigned char *)got.s;
+      want = (size_t)g[0] << 24 | (size_t)g[1] << 16 | (size_t)g[2] << 8 | g[3];
+    }
+  }
+  pl_drop(c);
+  val *frame = ok ? json_parse(a, got.s + 4, want, NULL) : NULL;
+  buf_free(&got);
+  if (!frame || frame->k != V_REC) {
+    link_down = pl_now() + 300;
+    return NULL;
+  }
+  *reached = 1;
+  buf eph = { 0 };
+  buf nonce = { 0 };
+  buf box = { 0 };
+  buf sig = { 0 };
+  buf raw = { 0 };
+  val *out = NULL;
+  const char *parts[] = { "eph", "nonce", "box", "sig" };
+  buf *into[] = { &eph, &nonce, &box, &sig };
+  int fine = key_bytes(ONSAY_KEY, onsay) && key_of("device", 0, me);
+  for (int i = 0; fine && i < 4; i++) {
+    const char *text = text_or(frame, parts[i], "");
+    fine = unbase64(text, strlen(text), into[i]);
+  }
+  fine = fine && eph.n == 32 && nonce.n == 12 && box.n >= 16 && sig.n == 64;
+  if (fine) {
+    buf_add(&raw, eph.s, 32);
+    buf_add(&raw, nonce.s, 12);
+    buf_add(&raw, box.s, box.n);
+    fine = ed25519_check(onsay, raw.s, raw.n, (unsigned char *)sig.s) && key_shared("device", (unsigned char *)eph.s, shared);
+  }
+  if (fine) {
+    crypto_eddsa_to_x25519(mine, me);
+    raw.n = 0;
+    buf_add(&raw, (char *)shared, 32);
+    buf_add(&raw, eph.s, 32);
+    buf_add(&raw, (char *)mine, 32);
+    sha256(raw.s, raw.n, key);
+    size_t size = box.n - 16;
+    unsigned char *plain = malloc(size + 1);
+    crypto_aead_ctx ctx;
+    crypto_aead_init_ietf(&ctx, key, (unsigned char *)nonce.s);
+    fine = !crypto_aead_read(&ctx, plain, (unsigned char *)box.s + size, NULL, 0, (unsigned char *)box.s, size);
+    val *said = fine ? json_parse(a, (char *)plain, size, NULL) : NULL;
+    val *code = rec_get(said, "status");
+    if (code && code->k == V_NUM) *status = (int)code->n;
+    out = rec_get(said, "body");
+    free(plain);
+    crypto_wipe(key, 32);
+    crypto_wipe(shared, 32);
+  }
+  buf_free(&eph);
+  buf_free(&nonce);
+  buf_free(&box);
+  buf_free(&sig);
+  buf_free(&raw);
+  return out;
+}
+
+/* 5. Lines of the log, sealed so only Onsay can read them and signed by this computer, sent to Onsay's log box:
+      {key, name, hold, eph, nonce, box, sig}, over the raw link when Onsay answers on it, else POSTed over the web.
+      The seal is X25519 with Onsay's key turned to it and a fresh key of this one's, the shared secret hashed with both
+      into a ChaCha20-Poly1305 key (RFC 8439); sig is this computer's Ed25519 signature over eph, nonce and box. With
+      hold, Onsay may keep it until a call for this computer comes, up to HOLD_MOST seconds, so calls reach a computer
+      nothing can reach directly. The lines always start with {way: format, format, facts}: the format they are in,
+      FLOOR_VERSION, and what this computer is (pl_facts), so Onsay reads each post as it was written and finds
+      computers like this one. Onsay's answer, a record, or NULL when it didn't go. */
 static val *posted(arena *a, const char *lines, size_t n, int hold) {
   unsigned char onsay[32], theirs[32], eph[32], mine[32], shared[32], key[32], nonce[12], sig[64], me[32];
   buf raw = { 0 };
@@ -1089,20 +1181,33 @@ static val *posted(arena *a, const char *lines, size_t n, int hold) {
   buf_fmt(&body, ",\"sig\":\"%s\"}", part.s);
   val *headers = v_rec(a);
   buf error = { 0 };
-  rec_set(a, headers, "Content-Type", v_cstr(a, "application/json"));
-  val *got = pl_http(a, "POST", ONSAY "/logs", headers, body.s, body.n, hold ? HOLD_MOST + 10 : 10, &error);
-  val *status = rec_get(got, "status");
-  val *said = NULL;
-  if (status && status->k == V_NUM && status->n == 200) {
-    const char *text = text_or(got, "text", "");
-    said = json_parse(a, text, strlen(text), NULL);
-    if (!said || said->k != V_REC) said = v_rec(a);
+  int reached = 0;
+  int code = 0;
+  val *said = linked(a, body.s, body.n, hold ? HOLD_MOST + 10 : 10, &reached, &code);
+  if (reached) {
+    // Onsay answered on the raw link: what it said stands, a post it turned away a line of the log.
+    if (code != 200) {
+      logged(a, "out", set.name, "onsay link", 0, NULL, arena_fmt(a, "it answered %d on the raw link", code), 0, NULL, NULL, 0, NULL);
+      said = NULL;
+    } else if (!said || said->k != V_REC) {
+      said = v_rec(a);
+    }
   } else {
-    // A post that didn't go is a line of the log, so why this computer looks offline to Onsay can be read here.
-    const char *answered = got ? text_or(got, "text", "") : "";
-    const char *why = !got ? (error.s ? error.s : "it couldn't be reached")
-        : arena_fmt(a, "it answered %g: %.200s", status ? status->n : 0, answered);
-    logged(a, "out", set.name, ONSAY "/logs", 0, NULL, why, 0, NULL, got ? v_cstr(a, answered) : NULL, 0, NULL);
+    said = NULL;
+    rec_set(a, headers, "Content-Type", v_cstr(a, "application/json"));
+    val *got = pl_http(a, "POST", ONSAY "/logs", headers, body.s, body.n, hold ? HOLD_MOST + 10 : 10, &error);
+    val *status = rec_get(got, "status");
+    if (status && status->k == V_NUM && status->n == 200) {
+      const char *text = text_or(got, "text", "");
+      said = json_parse(a, text, strlen(text), NULL);
+      if (!said || said->k != V_REC) said = v_rec(a);
+    } else {
+      // A post that didn't go is a line of the log, so why this computer looks offline to Onsay can be read here.
+      const char *answered = got ? text_or(got, "text", "") : "";
+      const char *why = !got ? (error.s ? error.s : "it couldn't be reached")
+          : arena_fmt(a, "it answered %g: %.200s", status ? status->n : 0, answered);
+      logged(a, "out", set.name, ONSAY "/logs", 0, NULL, why, 0, NULL, got ? v_cstr(a, answered) : NULL, 0, NULL);
+    }
   }
   crypto_wipe(eph, 32);
   crypto_wipe(shared, 32);

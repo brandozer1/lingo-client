@@ -6,13 +6,14 @@
 //   node test/floor.mjs x86    the same with the 32-bit builds, bin/test/x86/
 
 import http from 'node:http'
+import net from 'node:net'
 import crypto from 'node:crypto'
 import { spawn, execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
-const ONSAY_PORT = 8788, FLOOR = 6975, WINDOWS = 6976
+const ONSAY_PORT = 8788, LINK_PORT = 8789, FLOOR = 6975, WINDOWS = 6976
 const CORE = fileURLToPath(new URL('..', import.meta.url)), BUILD = process.argv[2] === 'x86' ? 'x86/' : ''
 const EXE = fileURLToPath(new URL(`../bin/test/${BUILD}floor.exe`, import.meta.url))
 const WINDOWS_EXE = fileURLToPath(new URL(`../bin/test/${BUILD}windows/floor.exe`, import.meta.url))
@@ -422,10 +423,10 @@ const CASES = [
     const l = lines()
     return ['in', 'call', 'out'].every((w) => l.some((x) => x.way === w)) && l.every((x) => /^\d{4}-\d\d-\d\dT/.test(x.at))
   }],
-  ['the log reaches Onsay sealed, only Onsay can open it, and it is signed by this floor', async () => {
+  ['the log reaches Onsay sealed, only Onsay can open it, signed by this floor, over the raw link, a plain byte pipe, when Onsay answers there', async () => {
     for (let i = 0; i < 20 && !logs.length; i++) await pause(250)
     const all = logs.map((x) => x.text).join('')
-    return logs.length > 0 && logs.every((x) => x.ok) && /"way":"in"/.test(all) && /"way":"call"/.test(all)
+    return logs.length > 0 && logs.every((x) => x.ok) && logs.some((x) => x.link) && /"way":"in"/.test(all) && /"way":"call"/.test(all)
   }],
   ['what is offered reaches Onsay as its code and the compiler\'s listing, with this computer\'s own calls, never where it answers', async () => {
     const last = posted().filter((l) => l.way === 'offered').at(-1)
@@ -662,6 +663,42 @@ rmSync(HOME, { recursive: true, force: true })
 mkdirSync(HOME, { recursive: true })
 writeFileSync(SETTINGS, JSON.stringify({ home: HOME, port: FLOOR, owner: publicOf(OWNER), steps: 100000, ms: 5000,
   keys: { 'laptop.james': publicOf(JAMES) } }))
+// The raw link on 8789, as Onsay's lib/link.js: one message each way, each its length in 4 bytes then its JSON; a post
+// as /logs takes it, answered {status, body} sealed to the floor's key, its Ed25519 key turned to X25519, and signed.
+const P = 2n ** 255n - 19n
+const power = (b, e) => { let r = 1n; for (b %= P; e; e >>= 1n, b = b * b % P) if (e & 1n) r = r * b % P; return r }
+const montgomery = (edwards) => {
+  const y = BigInt('0x' + Buffer.from(edwards).reverse().toString('hex')) & ((1n << 255n) - 1n)
+  return Buffer.from(((1n + y) * power((1n - y + P) % P, P - 2n) % P).toString(16).padStart(64, '0'), 'hex').reverse()
+}
+const sealedTo = (text, key) => {
+  const theirs = montgomery(Buffer.from(key.slice(8), 'base64'))
+  const eph = crypto.generateKeyPairSync('x25519'), ephPub = eph.publicKey.export({ format: 'der', type: 'spki' }).subarray(-32)
+  const them = crypto.createPublicKey({ key: Buffer.concat([Buffer.from('302a300506032b656e032100', 'hex'), theirs]), format: 'der', type: 'spki' })
+  const k = crypto.createHash('sha256').update(Buffer.concat([crypto.diffieHellman({ privateKey: eph.privateKey, publicKey: them }), ephPub, theirs])).digest()
+  const nonce = crypto.randomBytes(12), c = crypto.createCipheriv('chacha20-poly1305', k, nonce, { authTagLength: 16 })
+  const box = Buffer.concat([c.update(text), c.final(), c.getAuthTag()])
+  const sig = crypto.sign(null, Buffer.concat([ephPub, nonce, box]), ONSAY)
+  return { eph: ephPub.toString('base64'), nonce: nonce.toString('base64'), box: box.toString('base64'), sig: sig.toString('base64') }
+}
+const framed = (v) => {
+  const bytes = Buffer.from(JSON.stringify(v)), length = Buffer.alloc(4)
+  length.writeUInt32BE(bytes.length)
+  return Buffer.concat([length, bytes])
+}
+const link = net.createServer((s) => {
+  let got = Buffer.alloc(0)
+  s.on('error', () => s.destroy())
+  s.on('data', (chunk) => {
+    got = Buffer.concat([got, chunk])
+    if (got.length < 4 || got.length < 4 + got.readUInt32BE(0)) return
+    const m = JSON.parse(got.subarray(4, 4 + got.readUInt32BE(0)).toString())
+    logs.push({ ...opened(m), when: Date.now(), link: true })
+    const answer = { status: 200, body: { kept: 1, next: 1, calls: m.hold ? relay.splice(0) : [] } }
+    s.end(framed(sealedTo(JSON.stringify(answer), m.key)))
+  })
+})
+await new Promise((r) => link.listen(LINK_PORT, '127.0.0.1', r))
 await new Promise((r) => stand.listen(ONSAY_PORT, '127.0.0.1', r))
 const floor = spawn(EXE, [SETTINGS], { cwd: CORE, stdio: ['ignore', 'ignore', 'pipe'] })
 let said = ''

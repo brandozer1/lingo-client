@@ -14,7 +14,10 @@ The language, and what a lingo is, its `.lingo` file, its code, its `openapi.jso
 **The floor**, `floor.c`, is the new lingo client that replaces this one: one function, lingo script in and its value
 out. It takes a call, checks who signed it and whether the policy lets them, runs the script it carries, logs it and
 sends its log to Onsay blind, sealed so only Onsay can read it, as often as Onsay's answer says, waiting twice as long
-after each try that doesn't go, up to an hour. Everything else becomes a lingo. It is built beside
+after each try that doesn't go, up to an hour. It sends over the raw link, a plain byte pipe to Onsay on 6969 (the
+test build 8789): one connection a post, each way its length in 4 bytes then its JSON, Onsay's answer sealed to this
+computer's key and signed by Onsay. When Onsay can't be reached there it leaves the link for 5 minutes and posts over
+the web, as it did before. Everything else becomes a lingo. It is built beside
 this one, `bin/floor.exe` and `bin/linux-*/floor`, and tested by `test/floor.mjs`, until the releases switch to it
 (`../../onsay/docs/lingo-function.md`, The floor).
 
@@ -41,9 +44,9 @@ was: the compile error, or nothing at that path. `use(...)` of a name nothing he
 or by the request's size, `charge 5 + 0.5 * kb`, and says a call isn't for it with `refuse(reason)` (`../docs/lingo.md`,
 section 9). Every call that came in ends `worked` (it returned, charged what its return said), `refused` (a 422,
 `{"error": reason, "code": "refused"}`, nothing charged) or `failed` (any error, crash or limit, nothing charged), and
-the floor says which, with the charge only when it worked. A charge is the price as written, `{amount}`,
-`{rate, ratio}` or `{least}`, with `in` and `out`, the bytes of the request and its answer, and `amount` worked
-out for a flat or sized price. The floor never moves money: each side of a call posts what it saw in its log, and Onsay settles each
+the floor says which, with the charge only when it worked. A charge is the price as written, `{formula}`,
+with `in` and `out`, the bytes of the request and its answer, and `amount`, what the formula comes to at the
+request's size. The floor never moves money: each side of a call posts what it saw in its log, and Onsay settles each
 call once, from whichever says it first, the other checking it.
 
 | Where | What it carries |
