@@ -351,6 +351,9 @@ https://api.example.com/v1/x answered 404 Not Found: no such item
 
 ## 7. lingo(...): asking in words
 
+Settled 2026-11-15, not built: `lingo(...)` goes, and every phrase of a program is the one input instead, Lingo run,
+an address reached, words asked of the search (Onsay's `docs/lingo-function.md`, Every phrase is the one input).
+
 ```
 weather = lingo("the weather in a city", {city: "Paris"}, "the forecast")
 ```
